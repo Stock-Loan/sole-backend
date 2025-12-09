@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.env
+.env.*
+.venv/
+venv/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage*
+htmlcov/
+
+.idea/
+.vscode/
+.DS_Store
+
+# Docker/compose artifacts
+.db_data/
+
+# Alembic
+migrations/versions/__pycache__/

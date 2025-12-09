@@ -1,0 +1,45 @@
+services:
+  app:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://sole:sole@db:5432/sole
+      - REDIS_URL=redis://redis:6379/0
+      - TENANCY_MODE=single
+      - SESSION_TIMEOUT_MINUTES=30
+      - ACCESS_TOKEN_EXPIRE_MINUTES=15
+    volumes:
+      - ./:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: sole
+      POSTGRES_PASSWORD: sole
+      POSTGRES_DB: sole
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+volumes:
+  db_data:
