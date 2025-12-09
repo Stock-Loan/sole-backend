@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.cache
 
 .env
 .env.*
@@ -20,6 +21,7 @@ htmlcov/
 
 # Docker/compose artifacts
 .db_data/
+secrets/
 
 # Alembic
 migrations/versions/__pycache__/

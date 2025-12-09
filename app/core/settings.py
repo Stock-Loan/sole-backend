@@ -6,15 +6,28 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        secrets_dir="/run/secrets",
+    )
 
     environment: str = Field(default="development", alias="ENVIRONMENT")
-    database_url: str = Field(default="postgresql+asyncpg://sole:sole@localhost:5432/sole", alias="DATABASE_URL")
-    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    database_url: str = Field(alias="DATABASE_URL")
+    redis_url: str = Field(alias="REDIS_URL")
     tenancy_mode: Literal["single", "multi"] = Field(default="single", alias="TENANCY_MODE")
     session_timeout_minutes: int = Field(default=30, alias="SESSION_TIMEOUT_MINUTES")
     access_token_expire_minutes: int = Field(default=15, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
-    secret_key: str = Field(default="change-me", alias="SECRET_KEY")
+    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"], alias="ALLOWED_ORIGINS")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    enable_hsts: bool = Field(default=True, alias="ENABLE_HSTS")
+    secret_key: str = Field(alias="SECRET_KEY", min_length=16)
+    jwt_private_key: str | None = Field(default=None, alias="JWT_PRIVATE_KEY")
+    jwt_public_key: str | None = Field(default=None, alias="JWT_PUBLIC_KEY")
+    jwt_private_key_path: str | None = Field(default=None, alias="JWT_PRIVATE_KEY_PATH")
+    jwt_public_key_path: str | None = Field(default=None, alias="JWT_PUBLIC_KEY_PATH")
+    jwt_algorithm: Literal["RS256"] = Field(default="RS256", alias="JWT_ALGORITHM")
 
 
 @lru_cache(maxsize=1)
