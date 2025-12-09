@@ -23,6 +23,7 @@ Environment defaults live in `.env.example` (the setup script copies to `.env` a
 - `REDIS_URL`
 - `SESSION_TIMEOUT_MINUTES`, `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `ALLOWED_ORIGINS`, `LOG_LEVEL`, `ENABLE_HSTS`
+- `DEFAULT_ORG_ID` (used when `TENANCY_MODE=single`)
 - `SECRET_KEY`
 - JWT keys: `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` inline PEM or file paths via `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH` (RS256).
 - Provide real values via environment variables or mounted secrets (`/run/secrets`); no secrets are committed.

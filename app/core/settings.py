@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"], alias="ALLOWED_ORIGINS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     enable_hsts: bool = Field(default=True, alias="ENABLE_HSTS")
+    default_org_id: str = Field(default="default", alias="DEFAULT_ORG_ID")
     secret_key: str = Field(alias="SECRET_KEY", min_length=16)
     jwt_private_key: str | None = Field(default=None, alias="JWT_PRIVATE_KEY")
     jwt_public_key: str | None = Field(default=None, alias="JWT_PUBLIC_KEY")
