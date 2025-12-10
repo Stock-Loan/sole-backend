@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import uuid
 from functools import lru_cache
-from typing import Any
+from typing import Any, Optional
 
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -72,7 +73,8 @@ def create_refresh_token(
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.refresh_token_expire_minutes)
     )
-    to_encode: dict[str, Any] = {"sub": subject, "exp": expire, "type": "refresh"}
+    jti = str(uuid.uuid4())
+    to_encode: dict[str, Any] = {"sub": subject, "exp": expire, "type": "refresh", "jti": jti}
     if token_version is not None:
         to_encode["tv"] = token_version
     private_key = _load_private_key()

@@ -22,7 +22,7 @@ Environment defaults live in `.env.example` (the setup script copies to `.env` a
 - `DATABASE_URL` (async driver; for docker-compose use `...@db:5432/sole`)
 - `REDIS_URL`
 - `SESSION_TIMEOUT_MINUTES`, `ACCESS_TOKEN_EXPIRE_MINUTES`
-- `ALLOWED_ORIGINS`, `LOG_LEVEL`, `ENABLE_HSTS`
+- `ALLOWED_ORIGINS`, `ALLOWED_TENANT_HOSTS`, `LOG_LEVEL`, `ENABLE_HSTS`
 - `DEFAULT_ORG_ID` (used when `TENANCY_MODE=single`)
 - `RATE_LIMIT_PER_MINUTE`, `LOGIN_ATTEMPT_LIMIT`, `LOGIN_LOCKOUT_MINUTES`, `DEFAULT_PASSWORD_MIN_LENGTH`
 - `SECRET_KEY`

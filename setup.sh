@@ -132,6 +132,7 @@ main() {
   ensure_default "ACCESS_TOKEN_EXPIRE_MINUTES" "15"
   ensure_default "REFRESH_TOKEN_EXPIRE_MINUTES" "10080"
   ensure_default "ALLOWED_ORIGINS" "[\"http://localhost:3000\"]"
+  ensure_default "ALLOWED_TENANT_HOSTS" "[]"
   ensure_default "LOG_LEVEL" "INFO"
   ensure_default "ENABLE_HSTS" "false"
   ensure_default "RATE_LIMIT_PER_MINUTE" "60"
