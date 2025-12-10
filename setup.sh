@@ -120,6 +120,46 @@ generate_rsa_keys() {
   fi
 }
 
+configure_proxy_settings() {
+  # Only prompt if running interactively
+  if [[ ! -t 0 ]]; then
+    return
+  fi
+
+  local current
+  current="$(grep -E '^PROXIES_COUNT=' "${ENV_FILE}" | cut -d= -f2- || echo "1")"
+  
+  msg ""
+  msg "--- Proxy Configuration ---"
+  msg "Current PROXIES_COUNT: ${current}"
+  printf "Do you want to change the proxy trust settings? [y/N] "
+  read -r response
+  if [[ ! "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+    return
+  fi
+
+  printf "\nSelect your hosting environment:\n"
+  printf "  1) Render / Heroku / AWS ALB (Standard PaaS) -> Sets 1\n"
+  printf "  2) Direct Connection / VPS / Localhost -> Sets 0\n"
+  printf "  3) Cloudflare -> Nginx/LB -> App -> Sets 2\n"
+  printf "  4) Custom\n"
+  
+  read -p "Choice [1]: " choice
+  choice=${choice:-1}
+  
+  local count="1"
+  case "$choice" in
+    1) count="1" ;;
+    2) count="0" ;;
+    3) count="2" ;;
+    4) read -p "Enter integer value for PROXIES_COUNT: " count ;;
+    *) count="1" ;;
+  esac
+  
+  ensure_env_var "PROXIES_COUNT" "$count"
+  msg "Updated PROXIES_COUNT to ${count}"
+}
+
 main() {
   require_cmd python
   require_cmd openssl
@@ -150,6 +190,9 @@ main() {
   ensure_env_var "JWT_PRIVATE_KEY_PATH" "${PRIVATE_KEY_PATH}"
   ensure_env_var "JWT_PUBLIC_KEY_PATH" "${PUBLIC_KEY_PATH}"
   ensure_env_var "JWT_ALGORITHM" "RS256"
+  ensure_default "PROXIES_COUNT" "1"
+
+  configure_proxy_settings
 
   msg "Setup complete. Next steps:"
   msg "  - Review .env to ensure values match your environment"

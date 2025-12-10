@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     login_attempt_limit: int = Field(default=5, alias="LOGIN_ATTEMPT_LIMIT")
     login_lockout_minutes: int = Field(default=15, alias="LOGIN_LOCKOUT_MINUTES")
     default_password_min_length: int = Field(default=12, alias="DEFAULT_PASSWORD_MIN_LENGTH")
+    proxies_count: int = Field(default=1, alias="PROXIES_COUNT")
 
 
 @lru_cache(maxsize=1)

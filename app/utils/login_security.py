@@ -1,11 +1,13 @@
-import logging
 from datetime import datetime, timedelta, timezone
+import logging
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from redis.exceptions import RedisError
 
 from app.core.settings import settings
 from app.utils.redis_client import get_redis_client
+
+logger = logging.getLogger(__name__)
 
 
 def _ttl(seconds: int) -> int:
@@ -21,9 +23,11 @@ async def rate_limit(key: str, limit: int, window_seconds: int) -> None:
         count, _ = await pipe.execute()
         if count > limit:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
-    except RedisError:
-        logging.getLogger(__name__).error("Redis unavailable for rate limit key=%s", key)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting unavailable")
+    except RedisError as e:
+        logger.error(f"Redis error in rate_limit: {e}")
+        # Fail open for general rate limiting to avoid outage, OR fail closed for strict security.
+        # For login security, fail closed is usually preferred.
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
 
 
 async def check_lockout(identifier: str) -> None:
@@ -32,9 +36,9 @@ async def check_lockout(identifier: str) -> None:
         locked_until = await redis.get(f"lock:{identifier}")
         if locked_until:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts; try later")
-    except RedisError:
-        logging.getLogger(__name__).error("Redis unavailable for lockout check id=%s", identifier)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting unavailable")
+    except RedisError as e:
+        logger.error(f"Redis error in check_lockout: {e}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
 
 
 async def register_login_attempt(identifier: str, success: bool) -> None:
@@ -52,17 +56,20 @@ async def register_login_attempt(identifier: str, success: bool) -> None:
             await redis.setex(lock_key, _ttl(settings.login_lockout_minutes * 60), 1)
             await redis.delete(fail_key)
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Account temporarily locked due to failed attempts")
-    except RedisError:
-        logging.getLogger(__name__).error("Redis unavailable for login attempt id=%s", identifier)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting unavailable")
+    except RedisError as e:
+        logger.error(f"Redis error in register_login_attempt: {e}")
+        # We cannot safely track attempts, so we must fail to prevent brute force
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
 
 
 async def is_refresh_used(jti: str) -> bool:
     redis = get_redis_client()
     try:
         return bool(await redis.get(f"refresh_used:{jti}"))
-    except RedisError:
-        return False
+    except RedisError as e:
+        logger.error(f"Redis error in is_refresh_used: {e}")
+        # Fail closed: assume token might be used if we can't check
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
 
 
 async def mark_refresh_used(jti: str, expires_at: datetime) -> None:
@@ -72,5 +79,8 @@ async def mark_refresh_used(jti: str, expires_at: datetime) -> None:
         return
     try:
         await redis.setex(f"refresh_used:{jti}", ttl, 1)
-    except RedisError:
-        return
+    except RedisError as e:
+        logger.error(f"Redis error in mark_refresh_used: {e}")
+        # If we can't mark it as used, we risk replay attacks.
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
+

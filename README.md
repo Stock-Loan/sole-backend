@@ -27,7 +27,16 @@ Environment defaults live in `.env.example` (the setup script copies to `.env` a
 - `RATE_LIMIT_PER_MINUTE`, `LOGIN_ATTEMPT_LIMIT`, `LOGIN_LOCKOUT_MINUTES`, `DEFAULT_PASSWORD_MIN_LENGTH`
 - `SECRET_KEY`
 - JWT keys: `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` inline PEM or file paths via `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH` (RS256).
+- `PROXIES_COUNT` (default: `1`). Controls how many proxies are trusted for IP resolution.
 - Provide real values via environment variables or mounted secrets (`/run/secrets`); no secrets are committed.
+
+### Proxy Configuration (`PROXIES_COUNT`)
+
+The application uses `PROXIES_COUNT` to securely determine the client's real IP address when running behind load balancers or proxies. It trusts the last `N` IP addresses in the `X-Forwarded-For` header.
+
+*   **Render / Heroku / AWS ALB:** Set `PROXIES_COUNT=1` (Default). These platforms terminate SSL and pass the request via one load balancer.
+*   **Direct Connection (VPS/Local):** Set `PROXIES_COUNT=0`. Use this if the app is directly exposed to the internet or during local development without a proxy.
+*   **Cloudflare -> Nginx -> App:** Set `PROXIES_COUNT=2`. Trust Cloudflare (1) and your Nginx ingress (1).
 
 ## Project Layout
 - `app/` — application code (api, core, db, models, services, etc.)
