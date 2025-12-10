@@ -64,6 +64,28 @@ ensure_default() {
   fi
 }
 
+normalize_database_url() {
+  local current
+  current="$(grep -E '^DATABASE_URL=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
+  if [[ "$current" == *"@localhost:"* || "$current" == *"@127.0.0.1:"* ]]; then
+    local updated="${current/@localhost:/@db:}"
+    updated="${updated/@127.0.0.1:/@db:}"
+    ensure_env_var "DATABASE_URL" "$updated"
+    warn "Updated DATABASE_URL to use service host 'db' for docker-compose"
+  fi
+}
+
+normalize_redis_url() {
+  local current
+  current="$(grep -E '^REDIS_URL=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
+  if [[ "$current" == *"@localhost"* || "$current" == *"@127.0.0.1"* ]]; then
+    local updated="${current/localhost/redis}"
+    updated="${updated/127.0.0.1/redis}"
+    ensure_env_var "REDIS_URL" "$updated"
+    warn "Updated REDIS_URL to use service host 'redis' for docker-compose"
+  fi
+}
+
 generate_secret_key() {
   local current
   current="$(grep -E '^SECRET_KEY=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
@@ -108,12 +130,19 @@ main() {
   ensure_default "TENANCY_MODE" "single"
   ensure_default "SESSION_TIMEOUT_MINUTES" "30"
   ensure_default "ACCESS_TOKEN_EXPIRE_MINUTES" "15"
+  ensure_default "REFRESH_TOKEN_EXPIRE_MINUTES" "10080"
   ensure_default "ALLOWED_ORIGINS" "[\"http://localhost:3000\"]"
   ensure_default "LOG_LEVEL" "INFO"
   ensure_default "ENABLE_HSTS" "false"
+  ensure_default "RATE_LIMIT_PER_MINUTE" "60"
+  ensure_default "LOGIN_ATTEMPT_LIMIT" "5"
+  ensure_default "LOGIN_LOCKOUT_MINUTES" "15"
+  ensure_default "DEFAULT_PASSWORD_MIN_LENGTH" "12"
   ensure_default "POSTGRES_USER" "sole"
   ensure_default "POSTGRES_PASSWORD" "sole"
   ensure_default "POSTGRES_DB" "sole"
+  normalize_database_url
+  normalize_redis_url
   generate_secret_key
   generate_rsa_keys
 

@@ -14,7 +14,7 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "audit_logs",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("org_id", sa.String(), nullable=False),
         sa.Column("actor_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("action", sa.String(length=255), nullable=False),
@@ -23,6 +23,7 @@ def upgrade() -> None:
         sa.Column("old_value", sa.JSON(), nullable=True),
         sa.Column("new_value", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.PrimaryKeyConstraint("id", "org_id"),
         postgresql_partition_by="LIST (org_id)",
     )
     op.create_index("ix_audit_logs_org_id", "audit_logs", ["org_id"])
@@ -30,7 +31,7 @@ def upgrade() -> None:
 
     op.create_table(
         "journal_entries",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("org_id", sa.String(), nullable=False),
         sa.Column("entry_date", sa.Date(), nullable=False, server_default=sa.func.current_date()),
         sa.Column("amount", sa.Numeric(18, 2), nullable=False),
@@ -40,6 +41,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("tax_id", sa.LargeBinary(), nullable=True),
         sa.Column("bank_account_number", sa.LargeBinary(), nullable=True),
+        sa.PrimaryKeyConstraint("id", "org_id"),
         postgresql_partition_by="LIST (org_id)",
     )
     op.create_index("ix_journal_entries_org_id", "journal_entries", ["org_id"])

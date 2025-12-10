@@ -47,3 +47,6 @@ class EncryptedString(TypeDecorator):
             return decrypted.decode("utf-8")
         except InvalidToken as exc:  # pragma: no cover - indicates corrupted data
             raise ValueError("Unable to decrypt value") from exc
+
+
+__all__ = ["EncryptedString"]

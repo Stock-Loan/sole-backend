@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     tenancy_mode: Literal["single", "multi"] = Field(default="single", alias="TENANCY_MODE")
     session_timeout_minutes: int = Field(default=30, alias="SESSION_TIMEOUT_MINUTES")
     access_token_expire_minutes: int = Field(default=15, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    refresh_token_expire_minutes: int = Field(default=60 * 24 * 7, alias="REFRESH_TOKEN_EXPIRE_MINUTES")
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"], alias="ALLOWED_ORIGINS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     enable_hsts: bool = Field(default=True, alias="ENABLE_HSTS")
@@ -29,6 +30,11 @@ class Settings(BaseSettings):
     jwt_private_key_path: str | None = Field(default=None, alias="JWT_PRIVATE_KEY_PATH")
     jwt_public_key_path: str | None = Field(default=None, alias="JWT_PUBLIC_KEY_PATH")
     jwt_algorithm: Literal["RS256"] = Field(default="RS256", alias="JWT_ALGORITHM")
+    allowed_tenant_hosts: list[str] = Field(default_factory=list, alias="ALLOWED_TENANT_HOSTS")
+    rate_limit_per_minute: int = Field(default=60, alias="RATE_LIMIT_PER_MINUTE")
+    login_attempt_limit: int = Field(default=5, alias="LOGIN_ATTEMPT_LIMIT")
+    login_lockout_minutes: int = Field(default=15, alias="LOGIN_LOCKOUT_MINUTES")
+    default_password_min_length: int = Field(default=12, alias="DEFAULT_PASSWORD_MIN_LENGTH")
 
 
 @lru_cache(maxsize=1)

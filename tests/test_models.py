@@ -6,9 +6,10 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("DEFAULT_ORG_ID", "default")
 
 from app.core.security import create_access_token, decode_token
-from app.db.encryption import EncryptedString
 from app.models.audit_log import AuditLog
 from app.models.journal_entry import JournalEntry
+from app.models.types import EncryptedString
+from app.models.user import User
 
 
 def test_partitioning_metadata_present() -> None:
@@ -51,3 +52,8 @@ def test_jwt_rs256_round_trip(monkeypatch, tmp_path) -> None:
     token = create_access_token("user-123")
     decoded = decode_token(token)
     assert decoded["sub"] == "user-123"
+
+
+def test_user_unique_constraint() -> None:
+    constraints = [c for c in User.__table__.constraints if hasattr(c, "name")]
+    assert any(getattr(c, "name", "") == "uq_users_org_email" for c in constraints)

@@ -5,7 +5,6 @@ import pytest
 from app.api import deps
 from app.core.settings import settings
 
-
 @pytest.fixture(autouse=True)
 def _base_env(monkeypatch):
     monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://test:test@localhost:5432/test")

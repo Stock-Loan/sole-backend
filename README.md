@@ -19,11 +19,12 @@ The API listens on http://localhost:8000 with a health check at `/api/v1/health`
 ## Configuration
 Environment defaults live in `.env.example` (the setup script copies to `.env` and fills any missing values):
 - `TENANCY_MODE` (`single`|`multi`)
-- `DATABASE_URL` (async driver)
+- `DATABASE_URL` (async driver; for docker-compose use `...@db:5432/sole`)
 - `REDIS_URL`
 - `SESSION_TIMEOUT_MINUTES`, `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `ALLOWED_ORIGINS`, `LOG_LEVEL`, `ENABLE_HSTS`
 - `DEFAULT_ORG_ID` (used when `TENANCY_MODE=single`)
+- `RATE_LIMIT_PER_MINUTE`, `LOGIN_ATTEMPT_LIMIT`, `LOGIN_LOCKOUT_MINUTES`, `DEFAULT_PASSWORD_MIN_LENGTH`
 - `SECRET_KEY`
 - JWT keys: `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` inline PEM or file paths via `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH` (RS256).
 - Provide real values via environment variables or mounted secrets (`/run/secrets`); no secrets are committed.
