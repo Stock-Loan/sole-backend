@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -21,7 +22,8 @@ async def rate_limit(key: str, limit: int, window_seconds: int) -> None:
         if count > limit:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
     except RedisError:
-        return
+        logging.getLogger(__name__).error("Redis unavailable for rate limit key=%s", key)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting unavailable")
 
 
 async def check_lockout(identifier: str) -> None:
@@ -31,7 +33,8 @@ async def check_lockout(identifier: str) -> None:
         if locked_until:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts; try later")
     except RedisError:
-        return
+        logging.getLogger(__name__).error("Redis unavailable for lockout check id=%s", identifier)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting unavailable")
 
 
 async def register_login_attempt(identifier: str, success: bool) -> None:
@@ -50,7 +53,8 @@ async def register_login_attempt(identifier: str, success: bool) -> None:
             await redis.delete(fail_key)
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Account temporarily locked due to failed attempts")
     except RedisError:
-        return
+        logging.getLogger(__name__).error("Redis unavailable for login attempt id=%s", identifier)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Rate limiting unavailable")
 
 
 async def is_refresh_used(jti: str) -> bool:
