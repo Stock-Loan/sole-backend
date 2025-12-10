@@ -7,7 +7,8 @@ FastAPI backend scaffold for the SOLE platform, aligned with the provided direct
 - Docker + Docker Compose
 
 ## Quickstart
-- `./setup.sh` — one-time local bootstrap (creates/fills `.env`, generates strong `SECRET_KEY`, and creates RSA keys for JWT).
+- `./setup-dev.sh` — local bootstrap (creates/fills `.env`, generates strong `SECRET_KEY`, and creates RSA keys for JWT).
+- `./setup-prod.sh` — production bootstrap (creates `.env.prod`, requires explicit values and inline RSA keys; does not write secrets to disk).
 - `make up` — build and start app + Postgres + Redis
 - `make logs` — follow application logs
 - `make migrate` — run Alembic migrations (placeholder until models exist)
@@ -17,7 +18,7 @@ FastAPI backend scaffold for the SOLE platform, aligned with the provided direct
 The API listens on http://localhost:8000 with a health check at `/api/v1/health`.
 
 ## Configuration
-Environment defaults live in `.env.example` (the setup script copies to `.env` and fills any missing values):
+Environment defaults live in `.env.example` (the dev script copies to `.env` and fills any missing values):
 - `TENANCY_MODE` (`single`|`multi`)
 - `DATABASE_URL` (async driver; for docker-compose use `...@db:5432/sole`)
 - `REDIS_URL`

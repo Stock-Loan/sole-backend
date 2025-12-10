@@ -97,8 +97,8 @@ test-integration: ## Run integration tests only
 install: ## Install dependencies inside container
 	$(DC) run --rm $(APP) pip install .[dev]
 
-setup-env: ## Run local setup script to create .env and keys
-	./setup.sh
+setup-env: ## Run interactive setup (choose dev or prod)
+	./scripts/setup/setup.sh
 
 health: ## Check service health
 	@curl -s http://localhost:8000/api/v1/health | python -m json.tool || echo "API not responding"
