@@ -1,12 +1,8 @@
 from datetime import timedelta
 
-from app.core.security import (
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-    get_password_hash,
-    verify_password,
-)
+from app.core import security
+from app.core.security import create_access_token, create_refresh_token, decode_token, get_password_hash, verify_password
+from app.core.settings import settings
 
 
 def test_password_hashing_and_verify():
@@ -14,7 +10,7 @@ def test_password_hashing_and_verify():
     hashed = get_password_hash(password)
     assert hashed != password
     assert verify_password(password, hashed)
-    assert verify_password("S0meP@ss!", hashed)
+    assert verify_password("S0meP@ss!", hashed) is False
 
 
 def test_access_and_refresh_tokens(monkeypatch, tmp_path):
@@ -36,11 +32,15 @@ def test_access_and_refresh_tokens(monkeypatch, tmp_path):
     priv_file.write_bytes(private_pem)
     pub_file.write_bytes(public_pem)
 
-    monkeypatch.setenv("JWT_PRIVATE_KEY_PATH", str(priv_file))
-    monkeypatch.setenv("JWT_PUBLIC_KEY_PATH", str(pub_file))
-    monkeypatch.setenv("SECRET_KEY", "placeholder-secret-for-settings")
-    monkeypatch.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1")
-    monkeypatch.setenv("REFRESH_TOKEN_EXPIRE_MINUTES", "2")
+    # Patch settings directly because they are loaded at import time
+    monkeypatch.setattr(settings, "jwt_private_key_path", str(priv_file))
+    monkeypatch.setattr(settings, "jwt_public_key_path", str(pub_file))
+    monkeypatch.setattr(settings, "secret_key", "placeholder-secret-for-settings")
+    monkeypatch.setattr(settings, "access_token_expire_minutes", 1)
+    monkeypatch.setattr(settings, "refresh_token_expire_minutes", 2)
+    # Clear cached keys so patched settings are used
+    security._load_private_key.cache_clear()
+    security._load_public_key.cache_clear()
 
     access = create_access_token("user-xyz")
     refresh = create_refresh_token("user-xyz", expires_delta=timedelta(minutes=2), token_version=3)
@@ -50,6 +50,9 @@ def test_access_and_refresh_tokens(monkeypatch, tmp_path):
 
     assert decoded_access["sub"] == "user-xyz"
     assert decoded_access["type"] == "access"
+    assert "iat" in decoded_access
     assert decoded_refresh["sub"] == "user-xyz"
     assert decoded_refresh["type"] == "refresh"
     assert decoded_refresh["tv"] == 3
+    assert "iat" in decoded_refresh
+    assert "jti" in decoded_refresh

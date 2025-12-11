@@ -1,12 +1,8 @@
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel, EmailStr
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
 
 
 class TokenPair(BaseModel):
@@ -19,8 +15,31 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class LoginStartRequest(BaseModel):
+    email: EmailStr
+
+
+class LoginStartResponse(BaseModel):
+    challenge_token: str
+
+
+class LoginCompleteRequest(BaseModel):
+    challenge_token: str
+    password: str
+
+
 class UserOut(BaseModel):
-    id: str
+    id: UUID
     org_id: str
     email: EmailStr
     is_active: bool

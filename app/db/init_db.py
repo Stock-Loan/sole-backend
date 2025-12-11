@@ -1,9 +1,10 @@
 import asyncio
 from sqlalchemy import select
-from app.db.session import AsyncSessionLocal
-from app.models.user import User
+
 from app.core.security import get_password_hash
 from app.core.settings import settings
+from app.db.session import AsyncSessionLocal
+from app.models.user import User
 
 async def init_db() -> None:
     """
@@ -11,7 +12,7 @@ async def init_db() -> None:
     """
     async with AsyncSessionLocal() as session:
         print("Seeding database...")
-        stmt = select(User).where(User.email == "admin@example.com")
+        stmt = select(User).where(User.email == settings.seed_admin_email, User.org_id == settings.default_org_id)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -19,12 +20,12 @@ async def init_db() -> None:
             print("Creating admin user...")
             user = User(
                 org_id=settings.default_org_id,
-                email="admin@example.com",
-                hashed_password=get_password_hash("password123456"),
+                email=settings.seed_admin_email,
+                hashed_password=get_password_hash(settings.seed_admin_password),
                 is_active=True,
                 is_superuser=True,
                 token_version=0,
-                full_name="Admin User"
+                full_name=settings.seed_admin_full_name,
             )
             session.add(user)
             await session.commit()

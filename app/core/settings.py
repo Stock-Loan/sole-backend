@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = Field(default=15, alias="LOGIN_LOCKOUT_MINUTES")
     default_password_min_length: int = Field(default=12, alias="DEFAULT_PASSWORD_MIN_LENGTH")
     proxies_count: int = Field(default=1, alias="PROXIES_COUNT")
+    seed_admin_email: str = Field(default="admin@example.com", alias="SEED_ADMIN_EMAIL")
+    seed_admin_password: str = Field(default="ChangeMe123!", alias="SEED_ADMIN_PASSWORD")
+    seed_admin_full_name: str = Field(default="Admin User", alias="SEED_ADMIN_FULL_NAME")
 
 
 @lru_cache(maxsize=1)

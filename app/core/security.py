@@ -55,10 +55,9 @@ def _read_key(path: str) -> str:
 def create_access_token(
     subject: str, expires_delta: timedelta | None = None, token_version: int | None = None
 ) -> str:
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
-    )
-    to_encode: dict[str, Any] = {"sub": subject, "exp": expire, "type": "access"}
+    now = datetime.now(timezone.utc)
+    expire = now + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
+    to_encode: dict[str, Any] = {"sub": subject, "exp": expire, "iat": now, "type": "access"}
     if token_version is not None:
         to_encode["tv"] = token_version
     private_key = _load_private_key()
@@ -70,11 +69,16 @@ def create_refresh_token(
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
 ) -> str:
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.refresh_token_expire_minutes)
-    )
+    now = datetime.now(timezone.utc)
+    expire = now + (expires_delta or timedelta(minutes=settings.refresh_token_expire_minutes))
     jti = str(uuid.uuid4())
-    to_encode: dict[str, Any] = {"sub": subject, "exp": expire, "type": "refresh", "jti": jti}
+    to_encode: dict[str, Any] = {
+        "sub": subject,
+        "exp": expire,
+        "iat": now,
+        "type": "refresh",
+        "jti": jti,
+    }
     if token_version is not None:
         to_encode["tv"] = token_version
     private_key = _load_private_key()
@@ -90,3 +94,26 @@ def decode_token(token: str, expected_type: str | None = None) -> dict[str, Any]
         return payload
     except JWTError as exc:  # pragma: no cover - basic placeholder
         raise ValueError("Invalid token") from exc
+
+
+def create_login_challenge_token(email: str, org_id: str, *, ttl_minutes: int = 5) -> str:
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=ttl_minutes)
+    to_encode: dict[str, Any] = {
+        "sub": email,
+        "org": org_id,
+        "type": "login_challenge",
+        "iat": now,
+        "exp": expire,
+    }
+    private_key = _load_private_key()
+    return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_login_challenge_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token, expected_type="login_challenge")
+    email = payload.get("sub")
+    org_id = payload.get("org")
+    if not email or not org_id:
+        raise ValueError("Invalid challenge token")
+    return payload

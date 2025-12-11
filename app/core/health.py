@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.core.settings import settings
 from app.db.session import engine
 from app.utils.redis_client import get_redis_client
+
+APP_VERSION = "0.1.0"
 
 
 async def _check_db() -> dict[str, str]:
@@ -29,29 +32,53 @@ async def _check_redis() -> dict[str, str]:
 
 
 async def _check_api() -> dict[str, str]:
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": APP_VERSION}
 
 
-async def health_payload() -> dict[str, dict[str, str] | str]:
-    db_status = await _check_db()
-    redis_status = await _check_redis()
-    api_status = await _check_api()
+def _overall_status(checks: dict[str, dict[str, Any]]) -> tuple[str, bool]:
+    ready = all(check.get("status") == "ok" for check in checks.values())
+    return ("ok" if ready else "degraded", ready)
 
-    overall = "ok"
-    if (
-        db_status.get("status") != "ok"
-        or redis_status.get("status") != "ok"
-        or api_status.get("status") != "ok"
-    ):
-        overall = "degraded"
 
+async def live_payload() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def ready_payload() -> dict[str, Any]:
+    checks = {
+        "api": await _check_api(),
+        "database": await _check_db(),
+        "redis": await _check_redis(),
+    }
+    overall, ready = _overall_status(checks)
     return {
         "status": overall,
+        "ready": ready,
         "environment": settings.environment,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "checks": {
-            "api": api_status,
-            "database": db_status,
-            "redis": redis_status,
-        },
+        "checks": checks,
     }
+
+
+async def status_summary_payload() -> dict[str, Any]:
+    checks = {
+        "api": await _check_api(),
+        "database": await _check_db(),
+        "redis": await _check_redis(),
+    }
+    overall, ready = _overall_status(checks)
+    return {
+        "status": overall,
+        "ready": ready,
+        "environment": settings.environment,
+        "version": APP_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
+    }
+
+
+async def health_payload() -> dict[str, Any]:
+    return await ready_payload()

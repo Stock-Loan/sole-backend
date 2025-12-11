@@ -98,3 +98,8 @@ async def get_current_user(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+async def require_authenticated_user(current_user: User = Depends(get_current_user)) -> User:
+    """Simple guard to require an authenticated user (no permission checks)."""
+    return current_user
