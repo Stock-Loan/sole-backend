@@ -4,6 +4,7 @@ from sqlalchemy import select
 from app.core.security import get_password_hash
 from app.core.settings import settings
 from app.db.session import AsyncSessionLocal
+from app.models.org import Org
 from app.models.user import User
 
 async def init_db() -> None:
@@ -12,6 +13,21 @@ async def init_db() -> None:
     """
     async with AsyncSessionLocal() as session:
         print("Seeding database...")
+        # Ensure default org exists
+        org_stmt = select(Org).where(Org.id == settings.default_org_id)
+        org_result = await session.execute(org_stmt)
+        org = org_result.scalar_one_or_none()
+        if not org:
+            print("Creating default org...")
+            org = Org(
+                id=settings.default_org_id,
+                name="Default Organization",
+                slug=settings.default_org_id,
+                status="ACTIVE",
+            )
+            session.add(org)
+            await session.commit()
+
         stmt = select(User).where(User.email == settings.seed_admin_email, User.org_id == settings.default_org_id)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
@@ -26,6 +42,7 @@ async def init_db() -> None:
                 is_superuser=True,
                 token_version=0,
                 full_name=settings.seed_admin_full_name,
+                first_name=settings.seed_admin_full_name,
             )
             session.add(user)
             await session.commit()

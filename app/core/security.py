@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any, Optional
 
 from passlib.context import CryptContext
-from jose import JWTError, jwt
+from jose import JWTError, ExpiredSignatureError, jwt
 
 from app.core.settings import settings
 
@@ -92,6 +92,8 @@ def decode_token(token: str, expected_type: str | None = None) -> dict[str, Any]
         if expected_type and payload.get("type") != expected_type:
             raise ValueError(f"Unexpected token type: {payload.get('type')}")
         return payload
+    except ExpiredSignatureError as exc:
+        raise ValueError("Token expired") from exc
     except JWTError as exc:  # pragma: no cover - basic placeholder
         raise ValueError("Invalid token") from exc
 

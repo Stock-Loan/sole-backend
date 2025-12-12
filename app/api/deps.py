@@ -74,7 +74,13 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db_session),
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> User:
-    payload = decode_token(token, expected_type="access")
+    try:
+        payload = decode_token(token, expected_type="access")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
     user_sub = payload.get("sub")
     token_version = payload.get("tv")
     if not user_sub:
