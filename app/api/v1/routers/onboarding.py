@@ -9,7 +9,7 @@ from app.api.deps import require_authenticated_user
 from app.db.session import get_db
 from app.models import User
 from app.schemas.onboarding import BulkOnboardingResult, OnboardingResponse, OnboardingUserCreate
-from app.schemas.users import UpdateMembershipRequest, UserDetailResponse, UserListResponse
+from app.schemas.users import UpdateMembershipRequest, UpdateUserProfileRequest, UserDetailResponse, UserListResponse
 from app.models.org_membership import OrgMembership
 from app.models.user import User as UserModel
 from app.services import onboarding
@@ -130,4 +130,38 @@ async def update_membership(
     await db.commit()
     await db.refresh(membership)
     await db.refresh(user)
+    return UserDetailResponse(user=user, membership=membership)
+
+
+@router.patch("/{membership_id}/profile", response_model=UserDetailResponse, summary="Update user profile fields")
+async def update_user_profile(
+    membership_id: str,
+    payload: UpdateUserProfileRequest,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserDetailResponse:
+    stmt = (
+        select(OrgMembership, UserModel)
+        .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+    )
+    result = await db.execute(stmt)
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    membership, user = row
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(user, field, value)
+    # maintain full_name if first/last change
+    if payload.first_name or payload.last_name:
+        first = payload.first_name if payload.first_name is not None else user.first_name or ""
+        last = payload.last_name if payload.last_name is not None else user.last_name or ""
+        user.full_name = f"{first} {last}".strip()
+
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    await db.refresh(membership)
     return UserDetailResponse(user=user, membership=membership)

@@ -12,6 +12,12 @@ class OnboardingUserCreate(BaseModel):
     preferred_name: str | None = None
     timezone: str | None = None
     phone_number: str | None = None
+    marital_status: str | None = None
+    country: str | None = None
+    state: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    postal_code: str | None = None
     employee_id: str
     employment_start_date: date | None = None
     employment_status: str = "ACTIVE"
@@ -27,6 +33,12 @@ class OnboardingUserOut(BaseModel):
     preferred_name: str | None = None
     timezone: str | None = None
     phone_number: str | None = None
+    marital_status: str | None = None
+    country: str | None = None
+    state: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    postal_code: str | None = None
     is_active: bool
     is_superuser: bool
     created_at: datetime | None = None

@@ -13,6 +13,12 @@ class UserSummary(BaseModel):
     preferred_name: str | None = None
     timezone: str | None = None
     phone_number: str | None = None
+    marital_status: str | None = None
+    country: str | None = None
+    state: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    postal_code: str | None = None
     is_active: bool
     is_superuser: bool
     created_at: datetime | None = None
@@ -54,3 +60,18 @@ class UserDetailResponse(UserListItem):
 class UpdateMembershipRequest(BaseModel):
     employment_status: str | None = None
     platform_status: str | None = None
+
+
+class UpdateUserProfileRequest(BaseModel):
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str | None = None
+    preferred_name: str | None = None
+    timezone: str | None = None
+    phone_number: str | None = None
+    marital_status: str | None = None
+    country: str | None = None
+    state: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    postal_code: str | None = None
