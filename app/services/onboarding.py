@@ -2,9 +2,11 @@ import csv
 import io
 import secrets
 import string
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from typing import Tuple
 
+from rapidfuzz import process, fuzz
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,21 +51,51 @@ def _parse_date(value: str | None):
 
 COUNTRY_MAP = {c["code"]: c["name"].lower() for c in COUNTRIES}
 COUNTRY_NAME_TO_CODE = {v: k for k, v in COUNTRY_MAP.items()}
+COUNTRY_ALIASES = {
+    "usa": "US",
+    "unitedstates": "US",
+    "unitedstatesofamerica": "US",
+    "america": "US",
+    "uk": "GB",
+    "unitedkingdom": "GB",
+    "greatbritain": "GB",
+    "england": "GB",
+    "scotland": "GB",
+    "wales": "GB",
+    "northernireland": "GB",
+}
+
+
+def _normalize_label(text: str) -> str:
+    """Lowercase and strip diacritics for fuzzy matching."""
+    normalized = unicodedata.normalize("NFKD", text)
+    ascii_text = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return "".join(ch for ch in ascii_text.lower() if ch.isalnum())
 
 
 def _normalize_location(country: str | None, state: str | None) -> tuple[str | None, str | None]:
     if not country:
         return None, None
     raw = country.strip()
-    upper = raw.upper()
-    lower = raw.lower()
+    norm = _normalize_label(raw)
 
-    if upper in COUNTRY_MAP:
-        country_code = upper
-    elif lower in COUNTRY_NAME_TO_CODE:
-        country_code = COUNTRY_NAME_TO_CODE[lower]
+    # Exact code
+    if raw.upper() in COUNTRY_MAP:
+        country_code = raw.upper()
+    # Alias
+    elif norm in COUNTRY_ALIASES:
+        country_code = COUNTRY_ALIASES[norm]
+    # Name exact
+    elif norm in COUNTRY_NAME_TO_CODE:
+        country_code = COUNTRY_NAME_TO_CODE[norm]
     else:
-        raise ValueError(f"Unsupported country: {country}")
+        # Fuzzy match country names
+        choices = list(COUNTRY_NAME_TO_CODE.keys())
+        match = process.extractOne(norm, choices, scorer=fuzz.WRatio, score_cutoff=90)
+        if match:
+            country_code = COUNTRY_NAME_TO_CODE[match[0]]
+        else:
+            raise ValueError(f"Unsupported country: {country}")
 
     normalized_state = None
     if state:
@@ -71,16 +103,22 @@ def _normalize_location(country: str | None, state: str | None) -> tuple[str | N
         state_upper = state_raw.upper()
         allowed = SUBDIVISIONS.get(country_code, [])
         allowed_codes = {s["code"] for s in allowed}
-        allowed_names = {s["name"].lower(): s["code"] for s in allowed}
+        allowed_names = {_normalize_label(s["name"]): s["code"] for s in allowed}
         if allowed:
             if state_upper in allowed_codes:
                 normalized_state = state_upper
             else:
-                name_match = allowed_names.get(state_raw.lower())
-                if name_match:
-                    normalized_state = name_match
+                name_key = _normalize_label(state_raw)
+                if name_key in allowed_names:
+                    normalized_state = allowed_names[name_key]
                 else:
-                    raise ValueError(f"Unsupported state '{state_raw}' for country {country_code}")
+                    # Fuzzy match subdivision names
+                    choices = list(allowed_names.keys())
+                    match = process.extractOne(name_key, choices, scorer=fuzz.WRatio, score_cutoff=85)
+                    if match:
+                        normalized_state = allowed_names[match[0]]
+                    else:
+                        raise ValueError(f"Unsupported state '{state_raw}' for country {country_code}")
         else:
             normalized_state = state_upper[:10]
 
