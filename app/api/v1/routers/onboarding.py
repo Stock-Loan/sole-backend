@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +9,13 @@ from app.api.deps import require_authenticated_user
 from app.db.session import get_db
 from app.models import User
 from app.schemas.onboarding import BulkOnboardingResult, OnboardingResponse, OnboardingUserCreate
-from app.schemas.users import UpdateMembershipRequest, UpdateUserProfileRequest, UserDetailResponse, UserListResponse
+from app.schemas.users import (
+    BulkDeleteRequest,
+    UpdateMembershipRequest,
+    UpdateUserProfileRequest,
+    UserDetailResponse,
+    UserListResponse,
+)
 from app.models.org_membership import OrgMembership
 from app.models.user import User as UserModel
 from app.services import onboarding
@@ -65,21 +71,33 @@ async def bulk_onboard(
 
 @router.get("", response_model=UserListResponse, summary="List users for the current org")
 async def list_users(
+    page: int = 1,
+    page_size: int = 20,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     _: User = Depends(require_authenticated_user),
     db: AsyncSession = Depends(get_db),
 ) -> UserListResponse:
-    stmt = (
+    if page < 1:
+        page = 1
+    if page_size < 1:
+        page_size = 20
+    offset = (page - 1) * page_size
+
+    base_stmt = (
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .where(OrgMembership.org_id == ctx.org_id)
         .order_by(UserModel.created_at)
     )
-    result = await db.execute(stmt)
+    count_stmt = select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == ctx.org_id)
+    count_result = await db.execute(count_stmt)
+    total = count_result.scalar_one()
+
+    result = await db.execute(base_stmt.offset(offset).limit(page_size))
     items = []
     for membership, user in result.all():
         items.append({"user": user, "membership": membership})
-    return UserListResponse(items=items)
+    return UserListResponse(items=items, total=total)
 
 
 @router.get("/{membership_id}", response_model=UserDetailResponse, summary="Get a user membership detail")
@@ -100,6 +118,68 @@ async def get_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user = row
     return UserDetailResponse(user=user, membership=membership)
+
+
+@router.delete("/{membership_id}", status_code=204, summary="Delete a user membership and user if no other memberships")
+async def delete_user(
+    membership_id: str,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    stmt = (
+        select(OrgMembership, UserModel)
+        .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+    )
+    result = await db.execute(stmt)
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    membership, user = row
+
+    await db.delete(membership)
+    await db.commit()
+
+    # If user has no other memberships, delete user record
+    other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
+    other_result = await db.execute(other_stmt)
+    if not other_result.first():
+        await db.delete(user)
+        await db.commit()
+    return None
+
+
+@router.post("/bulk/delete", status_code=200, summary="Bulk delete user memberships by ID")
+async def bulk_delete_users(
+    payload: BulkDeleteRequest,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    deleted = 0
+    not_found: list[str] = []
+    for membership_id in payload.membership_ids:
+        stmt = (
+            select(OrgMembership, UserModel)
+            .join(UserModel, OrgMembership.user_id == UserModel.id)
+            .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+        )
+        result = await db.execute(stmt)
+        row = result.one_or_none()
+        if not row:
+            not_found.append(membership_id)
+            continue
+        membership, user = row
+        await db.delete(membership)
+        await db.commit()
+        other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
+        other_result = await db.execute(other_stmt)
+        if not other_result.first():
+            await db.delete(user)
+            await db.commit()
+        deleted += 1
+    return {"deleted": deleted, "not_found": not_found}
 
 
 @router.patch("/{membership_id}", response_model=UserDetailResponse, summary="Update membership status fields")

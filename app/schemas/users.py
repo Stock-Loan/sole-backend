@@ -51,6 +51,7 @@ class UserListItem(BaseModel):
 
 class UserListResponse(BaseModel):
     items: list[UserListItem]
+    total: int
 
 
 class UserDetailResponse(UserListItem):
@@ -75,3 +76,7 @@ class UpdateUserProfileRequest(BaseModel):
     address_line1: str | None = None
     address_line2: str | None = None
     postal_code: str | None = None
+
+
+class BulkDeleteRequest(BaseModel):
+    membership_ids: list[str]

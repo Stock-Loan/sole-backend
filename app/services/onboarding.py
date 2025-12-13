@@ -2,7 +2,7 @@ import csv
 import io
 import secrets
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Tuple
 
 from sqlalchemy import select
@@ -19,11 +19,72 @@ from app.schemas.onboarding import (
     BulkOnboardingRowSuccess,
     OnboardingUserCreate,
 )
+from app.resources.countries import COUNTRIES, SUBDIVISIONS
 
 
 def _generate_temp_password(length: int = 16) -> str:
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _parse_date(value: str | None):
+    if not value:
+        return None
+    value = value.strip()
+    # Accept ISO date
+    try:
+        return datetime.fromisoformat(value).date()
+    except Exception:
+        pass
+    # Accept Excel serial numbers (assuming 1899-12-30 epoch)
+    if value.isdigit():
+        try:
+            base = datetime(1899, 12, 30, tzinfo=timezone.utc)
+            days = int(value)
+            return (base + timedelta(days=days)).date()
+        except Exception:
+            return None
+    return None
+
+
+COUNTRY_MAP = {c["code"]: c["name"].lower() for c in COUNTRIES}
+COUNTRY_NAME_TO_CODE = {v: k for k, v in COUNTRY_MAP.items()}
+
+
+def _normalize_location(country: str | None, state: str | None) -> tuple[str | None, str | None]:
+    if not country:
+        return None, None
+    raw = country.strip()
+    upper = raw.upper()
+    lower = raw.lower()
+
+    if upper in COUNTRY_MAP:
+        country_code = upper
+    elif lower in COUNTRY_NAME_TO_CODE:
+        country_code = COUNTRY_NAME_TO_CODE[lower]
+    else:
+        raise ValueError(f"Unsupported country: {country}")
+
+    normalized_state = None
+    if state:
+        state_raw = state.strip()
+        state_upper = state_raw.upper()
+        allowed = SUBDIVISIONS.get(country_code, [])
+        allowed_codes = {s["code"] for s in allowed}
+        allowed_names = {s["name"].lower(): s["code"] for s in allowed}
+        if allowed:
+            if state_upper in allowed_codes:
+                normalized_state = state_upper
+            else:
+                name_match = allowed_names.get(state_raw.lower())
+                if name_match:
+                    normalized_state = name_match
+                else:
+                    raise ValueError(f"Unsupported state '{state_raw}' for country {country_code}")
+        else:
+            normalized_state = state_upper[:10]
+
+    return country_code, normalized_state
 
 
 async def onboard_single_user(
@@ -129,6 +190,9 @@ async def bulk_onboard_users(
 
     for idx, row in enumerate(reader, start=2):  # row numbers (header=1)
         try:
+            country_code, state_code = _normalize_location(
+                row.get("country") or None, row.get("state") or None
+            )
             payload = OnboardingUserCreate(
                 email=row.get("email", "").strip(),
                 first_name=row.get("first_name", "").strip(),
@@ -137,8 +201,14 @@ async def bulk_onboard_users(
                 preferred_name=row.get("preferred_name") or None,
                 timezone=row.get("timezone") or None,
                 phone_number=row.get("phone_number") or None,
+                marital_status=row.get("marital_status") or None,
+                country=country_code,
+                state=state_code,
+                address_line1=(row.get("address_line1") or "").strip() or None,
+                address_line2=(row.get("address_line2") or "").strip() or None,
+                postal_code=(row.get("postal_code") or "").strip() or None,
                 employee_id=row.get("employee_id", "").strip(),
-                employment_start_date=row.get("employment_start_date") or None,
+                employment_start_date=_parse_date(row.get("employment_start_date")),
                 employment_status=row.get("employment_status") or "ACTIVE",
             )
             user, membership, temp_password = await onboard_single_user(db, ctx, payload)
