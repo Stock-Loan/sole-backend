@@ -5,8 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.api.deps import require_authenticated_user
 from app.db.session import get_db
+from app.core.permissions import PermissionCode
 from app.models import User
 from app.schemas.onboarding import BulkOnboardingResult, OnboardingResponse, OnboardingUserCreate
 from app.schemas.users import (
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/org/users", tags=["users"])
 async def onboard_user(
     payload: OnboardingUserCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
     db: AsyncSession = Depends(get_db),
 ) -> OnboardingResponse:
     try:
@@ -64,7 +64,7 @@ async def download_template() -> StreamingResponse:
 async def bulk_onboard(
     file: UploadFile,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
     db: AsyncSession = Depends(get_db),
 ) -> BulkOnboardingResult:
     content = (await file.read()).decode("utf-8")
@@ -80,7 +80,7 @@ async def list_users(
     employment_status: str | None = None,
     platform_status: str | None = None,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_VIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> UserListResponse:
     if page < 1:
@@ -130,7 +130,7 @@ async def list_users(
 async def get_user(
     membership_id: str,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_VIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
@@ -150,7 +150,7 @@ async def get_user(
 async def delete_user(
     membership_id: str,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     stmt = (
@@ -180,7 +180,7 @@ async def delete_user(
 async def bulk_delete_users(
     payload: BulkDeleteRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     deleted = 0
@@ -213,7 +213,7 @@ async def update_membership(
     membership_id: str,
     payload: UpdateMembershipRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
@@ -244,7 +244,7 @@ async def update_user_profile(
     membership_id: str,
     payload: UpdateUserProfileRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(require_authenticated_user),
+    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (

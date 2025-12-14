@@ -135,13 +135,24 @@ async def require_authenticated_user(current_user: User = Depends(get_current_us
     return current_user
 
 
-def require_permission(permission_code: PermissionCode | str):
+def require_permission(permission_code: PermissionCode | str, resource_type: str | None = None, resource_id_param: str | None = None):
     async def dependency(
+        request: Request,
         current_user: User = Depends(require_authenticated_user),
         ctx: TenantContext = Depends(get_tenant_context),
         db: AsyncSession = Depends(get_db_session),
     ) -> User:
-        allowed = await authz.check_permission(current_user, ctx, permission_code, db)
+        resource_id = None
+        if resource_type and resource_id_param:
+            resource_id = request.path_params.get(resource_id_param)
+        allowed = await authz.check_permission(
+            current_user,
+            ctx,
+            permission_code,
+            db,
+            resource_type=resource_type,
+            resource_id=resource_id,
+        )
         if not allowed:
             target = permission_code.value if isinstance(permission_code, PermissionCode) else str(permission_code)
             raise HTTPException(
