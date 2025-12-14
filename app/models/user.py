@@ -36,6 +36,7 @@ class User(Base):
     mfa_method = Column(String(50), nullable=True)
     token_version = Column(Integer, nullable=False, server_default="0")
     last_active_at = Column(DateTime(timezone=True), nullable=True)
+    must_change_password = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

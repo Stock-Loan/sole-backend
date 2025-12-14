@@ -74,6 +74,23 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db_session),
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> User:
+    return await _get_current_user(token, db, ctx, allow_password_change=False)
+
+
+async def get_current_user_allow_password_change(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db_session),
+    ctx: TenantContext = Depends(get_tenant_context),
+) -> User:
+    return await _get_current_user(token, db, ctx, allow_password_change=True)
+
+
+async def _get_current_user(
+    token: str,
+    db: AsyncSession,
+    ctx: TenantContext,
+    allow_password_change: bool,
+) -> User:
     try:
         payload = decode_token(token, expected_type="access")
     except ValueError as exc:
@@ -103,6 +120,11 @@ async def get_current_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    if user.must_change_password and not allow_password_change:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required",
+        )
     return user
 
 

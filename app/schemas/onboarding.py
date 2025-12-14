@@ -18,6 +18,7 @@ class OnboardingUserCreate(BaseModel):
     address_line1: str | None = None
     address_line2: str | None = None
     postal_code: str | None = None
+    temporary_password: str | None = None
     employee_id: str
     employment_start_date: date | None = None
     employment_status: str = "ACTIVE"

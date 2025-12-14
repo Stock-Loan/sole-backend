@@ -16,7 +16,7 @@ from app.core.security import (
 )
 from app.core.settings import settings
 from app.db.session import get_db
-from app.models import User
+from app.models import OrgMembership, User
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginCompleteRequest,
@@ -195,7 +195,8 @@ async def read_current_user(current_user: User = Depends(deps.get_current_user))
 @router.post("/change-password", response_model=TokenPair)
 async def change_password(
     payload: ChangePasswordRequest,
-    current_user: User = Depends(deps.get_current_user),
+    current_user: User = Depends(deps.get_current_user_allow_password_change),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> TokenPair:
     if not constant_time_verify(current_user.hashed_password, payload.current_password):
@@ -210,7 +211,9 @@ async def change_password(
 
     current_user.token_version += 1
     current_user.last_active_at = datetime.now(timezone.utc)
+    current_user.must_change_password = False
     db.add(current_user)
+
     await db.commit()
     await db.refresh(current_user)
 

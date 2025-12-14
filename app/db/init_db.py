@@ -42,6 +42,7 @@ async def init_db() -> None:
                 is_superuser=True,
                 token_version=0,
                 full_name=settings.seed_admin_full_name,
+                must_change_password=False,
                 first_name=settings.seed_admin_full_name,
             )
             session.add(user)

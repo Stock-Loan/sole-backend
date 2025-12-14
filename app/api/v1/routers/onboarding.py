@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,9 @@ async def onboard_user(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate user or employee_id") from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return OnboardingResponse(user=user, membership=membership, temporary_password=temp_password)
 
@@ -73,6 +76,9 @@ async def bulk_onboard(
 async def list_users(
     page: int = 1,
     page_size: int = 20,
+    search: str | None = None,
+    employment_status: str | None = None,
+    platform_status: str | None = None,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     _: User = Depends(require_authenticated_user),
     db: AsyncSession = Depends(get_db),
@@ -83,13 +89,33 @@ async def list_users(
         page_size = 20
     offset = (page - 1) * page_size
 
+    filters = [OrgMembership.org_id == ctx.org_id]
+    if search:
+        pattern = f"%{search.strip()}%"
+        filters.append(
+            or_(
+                UserModel.full_name.ilike(pattern),
+                UserModel.preferred_name.ilike(pattern),
+                UserModel.email.ilike(pattern),
+            )
+        )
+    if employment_status:
+        filters.append(OrgMembership.employment_status.ilike(employment_status.strip()))
+    if platform_status:
+        filters.append(OrgMembership.platform_status.ilike(platform_status.strip()))
+
     base_stmt = (
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
-        .where(OrgMembership.org_id == ctx.org_id)
+        .where(*filters)
         .order_by(UserModel.created_at)
     )
-    count_stmt = select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == ctx.org_id)
+    count_stmt = (
+        select(func.count())
+        .select_from(OrgMembership)
+        .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .where(*filters)
+    )
     count_result = await db.execute(count_stmt)
     total = count_result.scalar_one()
 

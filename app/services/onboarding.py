@@ -137,7 +137,7 @@ async def onboard_single_user(
     now = datetime.now(timezone.utc)
 
     if not user:
-        temporary_password = _generate_temp_password()
+        temporary_password = payload.temporary_password or _generate_temp_password()
         full_name = f"{payload.first_name} {payload.last_name}".strip()
         user = User(
             org_id=ctx.org_id,
@@ -161,6 +161,7 @@ async def onboard_single_user(
             token_version=0,
             mfa_enabled=False,
             last_active_at=None,
+            must_change_password=True,
         )
         db.add(user)
         await db.flush()
@@ -204,6 +205,7 @@ CSV_COLUMNS = [
     "address_line1",
     "address_line2",
     "postal_code",
+    "temporary_password",
     "employee_id",
     "employment_start_date",
     "employment_status",
@@ -245,6 +247,7 @@ async def bulk_onboard_users(
                 address_line1=(row.get("address_line1") or "").strip() or None,
                 address_line2=(row.get("address_line2") or "").strip() or None,
                 postal_code=(row.get("postal_code") or "").strip() or None,
+                temporary_password=(row.get("temporary_password") or "").strip() or None,
                 employee_id=row.get("employee_id", "").strip(),
                 employment_start_date=_parse_date(row.get("employment_start_date")),
                 employment_status=row.get("employment_status") or "ACTIVE",
