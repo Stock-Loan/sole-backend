@@ -6,6 +6,7 @@ from app.core.settings import settings
 from app.db.session import AsyncSessionLocal
 from app.models.org import Org
 from app.models.user import User
+from app.services.authz import ensure_user_in_role, seed_system_roles
 
 async def init_db() -> None:
     """
@@ -27,6 +28,9 @@ async def init_db() -> None:
             )
             session.add(org)
             await session.commit()
+
+        # Ensure system roles exist for the default org
+        roles = await seed_system_roles(session, settings.default_org_id)
 
         stmt = select(User).where(User.email == settings.seed_admin_email, User.org_id == settings.default_org_id)
         result = await session.execute(stmt)
@@ -50,6 +54,11 @@ async def init_db() -> None:
             print("Admin user created.")
         else:
             print("Admin user already exists.")
+
+        # Ensure admin is assigned to ORG_ADMIN system role
+        admin_role = roles.get("ORG_ADMIN")
+        if admin_role and user:
+            await ensure_user_in_role(session, settings.default_org_id, user.id, admin_role)
 
 if __name__ == "__main__":
     asyncio.run(init_db())

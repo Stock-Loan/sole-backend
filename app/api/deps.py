@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import set_tenant_id
 from app.core.security import decode_token
+from app.core.permissions import PermissionCode
+from app.services import authz
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models import User
@@ -131,3 +133,21 @@ async def _get_current_user(
 async def require_authenticated_user(current_user: User = Depends(get_current_user)) -> User:
     """Simple guard to require an authenticated user (no permission checks)."""
     return current_user
+
+
+def require_permission(permission_code: PermissionCode | str):
+    async def dependency(
+        current_user: User = Depends(require_authenticated_user),
+        ctx: TenantContext = Depends(get_tenant_context),
+        db: AsyncSession = Depends(get_db_session),
+    ) -> User:
+        allowed = await authz.check_permission(current_user, ctx, permission_code, db)
+        if not allowed:
+            target = permission_code.value if isinstance(permission_code, PermissionCode) else str(permission_code)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: {target}",
+            )
+        return current_user
+
+    return dependency
