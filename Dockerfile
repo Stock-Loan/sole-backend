@@ -35,6 +35,8 @@ COPY . .
 
 USER appuser
 
+ENV FORWARDED_ALLOW_IPS=127.0.0.1
+
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import http.client, sys; conn = http.client.HTTPConnection('localhost', 8000, timeout=3); conn.request('GET', '/api/v1/health'); res = conn.getresponse(); sys.exit(0 if res.status == 200 else 1)"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS}"]
