@@ -38,12 +38,22 @@ async def create_role(
     _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> RoleOut:
+    # Validate permission codes
+    validated_perms: list[str] = []
+    for code in payload.permissions:
+        try:
+            validated_perms.append(PermissionCode(code).value)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "invalid_permission", "message": f"Unknown permission: {code}"},
+            )
     role = Role(
         org_id=ctx.org_id,
         name=payload.name,
         description=payload.description,
         is_system_role=False,
-        permissions=payload.permissions,
+        permissions=validated_perms,
     )
     db.add(role)
     try:
@@ -52,6 +62,10 @@ async def create_role(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role name already exists") from exc
     await db.refresh(role)
+    logger.info(
+        "Role created",
+        extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name, "system": role.is_system_role},
+    )
     return role
 
 
@@ -73,7 +87,17 @@ async def update_role(
 
     updates = payload.model_dump(exclude_unset=True)
     if "permissions" in updates and updates["permissions"] is not None:
-        role.permissions = updates["permissions"]
+        # Validate permission codes
+        validated = []
+        for code in updates["permissions"]:
+            try:
+                validated.append(PermissionCode(code).value)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"code": "invalid_permission", "message": f"Unknown permission: {code}"},
+                )
+        role.permissions = validated
     if "name" in updates and updates["name"]:
         role.name = updates["name"]
     if "description" in updates:
@@ -85,6 +109,10 @@ async def update_role(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role name already exists") from exc
     await db.refresh(role)
+    logger.info(
+        "Role updated",
+        extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name, "system": role.is_system_role},
+    )
     return role
 
 
@@ -105,6 +133,10 @@ async def delete_role(
 
     await db.delete(role)
     await db.commit()
+    logger.info(
+        "Role deleted",
+        extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name},
+    )
     return None
 
 
@@ -220,4 +252,8 @@ async def remove_role_from_user(
 
     await db.delete(link)
     await db.commit()
+    logger.info(
+        "Removed role",
+        extra={"org_id": ctx.org_id, "user_id": str(membership.user_id), "role_id": str(role_id)},
+    )
     return None
