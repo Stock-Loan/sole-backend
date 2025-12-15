@@ -141,11 +141,6 @@ async def assign_role_to_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "user_inactive", "message": "Cannot assign role to inactive user"},
         )
-    if membership.platform_status and membership.platform_status.upper() != "ACTIVE":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "membership_inactive", "message": "Cannot assign role when platform status is not ACTIVE"},
-        )
     if membership.employment_status and membership.employment_status.upper() != "ACTIVE":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.security import get_password_hash
+from app.services.authz import assign_default_employee_role
 from app.models.org_membership import OrgMembership
 from app.models.user import User
 from app.schemas.onboarding import (
@@ -188,6 +189,12 @@ async def onboard_single_user(
     await db.commit()
     await db.refresh(user)
     await db.refresh(membership)
+    # Ensure a minimal EMPLOYEE role so first login is possible even while invited
+    try:
+        await assign_default_employee_role(db, ctx.org_id, user.id)
+    except Exception:
+        # Best-effort; do not fail onboarding if role assignment fails
+        pass
     return user, membership, temporary_password
 
 

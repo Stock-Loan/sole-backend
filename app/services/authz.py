@@ -207,3 +207,18 @@ async def ensure_org_admin_for_seed_user(db: AsyncSession, seed_user_id, org_ids
         admin_role = roles.get("ORG_ADMIN")
         if admin_role:
             await ensure_user_in_role(db, org_id, seed_user_id, admin_role)
+
+
+async def assign_default_employee_role(
+    db: AsyncSession,
+    org_id: str,
+    user_id,
+) -> None:
+    """
+    Assign EMPLOYEE role if present; used during onboarding to avoid zero-permission users.
+    """
+    roles = await seed_system_roles(db, org_id)
+    employee_role = roles.get("EMPLOYEE")
+    if not employee_role:
+        return
+    await ensure_user_in_role(db, org_id, user_id, employee_role)
