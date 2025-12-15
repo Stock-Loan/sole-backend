@@ -67,10 +67,10 @@ async def login_start(
     stmt = select(User).where(User.org_id == ctx.org_id, User.email == payload.email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email or inactive user")
 
-    challenge = create_login_challenge_token(payload.email, ctx.org_id)
+    # Always return a challenge to avoid user enumeration; inactive or missing users will fail at completion.
+    target_email = payload.email if user else payload.email
+    challenge = create_login_challenge_token(target_email, ctx.org_id)
     return LoginStartResponse(challenge_token=challenge)
 
 
@@ -157,11 +157,9 @@ async def _complete_login_flow(
     stmt = select(User).where(User.org_id == ctx.org_id, User.email == email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
-    if not user or not constant_time_verify(user.hashed_password if user else None, password):
+    if not user or not user.is_active or not constant_time_verify(user.hashed_password if user else None, password):
         await record_login_attempt(email, success=False)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
 
     now = datetime.now(timezone.utc)
     user.last_active_at = now
