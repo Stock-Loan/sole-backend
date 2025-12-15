@@ -23,6 +23,7 @@ from app.schemas.onboarding import (
     OnboardingUserCreate,
 )
 from app.resources.countries import COUNTRIES, SUBDIVISIONS
+from app.core.permissions import PermissionCode
 
 
 def _generate_temp_password(length: int = 16) -> str:
@@ -131,11 +132,51 @@ def _normalize_location(country: str | None, state: str | None) -> tuple[str | N
     return country_code, normalized_state
 
 
+def _normalize_text(value: str | None, *, lower: bool = False, upper: bool = False, title: bool = False) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if lower:
+        return cleaned.lower()
+    if upper:
+        return cleaned.upper()
+    if title:
+        return cleaned.title()
+    return cleaned
+
+
+def _normalize_payload(payload: OnboardingUserCreate) -> OnboardingUserCreate:
+    # Normalize textual fields to consistent casing/whitespace
+    normalized_email = _normalize_text(payload.email, lower=True) or payload.email
+    return OnboardingUserCreate(
+        email=normalized_email,
+        first_name=_normalize_text(payload.first_name, title=True),
+        middle_name=_normalize_text(payload.middle_name, title=True),
+        last_name=_normalize_text(payload.last_name, title=True),
+        preferred_name=_normalize_text(payload.preferred_name, title=True),
+        timezone=_normalize_text(payload.timezone),
+        phone_number=_normalize_text(payload.phone_number),
+        marital_status=_normalize_text(payload.marital_status, upper=True),
+        country=_normalize_text(payload.country, upper=True),
+        state=_normalize_text(payload.state, upper=True),
+        address_line1=_normalize_text(payload.address_line1),
+        address_line2=_normalize_text(payload.address_line2),
+        postal_code=_normalize_text(payload.postal_code, upper=True),
+        temporary_password=_normalize_text(payload.temporary_password),
+        employee_id=_normalize_text(payload.employee_id),
+        employment_start_date=payload.employment_start_date,
+        employment_status=_normalize_text(payload.employment_status, upper=True) or "ACTIVE",
+    )
+
+
 async def onboard_single_user(
     db: AsyncSession,
     ctx: deps.TenantContext,
     payload: OnboardingUserCreate,
 ) -> Tuple[User, OrgMembership, str | None]:
+    payload = _normalize_payload(payload)
     stmt = select(User).where(User.email == payload.email, User.org_id == ctx.org_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -308,6 +349,7 @@ async def bulk_onboard_users(
                 employment_start_date=_parse_date(row.get("employment_start_date")),
                 employment_status=row.get("employment_status") or "ACTIVE",
             )
+            payload = _normalize_payload(payload)
             user, membership, temp_password = await onboard_single_user(db, ctx, payload)
             successes.append(
                 BulkOnboardingRowSuccess(

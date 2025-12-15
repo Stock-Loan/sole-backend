@@ -207,9 +207,32 @@ async def change_password(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    now = datetime.now(timezone.utc)
+    was_first_login = current_user.must_change_password
     current_user.token_version += 1
-    current_user.last_active_at = datetime.now(timezone.utc)
+    current_user.last_active_at = now
     current_user.must_change_password = False
+
+    # If this is the first-time login flow, mark membership as accepted/active
+    if was_first_login:
+        membership_stmt = select(OrgMembership).where(
+            OrgMembership.org_id == ctx.org_id,
+            OrgMembership.user_id == current_user.id,
+        )
+        membership_result = await db.execute(membership_stmt)
+        membership = membership_result.scalar_one_or_none()
+        if membership:
+            updated = False
+            if membership.invitation_status != "ACCEPTED":
+                membership.invitation_status = "ACCEPTED"
+                membership.accepted_at = now
+                updated = True
+            if membership.platform_status != "ACTIVE":
+                membership.platform_status = "ACTIVE"
+                updated = True
+            if updated:
+                db.add(membership)
+
     db.add(current_user)
 
     await db.commit()
