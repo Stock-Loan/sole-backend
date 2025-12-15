@@ -196,3 +196,14 @@ async def ensure_user_in_role(db: AsyncSession, org_id: str, user_id, role: Role
         return
     db.add(UserRole(org_id=org_id, user_id=user_id, role_id=role.id))
     await db.commit()
+
+
+async def ensure_org_admin_for_seed_user(db: AsyncSession, seed_user_id, org_ids: list[str]) -> None:
+    """
+    For the seed user, ensure ORG_ADMIN in each provided org_id (creating roles if needed).
+    """
+    for org_id in org_ids:
+        roles = await seed_system_roles(db, org_id)
+        admin_role = roles.get("ORG_ADMIN")
+        if admin_role:
+            await ensure_user_in_role(db, org_id, seed_user_id, admin_role)

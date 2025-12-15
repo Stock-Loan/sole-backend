@@ -6,7 +6,7 @@ from app.core.settings import settings
 from app.db.session import AsyncSessionLocal
 from app.models.org import Org
 from app.models.user import User
-from app.services.authz import ensure_user_in_role, seed_system_roles
+from app.services.authz import ensure_org_admin_for_seed_user, ensure_user_in_role, seed_system_roles
 
 async def init_db() -> None:
     """
@@ -59,6 +59,10 @@ async def init_db() -> None:
         admin_role = roles.get("ORG_ADMIN")
         if admin_role and user:
             await ensure_user_in_role(session, settings.default_org_id, user.id, admin_role)
+            # Also ensure admin has ORG_ADMIN in any additional orgs provided via settings (comma-separated)
+            if settings.extra_seed_org_ids:
+                org_ids = [settings.default_org_id] + [oid.strip() for oid in settings.extra_seed_org_ids.split(",") if oid.strip()]
+                await ensure_org_admin_for_seed_user(session, user.id, org_ids)
 
 if __name__ == "__main__":
     asyncio.run(init_db())
