@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +16,7 @@ from app.models.user import User
 from app.schemas.roles import RoleAssignmentRequest, RoleCreate, RoleListResponse, RoleOut, RoleUpdate
 
 router = APIRouter(prefix="/roles", tags=["roles"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=RoleListResponse, summary="List roles for current org")
@@ -127,13 +129,37 @@ async def assign_role_to_user(
     membership_result = await db.execute(membership_stmt)
     membership = membership_result.scalar_one_or_none()
     if not membership:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "membership_not_found", "message": "Membership not found"},
+        )
+    user_stmt = select(User).where(User.id == membership.user_id, User.org_id == ctx.org_id)
+    user_result = await db.execute(user_stmt)
+    user = user_result.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "user_inactive", "message": "Cannot assign role to inactive user"},
+        )
+    if membership.platform_status and membership.platform_status.upper() != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "membership_inactive", "message": "Cannot assign role when platform status is not ACTIVE"},
+        )
+    if membership.employment_status and membership.employment_status.upper() != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "membership_inactive", "message": "Cannot assign role when employment status is not ACTIVE"},
+        )
 
     role_stmt = select(Role).where(Role.id == payload.role_id, Role.org_id == ctx.org_id)
     role_result = await db.execute(role_stmt)
     role = role_result.scalar_one_or_none()
     if not role:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "role_not_found", "message": "Role not found"},
+        )
 
     link_stmt = select(UserRole).where(
         UserRole.org_id == ctx.org_id,
@@ -145,6 +171,7 @@ async def assign_role_to_user(
     if not existing:
         db.add(UserRole(org_id=ctx.org_id, user_id=membership.user_id, role_id=role.id))
         await db.commit()
+        logger.info("Assigned role", extra={"org_id": ctx.org_id, "user_id": str(membership.user_id), "role_id": str(role.id)})
     return role
 
 

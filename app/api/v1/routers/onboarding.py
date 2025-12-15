@@ -1,6 +1,8 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,8 +20,10 @@ from app.schemas.users import (
 )
 from app.models.org_membership import OrgMembership
 from app.models.user import User as UserModel
+from app.models.user_role import UserRole
 from app.services import onboarding
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/org/users", tags=["users"])
 
 
@@ -234,6 +238,26 @@ async def update_membership(
 
     db.add(membership)
     await db.commit()
+    # Remove role assignments and revoke sessions if platform/employment status is not ACTIVE
+    if (
+        (membership.platform_status and membership.platform_status.upper() != "ACTIVE")
+        or (membership.employment_status and membership.employment_status.upper() != "ACTIVE")
+    ):
+        await db.execute(
+            delete(UserRole).where(UserRole.org_id == ctx.org_id, UserRole.user_id == membership.user_id)
+        )
+        user.token_version += 1
+        db.add(user)
+        await db.commit()
+        logger.info(
+            "Auto-removed roles due to inactive status",
+            extra={
+                "org_id": ctx.org_id,
+                "user_id": str(membership.user_id),
+                "platform_status": membership.platform_status,
+                "employment_status": membership.employment_status,
+            },
+        )
     await db.refresh(membership)
     await db.refresh(user)
     return UserDetailResponse(user=user, membership=membership)
