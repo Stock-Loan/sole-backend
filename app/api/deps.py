@@ -142,6 +142,8 @@ def require_permission(permission_code: PermissionCode | str, resource_type: str
         ctx: TenantContext = Depends(get_tenant_context),
         db: AsyncSession = Depends(get_db_session),
     ) -> User:
+        if not ctx.org_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant context missing")
         resource_id = None
         if resource_type and resource_id_param:
             resource_id = request.path_params.get(resource_id_param)
