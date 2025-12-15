@@ -71,7 +71,14 @@ async def bulk_onboard(
     _: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
     db: AsyncSession = Depends(get_db),
 ) -> BulkOnboardingResult:
-    content = (await file.read()).decode("utf-8")
+    MAX_BYTES = 5 * 1024 * 1024  # 5 MB guardrail
+    raw = await file.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="CSV too large (max 5MB)")
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid encoding; expected UTF-8") from exc
     result = await onboarding.bulk_onboard_users(db, ctx, content)
     return result
 

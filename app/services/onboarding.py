@@ -75,9 +75,12 @@ def _normalize_label(text: str) -> str:
 
 
 def _normalize_location(country: str | None, state: str | None) -> tuple[str | None, str | None]:
+    MAX_LEN = 50
     if not country:
         return None, None
     raw = country.strip()
+    if len(raw) > MAX_LEN:
+        raise ValueError(f"country exceeds max length {MAX_LEN}")
     norm = _normalize_label(raw)
 
     # Exact code
@@ -101,6 +104,8 @@ def _normalize_location(country: str | None, state: str | None) -> tuple[str | N
     normalized_state = None
     if state:
         state_raw = state.strip()
+        if len(state_raw) > MAX_LEN:
+            raise ValueError(f"state exceeds max length {MAX_LEN}")
         state_upper = state_raw.upper()
         allowed = SUBDIVISIONS.get(country_code, [])
         allowed_codes = {s["code"] for s in allowed}
@@ -218,6 +223,26 @@ CSV_COLUMNS = [
     "employment_status",
 ]
 
+MAX_BULK_ROWS = 30
+MAX_FIELD_LEN = {
+    "email": 255,
+    "first_name": 100,
+    "middle_name": 100,
+    "last_name": 100,
+    "preferred_name": 255,
+    "timezone": 100,
+    "phone_number": 50,
+    "marital_status": 50,
+    "country": 50,
+    "state": 50,
+    "address_line1": 255,
+    "address_line2": 255,
+    "postal_code": 32,
+    "temporary_password": 255,
+    "employee_id": 255,
+    "employment_status": 50,
+}
+
 
 def generate_csv_template() -> str:
     output = io.StringIO()
@@ -232,11 +257,35 @@ async def bulk_onboard_users(
     csv_content: str,
 ) -> BulkOnboardingResult:
     reader = csv.DictReader(io.StringIO(csv_content))
+    # Header validation: strict order required
+    if reader.fieldnames is None:
+        raise ValueError("CSV is empty or missing header")
+    if reader.fieldnames != CSV_COLUMNS:
+        raise ValueError(f"Invalid headers. Expected: {CSV_COLUMNS}")
+
     successes: list[BulkOnboardingRowSuccess] = []
     errors: list[BulkOnboardingRowError] = []
 
+    rows_processed = 0
     for idx, row in enumerate(reader, start=2):  # row numbers (header=1)
+        rows_processed += 1
+        if rows_processed > MAX_BULK_ROWS:
+            errors.append(
+                BulkOnboardingRowError(
+                    row_number=idx,
+                    email=row.get("email"),
+                    employee_id=row.get("employee_id"),
+                    error=f"Too many rows; maximum {MAX_BULK_ROWS} allowed",
+                )
+            )
+            break
         try:
+            # Length guard before normalization/fuzzy matching
+            for key, limit in MAX_FIELD_LEN.items():
+                val = row.get(key) or ""
+                if len(val) > limit:
+                    raise ValueError(f"{key} exceeds max length {limit}")
+
             country_code, state_code = _normalize_location(
                 row.get("country") or None, row.get("state") or None
             )
@@ -287,5 +336,8 @@ async def bulk_onboard_users(
                     error=str(exc),
                 )
             )
+
+    if rows_processed == 0:
+        raise ValueError("CSV contains no data rows")
 
     return BulkOnboardingResult(successes=successes, errors=errors)
