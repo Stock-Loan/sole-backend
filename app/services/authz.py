@@ -7,6 +7,7 @@ from app.core.permissions import PermissionCode
 from app.models.access_control_list import AccessControlList
 from app.models.role import Role
 from app.models.user_role import UserRole
+from app.models.org_membership import OrgMembership
 from app.models.user import User
 
 if TYPE_CHECKING:
@@ -68,6 +69,14 @@ async def check_permission(
 ) -> bool:
     """Compute effective permissions from role buckets plus optional resource-scoped ACL entries."""
     if user.is_superuser:
+        # Superuser still must belong to the current org
+        membership_stmt = select(OrgMembership.id).where(
+            OrgMembership.org_id == ctx.org_id,
+            OrgMembership.user_id == user.id,
+        )
+        membership_result = await db.execute(membership_stmt)
+        if membership_result.scalar_one_or_none() is None:
+            return False
         return True
     target = permission_code.value if isinstance(permission_code, PermissionCode) else str(permission_code)
     permission_set = await _load_permissions(db, user.id, ctx.org_id)

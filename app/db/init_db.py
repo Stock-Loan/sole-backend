@@ -1,10 +1,12 @@
 import asyncio
+from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.core.security import get_password_hash
 from app.core.settings import settings
 from app.db.session import AsyncSessionLocal
 from app.models.org import Org
+from app.models.org_membership import OrgMembership
 from app.models.user import User
 from app.services.authz import ensure_org_admin_for_seed_user, ensure_user_in_role, seed_system_roles
 
@@ -63,6 +65,28 @@ async def init_db() -> None:
             if settings.extra_seed_org_ids:
                 org_ids = [settings.default_org_id] + [oid.strip() for oid in settings.extra_seed_org_ids.split(",") if oid.strip()]
                 await ensure_org_admin_for_seed_user(session, user.id, org_ids)
+
+        # Ensure admin has an org membership in the default org for permission checks
+        mem_stmt = select(OrgMembership).where(
+            OrgMembership.org_id == settings.default_org_id, OrgMembership.user_id == user.id
+        )
+        mem_result = await session.execute(mem_stmt)
+        membership = mem_result.scalar_one_or_none()
+        if not membership:
+            now = datetime.now(timezone.utc)
+            membership = OrgMembership(
+                org_id=settings.default_org_id,
+                user_id=user.id,
+                employee_id="admin",
+                employment_status="ACTIVE",
+                platform_status="ACTIVE",
+                invitation_status="ACCEPTED",
+                invited_at=now,
+                accepted_at=now,
+            )
+            session.add(membership)
+            await session.commit()
+            print("Seed admin membership created for default org.")
 
 if __name__ == "__main__":
     asyncio.run(init_db())

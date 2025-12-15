@@ -141,6 +141,22 @@ async def assign_role_to_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "user_inactive", "message": "Cannot assign role to inactive user"},
         )
+    # Allow EMPLOYEE role during onboarding (platform may be INVITED), but block non-EMPLOYEE when platform not ACTIVE
+    role_stmt = select(Role).where(Role.id == payload.role_id, Role.org_id == ctx.org_id)
+    role_result = await db.execute(role_stmt)
+    role = role_result.scalar_one_or_none()
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "role_not_found", "message": "Role not found"},
+        )
+
+    if role.name != "EMPLOYEE":
+        if membership.platform_status and membership.platform_status.upper() != "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "membership_inactive", "message": "Platform status must be ACTIVE for this role"},
+            )
     if membership.employment_status and membership.employment_status.upper() != "ACTIVE":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
