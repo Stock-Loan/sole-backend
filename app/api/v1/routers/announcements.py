@@ -1,0 +1,147 @@
+import logging
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api import deps
+from app.core.permissions import PermissionCode
+from app.db.session import get_db
+from app.models.announcement import Announcement
+from app.models.user import User
+from app.schemas.announcements import (
+    AnnouncementCreate,
+    AnnouncementListResponse,
+    AnnouncementOut,
+    AnnouncementUpdate,
+    ALLOWED_STATUSES,
+)
+from app.services import announcements as announcement_service
+from app.services import authz
+
+router = APIRouter(prefix="/announcements", tags=["announcements"])
+logger = logging.getLogger(__name__)
+
+
+async def _get_announcement_or_404(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    announcement_id: UUID,
+) -> Announcement:
+    stmt = select(Announcement).where(Announcement.id == announcement_id, Announcement.org_id == ctx.org_id)
+    result = await db.execute(stmt)
+    announcement = result.scalar_one_or_none()
+    if not announcement:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Announcement not found")
+    return announcement
+
+
+@router.get("", response_model=AnnouncementListResponse, summary="List announcements")
+async def list_announcements(
+    status_filter: str | None = Query(None, description="Filter by status (requires manage permission unless PUBLISHED)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementListResponse:
+    has_manage = await authz.check_permission(current_user, ctx, PermissionCode.ANNOUNCEMENT_MANAGE, db)
+
+    filters = [Announcement.org_id == ctx.org_id]
+    if status_filter:
+        normalized = status_filter.strip().upper()
+        if normalized not in ALLOWED_STATUSES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status filter")
+        if not has_manage and normalized != "PUBLISHED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Missing permission: announcement.manage",
+            )
+        filters.append(Announcement.status == normalized)
+    elif not has_manage:
+        filters.append(Announcement.status == "PUBLISHED")
+
+    offset = (page - 1) * page_size
+    base_stmt = select(Announcement).where(*filters).order_by(Announcement.created_at.desc())
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    result = await db.execute(base_stmt.offset(offset).limit(page_size))
+    announcements = result.scalars().all()
+    read_counts = await announcement_service.get_read_counts(db, ctx, [a.id for a in announcements])
+    target_count = await announcement_service.get_recipient_count(db, ctx)
+    for announcement in announcements:
+        announcement.read_count = read_counts.get(str(announcement.id), 0)
+        announcement.target_count = target_count
+    return AnnouncementListResponse(items=announcements, total=total)
+
+
+@router.get("/{announcement_id}", response_model=AnnouncementOut, summary="Get an announcement")
+async def get_announcement(
+    announcement_id: UUID,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementOut:
+    announcement = await _get_announcement_or_404(db, ctx, announcement_id)
+    has_manage = await authz.check_permission(current_user, ctx, PermissionCode.ANNOUNCEMENT_MANAGE, db)
+    if not has_manage and announcement.status != "PUBLISHED":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Announcement not found")
+
+    read_counts = await announcement_service.get_read_counts(db, ctx, [announcement.id])
+    target_count = await announcement_service.get_recipient_count(db, ctx)
+    announcement.read_count = read_counts.get(str(announcement.id), 0)
+    announcement.target_count = target_count
+    return announcement
+
+
+@router.post("", response_model=AnnouncementOut, status_code=201, summary="Create an announcement")
+async def create_announcement(
+    payload: AnnouncementCreate,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementOut:
+    announcement = await announcement_service.create_announcement(db, ctx, payload)
+    announcement.read_count = 0
+    announcement.target_count = await announcement_service.get_recipient_count(db, ctx)
+    logger.info(
+        "Announcement created",
+        extra={"org_id": ctx.org_id, "announcement_id": str(announcement.id), "status": announcement.status},
+    )
+    return announcement
+
+
+@router.patch("/{announcement_id}", response_model=AnnouncementOut, summary="Update an announcement or status")
+async def update_announcement(
+    announcement_id: UUID,
+    payload: AnnouncementUpdate,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementOut:
+    announcement = await _get_announcement_or_404(db, ctx, announcement_id)
+    announcement = await announcement_service.update_announcement(db, announcement, payload)
+    read_counts = await announcement_service.get_read_counts(db, ctx, [announcement.id])
+    target_count = await announcement_service.get_recipient_count(db, ctx)
+    announcement.read_count = read_counts.get(str(announcement.id), 0)
+    announcement.target_count = target_count
+    return announcement
+
+
+@router.post(
+    "/{announcement_id}/read",
+    summary="Mark announcement as read",
+)
+async def mark_read(
+    announcement_id: UUID,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    announcement = await _get_announcement_or_404(db, ctx, announcement_id)
+    if announcement.status != "PUBLISHED":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Announcement not found")
+    await announcement_service.record_read(db, ctx, announcement.id, current_user.id)
+    return {"status": "ok"}
