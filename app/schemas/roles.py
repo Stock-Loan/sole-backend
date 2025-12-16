@@ -64,4 +64,4 @@ class RoleListResponse(BaseModel):
 
 
 class RoleAssignmentRequest(BaseModel):
-    role_id: UUID
+    role_ids: list[UUID]

@@ -1,7 +1,10 @@
 from typing import Iterable, Set, TYPE_CHECKING
+import json
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
 
 from app.core.permissions import PermissionCode
 from app.models.access_control_list import AccessControlList
@@ -9,12 +12,14 @@ from app.models.role import Role
 from app.models.user_role import UserRole
 from app.models.org_membership import OrgMembership
 from app.models.user import User
+from app.utils.redis_client import get_redis_client
 
 if TYPE_CHECKING:
     from app.api.deps import TenantContext
 
+logger = logging.getLogger(__name__)
 
-async def _load_permissions(
+async def _load_permissions_from_db(
     db: AsyncSession, user_id, org_id: str
 ) -> Set[str]:
     stmt = (
@@ -34,6 +39,37 @@ async def _load_permissions(
                     continue
                 permissions.add(code.value)
     return permissions
+
+async def _get_cached_permissions(
+    redis: Redis, user_id: str, org_id: str
+) -> Set[str] | None:
+    key = f"permissions:{org_id}:{user_id}"
+    try:
+        data = await redis.get(key)
+        if data:
+            return set(json.loads(data))
+    except Exception as e:
+        logger.error(f"Redis error reading permissions: {e}")
+    return None
+
+async def _cache_permissions(
+    redis: Redis, user_id: str, org_id: str, permissions: Set[str]
+) -> None:
+    key = f"permissions:{org_id}:{user_id}"
+    try:
+        await redis.setex(key, 3600, json.dumps(list(permissions))) # 1 hour TTL
+    except Exception as e:
+        logger.error(f"Redis error caching permissions: {e}")
+
+async def invalidate_permission_cache(
+    user_id: str, org_id: str
+) -> None:
+    redis = get_redis_client()
+    key = f"permissions:{org_id}:{user_id}"
+    try:
+        await redis.delete(key)
+    except Exception as e:
+        logger.error(f"Redis error invalidating permissions: {e}")
 
 
 async def _load_acl_permissions(
@@ -78,8 +114,18 @@ async def check_permission(
         if membership_result.scalar_one_or_none() is None:
             return False
         return True
+    
     target = permission_code.value if isinstance(permission_code, PermissionCode) else str(permission_code)
-    permission_set = await _load_permissions(db, user.id, ctx.org_id)
+    
+    # Try Redis cache first
+    redis = get_redis_client()
+    permission_set = await _get_cached_permissions(redis, str(user.id), ctx.org_id)
+    
+    if permission_set is None:
+        # Cache miss, load from DB and cache
+        permission_set = await _load_permissions_from_db(db, user.id, ctx.org_id)
+        await _cache_permissions(redis, str(user.id), ctx.org_id, permission_set)
+
     if resource_type and resource_id:
         permission_set.update(await _load_acl_permissions(db, user.id, ctx.org_id, resource_type, resource_id))
     return target in permission_set
