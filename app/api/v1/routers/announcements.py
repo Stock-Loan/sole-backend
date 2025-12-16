@@ -2,13 +2,13 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import PermissionCode
 from app.db.session import get_db
-from app.models.announcement import Announcement
+from app.models.announcement import Announcement, AnnouncementRead
 from app.models.user import User
 from app.schemas.announcements import (
     AnnouncementCreate,
@@ -16,6 +16,7 @@ from app.schemas.announcements import (
     AnnouncementOut,
     AnnouncementUpdate,
     ALLOWED_STATUSES,
+    ALLOWED_TYPES,
 )
 from app.services import announcements as announcement_service
 from app.services import authz
@@ -40,6 +41,7 @@ async def _get_announcement_or_404(
 @router.get("", response_model=AnnouncementListResponse, summary="List announcements")
 async def list_announcements(
     status_filter: str | None = Query(None, description="Filter by status (requires manage permission unless PUBLISHED)"),
+    type_filter: str | None = Query(None, description="Filter by type"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -61,6 +63,11 @@ async def list_announcements(
         filters.append(Announcement.status == normalized)
     elif not has_manage:
         filters.append(Announcement.status == "PUBLISHED")
+    if type_filter:
+        normalized_type = type_filter.strip().upper()
+        if normalized_type not in ALLOWED_TYPES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid type filter")
+        filters.append(Announcement.type == normalized_type)
 
     offset = (page - 1) * page_size
     base_stmt = select(Announcement).where(*filters).order_by(Announcement.created_at.desc())
@@ -75,6 +82,66 @@ async def list_announcements(
         announcement.read_count = read_counts.get(str(announcement.id), 0)
         announcement.target_count = target_count
     return AnnouncementListResponse(items=announcements, total=total)
+
+
+@router.get("/unread", response_model=AnnouncementListResponse, summary="List unread announcements for current user")
+async def list_unread_announcements(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementListResponse:
+    offset = (page - 1) * page_size
+    unread_filter = ~exists().where(
+        AnnouncementRead.announcement_id == Announcement.id,
+        AnnouncementRead.user_id == current_user.id,
+        AnnouncementRead.org_id == ctx.org_id,
+    )
+    base_stmt = (
+        select(Announcement)
+        .where(
+            Announcement.org_id == ctx.org_id,
+            Announcement.status == "PUBLISHED",
+            unread_filter,
+        )
+        .order_by(Announcement.created_at.desc())
+    )
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    result = await db.execute(base_stmt.offset(offset).limit(page_size))
+    announcements = result.scalars().all()
+    read_counts = await announcement_service.get_read_counts(db, ctx, [a.id for a in announcements])
+    target_count = await announcement_service.get_recipient_count(db, ctx)
+    for announcement in announcements:
+        announcement.read_count = read_counts.get(str(announcement.id), 0)
+        announcement.target_count = target_count
+    return AnnouncementListResponse(items=announcements, total=total)
+
+
+@router.get("/unread/count", summary="Get unread announcement count for current user")
+async def unread_count(
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    unread_filter = ~exists().where(
+        AnnouncementRead.announcement_id == Announcement.id,
+        AnnouncementRead.user_id == current_user.id,
+        AnnouncementRead.org_id == ctx.org_id,
+    )
+    count_stmt = (
+        select(func.count())
+        .select_from(Announcement)
+        .where(
+            Announcement.org_id == ctx.org_id,
+            Announcement.status == "PUBLISHED",
+            unread_filter,
+        )
+    )
+    unread = (await db.execute(count_stmt)).scalar_one()
+    return {"unread": unread}
 
 
 @router.get("/{announcement_id}", response_model=AnnouncementOut, summary="Get an announcement")

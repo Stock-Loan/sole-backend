@@ -19,6 +19,7 @@ class Announcement(Base):
     title = Column(String(255), nullable=False)
     body = Column(Text, nullable=False)
     status = Column(String(50), nullable=False, default="DRAFT")
+    type = Column(String(50), nullable=False, default="GENERAL")
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

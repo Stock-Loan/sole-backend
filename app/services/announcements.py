@@ -8,9 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.models.announcement import Announcement, AnnouncementRead
 from app.models.org_membership import OrgMembership
-from app.schemas.announcements import AnnouncementCreate, AnnouncementUpdate, ALLOWED_STATUSES
+from app.schemas.announcements import (
+    AnnouncementCreate,
+    AnnouncementUpdate,
+    ALLOWED_STATUSES,
+    ALLOWED_TYPES,
+)
 
 DEFAULT_STATUS = "DRAFT"
+DEFAULT_TYPE = "GENERAL"
 
 
 def _normalize_status(status: str | None) -> str:
@@ -19,6 +25,15 @@ def _normalize_status(status: str | None) -> str:
     normalized = status.strip().upper()
     if normalized not in ALLOWED_STATUSES:
         raise ValueError(f"Invalid status. Allowed: {sorted(ALLOWED_STATUSES)}")
+    return normalized
+
+
+def _normalize_type(type_value: str | None) -> str:
+    if type_value is None:
+        return DEFAULT_TYPE
+    normalized = type_value.strip().upper()
+    if normalized not in ALLOWED_TYPES:
+        raise ValueError(f"Invalid type. Allowed: {sorted(ALLOWED_TYPES)}")
     return normalized
 
 
@@ -45,6 +60,7 @@ async def create_announcement(
         title=payload.title.strip(),
         body=payload.body.strip(),
         status=status,
+        type=_normalize_type(payload.type),
         scheduled_at=payload.scheduled_at,
     )
     _apply_status_transition(announcement, status)
@@ -68,6 +84,8 @@ async def update_announcement(
         announcement.scheduled_at = data["scheduled_at"]
     if "status" in data and data["status"]:
         _apply_status_transition(announcement, data["status"])
+    if "type" in data and data["type"]:
+        announcement.type = _normalize_type(data["type"])
     await db.commit()
     await db.refresh(announcement)
     return announcement
