@@ -5,7 +5,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.core.limiter import limiter
 from app.core.security import (
     create_access_token,
     create_login_challenge_token,
@@ -14,13 +13,11 @@ from app.core.security import (
     decode_token,
     get_password_hash,
 )
-from app.core.settings import settings
 from app.db.session import get_db
 from app.models import OrgMembership, User
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginCompleteRequest,
-    LoginRequest,
     LoginStartRequest,
     LoginStartResponse,
     RefreshRequest,
@@ -31,27 +28,6 @@ from app.api.auth_utils import constant_time_verify, enforce_login_limits, recor
 from app.utils.login_security import is_refresh_used, mark_refresh_used
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-@router.post("/login", response_model=TokenPair)
-@limiter.limit(lambda: f"{settings.rate_limit_per_minute}/minute")
-async def login(
-    credentials: LoginRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-) -> TokenPair:
-    """Single-call login (legacy). Equivalent to start + complete in one request."""
-    client_ip = request.client.host if request.client else "unknown"
-    await enforce_login_limits(client_ip, credentials.email)
-    challenge = create_login_challenge_token(credentials.email, ctx.org_id)
-    return await _complete_login_flow(
-        challenge_token=challenge,
-        password=credentials.password,
-        ctx=ctx,
-        db=db,
-        client_ip=client_ip,
-    )
 
 
 @router.post("/login/start", response_model=LoginStartResponse)
