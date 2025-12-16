@@ -92,6 +92,7 @@ async def list_users(
     search: str | None = None,
     employment_status: str | None = None,
     platform_status: str | None = None,
+    role_id: str | None = None,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     _: User = Depends(deps.require_permission(PermissionCode.USER_VIEW)),
     db: AsyncSession = Depends(get_db),
@@ -116,6 +117,17 @@ async def list_users(
         filters.append(OrgMembership.employment_status.ilike(employment_status.strip()))
     if platform_status:
         filters.append(OrgMembership.platform_status.ilike(platform_status.strip()))
+    
+    if role_id:
+        # Filter by role_id using a subquery or join
+        # We need users who have a UserRole with this role_id AND this org_id
+        # Since we are querying OrgMembership joined with User, we can add a filter
+        # on User.roles
+        filters.append(
+            UserModel.roles.any(
+                (UserRole.role_id == role_id) & (UserRole.org_id == ctx.org_id)
+            )
+        )
 
     base_stmt = (
         select(OrgMembership, UserModel)
