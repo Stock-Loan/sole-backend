@@ -5,7 +5,6 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, or_, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.db.session import get_db
@@ -23,6 +22,7 @@ from app.models.org_membership import OrgMembership
 from app.models.user import User as UserModel
 from app.models.user_role import UserRole
 from app.models.role import Role
+from app.models.department import Department
 from app.services import onboarding
 
 logger = logging.getLogger(__name__)
@@ -118,40 +118,39 @@ async def list_users(
     if platform_status:
         filters.append(OrgMembership.platform_status.ilike(platform_status.strip()))
     
-    if role_id:
-        # Filter by role_id using a subquery or join
-        # We need users who have a UserRole with this role_id AND this org_id
-        # Since we are querying OrgMembership joined with User, we can add a filter
-        # on User.roles
-        filters.append(
-            UserModel.roles.any(
-                (UserRole.role_id == role_id) & (UserRole.org_id == ctx.org_id)
-            )
-        )
-
     base_stmt = (
-        select(OrgMembership, UserModel)
+        select(OrgMembership, UserModel, Department)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Department, OrgMembership.department_id == Department.id, isouter=True)
         .where(*filters)
         .order_by(UserModel.created_at)
-        .options(
-            selectinload(UserModel.roles).selectinload(UserRole.role)
+    )
+    if role_id:
+        base_stmt = base_stmt.join(UserRole, UserRole.user_id == UserModel.id).where(
+            UserRole.role_id == role_id, UserRole.org_id == ctx.org_id
         )
-    )
-    count_stmt = (
-        select(func.count())
-        .select_from(OrgMembership)
-        .join(UserModel, OrgMembership.user_id == UserModel.id)
-        .where(*filters)
-    )
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
     count_result = await db.execute(count_stmt)
     total = count_result.scalar_one()
 
     result = await db.execute(base_stmt.offset(offset).limit(page_size))
+    rows = result.all()
+    user_ids = [row[1].id for row in rows]
+    roles_map: dict[str, list[Role]] = {}
+    if user_ids:
+        roles_stmt = (
+            select(UserRole, Role)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.org_id == ctx.org_id, UserRole.user_id.in_(user_ids))
+        )
+        roles_result = await db.execute(roles_stmt)
+        for user_role, role in roles_result.all():
+            roles_map.setdefault(str(user_role.user_id), []).append(role)
+
     items = []
-    for membership, user in result.all():
-        user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
-        items.append({"user": user, "membership": membership, "roles": user_roles})
+    for membership, user, dept in rows:
+        membership.department_name = dept.name if dept else None
+        items.append({"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])})
     return UserListResponse(items=items, total=total)
 
 
@@ -163,20 +162,24 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
-        select(OrgMembership, UserModel)
+        select(OrgMembership, UserModel, Department)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Department, OrgMembership.department_id == Department.id, isouter=True)
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
-        .options(
-            selectinload(UserModel.roles).selectinload(UserRole.role)
-        )
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user = row
-    user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
-    return UserDetailResponse(user=user, membership=membership, roles=user_roles)
+    membership, user, dept = row
+    membership.department_name = dept.name if dept else None
+    roles_stmt = (
+        select(Role)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.org_id == ctx.org_id, UserRole.user_id == user.id)
+    )
+    roles = (await db.execute(roles_stmt)).scalars().all()
+    return UserDetailResponse(user=user, membership=membership, roles=roles)
 
 
 @router.delete("/{membership_id}", status_code=204, summary="Delete a user membership and user if no other memberships")

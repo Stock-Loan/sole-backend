@@ -32,6 +32,8 @@ class MembershipSummary(BaseModel):
     org_id: str
     user_id: UUID
     employee_id: str
+    department_id: UUID | None = None
+    department_name: str | None = None
     employment_start_date: date | None = None
     employment_status: str
     platform_status: str

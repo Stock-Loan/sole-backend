@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.routers import auth, health, meta, onboarding, roles, acls, self as self_router
+from app.api.v1.routers import auth, health, meta, onboarding, roles, acls, departments, self as self_router
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -9,6 +9,7 @@ api_router.include_router(meta.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(roles.router)
 api_router.include_router(acls.router)
+api_router.include_router(departments.router)
 api_router.include_router(self_router.router)
 
 __all__ = ["api_router"]
