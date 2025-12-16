@@ -3,6 +3,7 @@ from datetime import date, datetime
 
 from sqlalchemy import Column, Date, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 
 from app.db.base import Base
 
@@ -31,3 +32,5 @@ class OrgMembership(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    user = relationship("User", back_populates="memberships")

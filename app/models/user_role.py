@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 
 from app.db.base import Base
 
@@ -24,3 +25,6 @@ class UserRole(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    user = relationship("User", back_populates="roles")
+    role = relationship("Role", back_populates="user_roles")

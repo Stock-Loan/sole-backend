@@ -112,12 +112,6 @@ async def update_role(
     await db.refresh(role)
     
     # Invalidate cache for all users with this role
-    # This is expensive if many users have the role. 
-    # Ideally, we'd use a role-based cache key or clear all caches for the org.
-    # For now, we accept eventual consistency or forced re-login for updated permissions 
-    # unless we iterate all users. 
-    # Or better: invalidate all users in this org (simple but nuclear).
-    # Optimization: iterate users with this role and invalidate them.
     user_role_stmt = select(UserRole.user_id).where(UserRole.role_id == role.id)
     user_role_result = await db.execute(user_role_stmt)
     for user_id in user_role_result.scalars().all():
@@ -215,17 +209,22 @@ async def assign_roles_to_user(
         )
 
     # Validate constraints for each role
+    # Optimization: Perform checks once if possible, but role names might differ
+    # We can check platform/employment status once
+    platform_active = membership.platform_status and membership.platform_status.upper() == "ACTIVE"
+    employment_active = membership.employment_status and membership.employment_status.upper() == "ACTIVE"
+
+    if not employment_active:
+         raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "membership_inactive", "message": "Cannot assign role when employment status is not ACTIVE"},
+        )
+
     for role in roles:
-        if role.name != "EMPLOYEE":
-            if membership.platform_status and membership.platform_status.upper() != "ACTIVE":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"code": "membership_inactive", "message": f"Platform status must be ACTIVE for role {role.name}"},
-                )
-        if membership.employment_status and membership.employment_status.upper() != "ACTIVE":
+        if role.name != "EMPLOYEE" and not platform_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "membership_inactive", "message": "Cannot assign role when employment status is not ACTIVE"},
+                detail={"code": "membership_inactive", "message": f"Platform status must be ACTIVE for role {role.name}"},
             )
 
     # Identify which ones need insertion

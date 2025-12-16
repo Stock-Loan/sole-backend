@@ -44,9 +44,20 @@ class MembershipSummary(BaseModel):
         from_attributes = True
 
 
+class RoleSummary(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    is_system_role: bool
+
+    class Config:
+        from_attributes = True
+
+
 class UserListItem(BaseModel):
     user: UserSummary
     membership: MembershipSummary
+    roles: list[RoleSummary] = []
 
 
 class UserListResponse(BaseModel):

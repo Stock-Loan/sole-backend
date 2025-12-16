@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
 
 from app.db.base import Base
 
@@ -26,3 +27,5 @@ class Role(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    user_roles = relationship("UserRole", back_populates="role", cascade="all, delete-orphan")

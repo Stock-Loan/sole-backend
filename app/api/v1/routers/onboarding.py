@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, or_, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.db.session import get_db
@@ -21,6 +22,7 @@ from app.schemas.users import (
 from app.models.org_membership import OrgMembership
 from app.models.user import User as UserModel
 from app.models.user_role import UserRole
+from app.models.role import Role
 from app.services import onboarding
 
 logger = logging.getLogger(__name__)
@@ -120,6 +122,9 @@ async def list_users(
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .where(*filters)
         .order_by(UserModel.created_at)
+        .options(
+            selectinload(UserModel.roles).selectinload(UserRole.role)
+        )
     )
     count_stmt = (
         select(func.count())
@@ -133,7 +138,8 @@ async def list_users(
     result = await db.execute(base_stmt.offset(offset).limit(page_size))
     items = []
     for membership, user in result.all():
-        items.append({"user": user, "membership": membership})
+        user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+        items.append({"user": user, "membership": membership, "roles": user_roles})
     return UserListResponse(items=items, total=total)
 
 
@@ -148,13 +154,17 @@ async def get_user(
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+        .options(
+            selectinload(UserModel.roles).selectinload(UserRole.role)
+        )
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user = row
-    return UserDetailResponse(user=user, membership=membership)
+    user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    return UserDetailResponse(user=user, membership=membership, roles=user_roles)
 
 
 @router.delete("/{membership_id}", status_code=204, summary="Delete a user membership and user if no other memberships")
@@ -231,6 +241,9 @@ async def update_membership(
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+        .options(
+            selectinload(UserModel.roles).selectinload(UserRole.role)
+        )
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
@@ -267,7 +280,12 @@ async def update_membership(
         )
     await db.refresh(membership)
     await db.refresh(user)
-    return UserDetailResponse(user=user, membership=membership)
+    # Refresh logic for roles is tricky here because we just deleted them. 
+    # But since we eager loaded them initially, the object might still have stale roles?
+    # No, we modified DB. We should expire the relationship or reload.
+    await db.refresh(user, attribute_names=["roles"])
+    user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    return UserDetailResponse(user=user, membership=membership, roles=user_roles)
 
 
 @router.patch("/{membership_id}/profile", response_model=UserDetailResponse, summary="Update user profile fields")
@@ -282,6 +300,9 @@ async def update_user_profile(
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+        .options(
+            selectinload(UserModel.roles).selectinload(UserRole.role)
+        )
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
@@ -301,4 +322,5 @@ async def update_user_profile(
     await db.commit()
     await db.refresh(user)
     await db.refresh(membership)
-    return UserDetailResponse(user=user, membership=membership)
+    user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    return UserDetailResponse(user=user, membership=membership, roles=user_roles)
