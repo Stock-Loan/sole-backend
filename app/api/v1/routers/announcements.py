@@ -51,18 +51,58 @@ async def list_announcements(
     has_manage = await authz.check_permission(current_user, ctx, PermissionCode.ANNOUNCEMENT_MANAGE, db)
 
     filters = [Announcement.org_id == ctx.org_id]
+    # Default bell/consumer view: published only, even for admins
+    default_status = "PUBLISHED"
+
     if status_filter:
         normalized = status_filter.strip().upper()
         if normalized not in ALLOWED_STATUSES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status filter")
-        if not has_manage and normalized != "PUBLISHED":
+        if not has_manage:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Missing permission: announcement.manage",
             )
         filters.append(Announcement.status == normalized)
-    elif not has_manage:
-        filters.append(Announcement.status == "PUBLISHED")
+    else:
+        filters.append(Announcement.status == default_status)
+    if type_filter:
+        normalized_type = type_filter.strip().upper()
+        if normalized_type not in ALLOWED_TYPES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid type filter")
+        filters.append(Announcement.type == normalized_type)
+
+    offset = (page - 1) * page_size
+    base_stmt = select(Announcement).where(*filters).order_by(Announcement.created_at.desc())
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    result = await db.execute(base_stmt.offset(offset).limit(page_size))
+    announcements = result.scalars().all()
+    read_counts = await announcement_service.get_read_counts(db, ctx, [a.id for a in announcements])
+    target_count = await announcement_service.get_recipient_count(db, ctx)
+    for announcement in announcements:
+        announcement.read_count = read_counts.get(str(announcement.id), 0)
+        announcement.target_count = target_count
+    return AnnouncementListResponse(items=announcements, total=total)
+
+
+@router.get("/admin", response_model=AnnouncementListResponse, summary="Admin list of announcements (all statuses)")
+async def list_admin_announcements(
+    status_filter: str | None = Query(None, description="Filter by status"),
+    type_filter: str | None = Query(None, description="Filter by type"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> AnnouncementListResponse:
+    filters = [Announcement.org_id == ctx.org_id]
+    if status_filter:
+        normalized = status_filter.strip().upper()
+        if normalized not in ALLOWED_STATUSES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status filter")
+        filters.append(Announcement.status == normalized)
     if type_filter:
         normalized_type = type_filter.strip().upper()
         if normalized_type not in ALLOWED_TYPES:

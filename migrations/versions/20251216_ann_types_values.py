@@ -4,7 +4,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = "20251216_announcements_type_values"
+revision = "20251216_ann_types_values"
 down_revision = "20251216_announcements_type"
 branch_labels = None
 depends_on = None
