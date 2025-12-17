@@ -9,6 +9,7 @@ from app.api.v1.routers import (
     acls,
     departments,
     announcements,
+    settings,
     self as self_router,
 )
 
@@ -21,6 +22,7 @@ api_router.include_router(roles.router)
 api_router.include_router(acls.router)
 api_router.include_router(departments.router)
 api_router.include_router(announcements.router)
+api_router.include_router(settings.router)
 api_router.include_router(self_router.router)
 
 __all__ = ["api_router"]

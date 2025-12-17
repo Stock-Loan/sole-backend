@@ -8,6 +8,7 @@ from app.models.access_control_list import AccessControlList
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_role import UserRole
+from app.models.org_settings import OrgSettings
 
 __all__ = [
     "AuditLog",
@@ -21,4 +22,5 @@ __all__ = [
     "Role",
     "UserRole",
     "AccessControlList",
+    "OrgSettings",
 ]

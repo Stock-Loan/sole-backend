@@ -24,6 +24,7 @@ from app.models.user_role import UserRole
 from app.models.role import Role
 from app.models.department import Department
 from app.services import onboarding
+from app.services import settings as settings_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/org/users", tags=["users"])
@@ -311,6 +312,12 @@ async def update_user_profile(
     _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    if not org_settings.allow_profile_edit:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Profile editing is disabled for this organization",
+        )
     stmt = (
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
