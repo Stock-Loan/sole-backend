@@ -30,6 +30,8 @@ class PermissionCode(str, Enum):
     ANNOUNCEMENT_MANAGE = "announcement.manage"
 
     # Stock program
+    STOCK_VIEW = "stock.view"
+    STOCK_MANAGE = "stock.manage"
     STOCK_PROGRAM_VIEW = "stock.program.view"
     STOCK_PROGRAM_MANAGE = "stock.program.manage"
     STOCK_GRANT_VIEW = "stock.grant.view"

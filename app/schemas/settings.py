@@ -9,6 +9,10 @@ class OrgSettingsBase(BaseModel):
     require_two_factor: bool = Field(default=False)
     audit_log_retention_days: int = Field(default=180, ge=0)
     inactive_user_retention_days: int = Field(default=180, ge=0)
+    enforce_service_duration_rule: bool = Field(default=False)
+    min_service_duration_days: int | None = Field(default=None, ge=0)
+    enforce_min_vested_to_exercise: bool = Field(default=False)
+    min_vested_shares_to_exercise: int | None = Field(default=None, ge=0)
 
 
 class OrgSettingsResponse(OrgSettingsBase):
@@ -26,3 +30,7 @@ class OrgSettingsUpdate(BaseModel):
     require_two_factor: bool | None = None
     audit_log_retention_days: int | None = Field(default=None, ge=0)
     inactive_user_retention_days: int | None = Field(default=None, ge=0)
+    enforce_service_duration_rule: bool | None = None
+    min_service_duration_days: int | None = Field(default=None, ge=0)
+    enforce_min_vested_to_exercise: bool | None = None
+    min_vested_shares_to_exercise: int | None = Field(default=None, ge=0)

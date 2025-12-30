@@ -146,6 +146,9 @@ SYSTEM_ROLE_DEFINITIONS = {
                 PermissionCode.ROLE_VIEW,
                 PermissionCode.DEPARTMENT_VIEW,
                 PermissionCode.DEPARTMENT_MANAGE,
+                PermissionCode.STOCK_VIEW,
+                PermissionCode.STOCK_VESTING_VIEW,
+                PermissionCode.STOCK_ELIGIBILITY_VIEW,
                 PermissionCode.ANNOUNCEMENT_VIEW,
                 PermissionCode.ANNOUNCEMENT_MANAGE,
                 PermissionCode.PERMISSION_CATALOG_VIEW,
@@ -196,6 +199,7 @@ SYSTEM_ROLE_DEFINITIONS = {
         "permissions": PermissionCode.normalize(
             [
                 PermissionCode.ORG_DASHBOARD_VIEW,
+                PermissionCode.STOCK_VESTING_VIEW,
                 PermissionCode.STOCK_SELF_VIEW,
                 PermissionCode.STOCK_DASHBOARD_VIEW,
                 PermissionCode.LOAN_APPLY,

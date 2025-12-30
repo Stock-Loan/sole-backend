@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -28,5 +28,8 @@ async def update_org_settings(
     _: User = Depends(deps.require_permission(PermissionCode.ORG_SETTINGS_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> OrgSettingsResponse:
-    settings = await settings_service.update_org_settings(db, ctx, payload)
+    try:
+        settings = await settings_service.update_org_settings(db, ctx, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return OrgSettingsResponse.model_validate(settings)
