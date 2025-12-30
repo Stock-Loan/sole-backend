@@ -11,6 +11,7 @@ from app.api.v1.routers import (
     announcements,
     settings,
     self as self_router,
+    stock_grants,
 )
 
 api_router = APIRouter()
@@ -24,5 +25,6 @@ api_router.include_router(departments.router)
 api_router.include_router(announcements.router)
 api_router.include_router(settings.router)
 api_router.include_router(self_router.router)
+api_router.include_router(stock_grants.router)
 
 __all__ = ["api_router"]
