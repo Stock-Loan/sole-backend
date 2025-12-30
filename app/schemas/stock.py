@@ -117,3 +117,16 @@ class StockSummaryResponse(BaseModel):
     next_vesting_event: NextVestingEvent | None = None
     eligibility_result: EligibilityResult
     grants: list[GrantSummary] = Field(default_factory=list)
+
+
+class StockDashboardSummary(BaseModel):
+    org_id: str
+    total_program_employees: int
+    total_granted_shares: int
+    total_vested_shares: int
+    total_unvested_shares: int
+    eligible_to_exercise_count: int
+    not_eligible_due_to_service_count: int
+    not_eligible_due_to_min_vested_count: int
+    not_eligible_due_to_other_count: int
+    next_global_vesting_date: date | None = None
