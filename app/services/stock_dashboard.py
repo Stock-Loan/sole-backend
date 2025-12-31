@@ -12,6 +12,37 @@ from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.org_membership import OrgMembership
 from app.schemas.stock import EligibilityReasonCode, StockDashboardSummary
 from app.services import eligibility, settings as settings_service, vesting_engine
+from app.utils.redis_client import get_redis_client
+
+
+CACHE_TTL_SECONDS = 300
+
+
+def _cache_key(org_id: str, as_of_date: date) -> str:
+    return f"stock_dashboard:{org_id}:{as_of_date.isoformat()}"
+
+
+async def _get_cached_summary(org_id: str, as_of_date: date) -> StockDashboardSummary | None:
+    try:
+        redis = get_redis_client()
+        cached = await redis.get(_cache_key(org_id, as_of_date))
+        if cached:
+            return StockDashboardSummary.model_validate_json(cached)
+    except Exception:
+        return None
+    return None
+
+
+async def _set_cached_summary(summary: StockDashboardSummary, org_id: str, as_of_date: date) -> None:
+    try:
+        redis = get_redis_client()
+        await redis.setex(
+            _cache_key(org_id, as_of_date),
+            CACHE_TTL_SECONDS,
+            summary.model_dump_json(),
+        )
+    except Exception:
+        return None
 
 
 def _categorize_ineligible(reasons: list) -> str:
@@ -83,6 +114,9 @@ def build_dashboard_summary_from_data(
 async def build_dashboard_summary(
     db: AsyncSession, ctx: deps.TenantContext, as_of_date: date
 ) -> StockDashboardSummary:
+    cached = await _get_cached_summary(ctx.org_id, as_of_date)
+    if cached:
+        return cached
     grants_stmt = (
         select(EmployeeStockGrant)
         .options(selectinload(EmployeeStockGrant.vesting_events))
@@ -101,10 +135,12 @@ async def build_dashboard_summary(
         )
         memberships = (await db.execute(member_stmt)).scalars().all()
     org_settings = await settings_service.get_org_settings(db, ctx)
-    return build_dashboard_summary_from_data(
+    summary = build_dashboard_summary_from_data(
         org_id=ctx.org_id,
         memberships=memberships,
         org_settings=org_settings,
         grants=grants,
         as_of_date=as_of_date,
     )
+    await _set_cached_summary(summary, ctx.org_id, as_of_date)
+    return summary

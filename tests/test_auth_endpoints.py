@@ -115,7 +115,7 @@ def test_change_password_success(tmp_path, monkeypatch):
         json={"current_password": "OldPassword123!", "new_password": "NewPassword123!"},
     )
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["data"]
     assert "access_token" in data and "refresh_token" in data
     assert user.token_version == 1
     assert verify_password("NewPassword123!", user.hashed_password)
@@ -135,7 +135,7 @@ def test_change_password_rejects_wrong_current(tmp_path, monkeypatch):
         json={"current_password": "bad-password", "new_password": "AnotherPassword123!"},
     )
     assert resp.status_code == 400
-    assert "incorrect" in resp.json()["detail"]
+    assert "incorrect" in resp.json()["message"]
     # Ensure we did not change password or commit
     assert verify_password("OldPassword123!", user.hashed_password)
     assert session.committed is False
@@ -160,12 +160,12 @@ def test_login_start_and_complete(monkeypatch, tmp_path):
     client = TestClient(app)
     start_resp = client.post("/api/v1/auth/login/start", json={"email": user.email})
     assert start_resp.status_code == 200
-    challenge = start_resp.json()["challenge_token"]
+    challenge = start_resp.json()["data"]["challenge_token"]
 
     complete_resp = client.post(
         "/api/v1/auth/login/complete",
         json={"challenge_token": challenge, "password": "OldPassword123!"},
     )
     assert complete_resp.status_code == 200
-    data = complete_resp.json()
+    data = complete_resp.json()["data"]
     assert "access_token" in data and "refresh_token" in data

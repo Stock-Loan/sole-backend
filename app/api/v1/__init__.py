@@ -14,6 +14,7 @@ from app.api.v1.routers import (
     stock_grants,
     stock_summary,
     stock_dashboard,
+    stock_self,
 )
 
 api_router = APIRouter()
@@ -30,5 +31,6 @@ api_router.include_router(self_router.router)
 api_router.include_router(stock_grants.router)
 api_router.include_router(stock_summary.router)
 api_router.include_router(stock_dashboard.router)
+api_router.include_router(stock_self.router)
 
 __all__ = ["api_router"]

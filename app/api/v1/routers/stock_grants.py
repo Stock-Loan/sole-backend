@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,6 +12,7 @@ from app.schemas.stock import (
     EmployeeStockGrantCreate,
     EmployeeStockGrantOut,
     EmployeeStockGrantUpdate,
+    StockGrantPreviewResponse,
     StockGrantListResponse,
 )
 from app.services import stock_grants
@@ -37,6 +39,28 @@ async def list_grants(
 
 
 @router.post(
+    "/users/{membership_id}/stock/grants/preview",
+    response_model=StockGrantPreviewResponse,
+    summary="Preview a stock grant and vesting schedule",
+)
+async def preview_grant(
+    membership_id: UUID,
+    payload: EmployeeStockGrantCreate,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.STOCK_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> StockGrantPreviewResponse:
+    membership = await stock_grants.get_membership(db, ctx, membership_id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    try:
+        stock_grants._ensure_membership_active(membership)
+        return stock_grants.preview_grant(payload, date.today())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
     "/users/{membership_id}/stock/grants",
     response_model=EmployeeStockGrantOut,
     status_code=status.HTTP_201_CREATED,
@@ -46,14 +70,20 @@ async def create_grant(
     membership_id: UUID,
     payload: EmployeeStockGrantCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.STOCK_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.STOCK_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> EmployeeStockGrantOut:
     membership = await stock_grants.get_membership(db, ctx, membership_id)
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     try:
-        grant = await stock_grants.create_grant(db, ctx, membership_id, payload)
+        grant = await stock_grants.create_grant(
+            db,
+            ctx,
+            membership_id,
+            payload,
+            actor_id=current_user.id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return EmployeeStockGrantOut.model_validate(grant)
@@ -85,14 +115,20 @@ async def update_grant(
     grant_id: UUID,
     payload: EmployeeStockGrantUpdate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.STOCK_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.STOCK_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> EmployeeStockGrantOut:
     grant = await stock_grants.get_grant(db, ctx, grant_id)
     if not grant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
     try:
-        updated = await stock_grants.update_grant(db, ctx, grant, payload)
+        updated = await stock_grants.update_grant(
+            db,
+            ctx,
+            grant,
+            payload,
+            actor_id=current_user.id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return EmployeeStockGrantOut.model_validate(updated)

@@ -1,12 +1,28 @@
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.models.audit_log import AuditLog
 from app.models.org_settings import OrgSettings
 from app.schemas.settings import OrgSettingsBase, OrgSettingsUpdate
 
 
 DEFAULT_SETTINGS = OrgSettingsBase()
+
+
+def _settings_snapshot(settings: OrgSettings) -> dict:
+    data: dict[str, object] = {}
+    for column in settings.__table__.columns:
+        name = column.name
+        if name in {"created_at", "updated_at"}:
+            continue
+        value = getattr(settings, name)
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        data[name] = value
+    return data
 
 
 def _validate_stock_rules(
@@ -79,9 +95,14 @@ async def get_org_settings(
 
 
 async def update_org_settings(
-    db: AsyncSession, ctx: deps.TenantContext, payload: OrgSettingsUpdate
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    payload: OrgSettingsUpdate,
+    *,
+    actor_id=None,
 ) -> OrgSettings:
     settings = await get_org_settings(db, ctx, create_if_missing=True)
+    old_snapshot = _settings_snapshot(settings)
     data = payload.model_dump(exclude_unset=True)
     if data.get("enforce_service_duration_rule") is False and "min_service_duration_days" not in data:
         data["min_service_duration_days"] = None
@@ -104,6 +125,17 @@ async def update_org_settings(
     _validate_stock_rules(**candidate)
     for field, value in data.items():
         setattr(settings, field, value)
+    new_snapshot = _settings_snapshot(settings)
+    audit = AuditLog(
+        org_id=ctx.org_id,
+        actor_id=actor_id,
+        action="org_settings.updated",
+        resource_type="org_settings",
+        resource_id=ctx.org_id,
+        old_value=old_snapshot,
+        new_value=new_snapshot,
+    )
+    db.add(audit)
     db.add(settings)
     await db.commit()
     await db.refresh(settings)

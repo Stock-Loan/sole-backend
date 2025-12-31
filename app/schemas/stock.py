@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class VestingStrategy(str, Enum):
@@ -51,8 +51,7 @@ class VestingEventCreate(VestingEventBase):
 class VestingEventOut(VestingEventBase):
     id: UUID
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EmployeeStockGrantBase(BaseModel):
@@ -85,9 +84,13 @@ class EmployeeStockGrantOut(EmployeeStockGrantBase):
     vesting_events: list[VestingEventOut] = Field(default_factory=list)
     vested_shares: int = 0
     unvested_shares: int = 0
+    next_vesting_event: NextVestingEvent | None = None
+    next_vesting_summary: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={Decimal: lambda value: str(value)},
+    )
 
 
 class StockGrantListResponse(BaseModel):
@@ -103,10 +106,25 @@ class GrantSummary(BaseModel):
     unvested_shares: int
     exercise_price: Decimal
 
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
 
 class NextVestingEvent(BaseModel):
     vest_date: date
     shares: int
+
+
+class StockGrantPreviewResponse(BaseModel):
+    grant_date: date
+    total_shares: int
+    exercise_price: Decimal
+    vesting_strategy: VestingStrategy
+    notes: str | None = None
+    vesting_events: list[VestingEventBase] = Field(default_factory=list)
+    next_vesting_event: NextVestingEvent | None = None
+    next_vesting_summary: str | None = None
+
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
 
 
 class StockSummaryResponse(BaseModel):

@@ -11,6 +11,41 @@ from app.models.org_membership import OrgMembership
 from app.models.org_settings import OrgSettings
 from app.schemas.stock import GrantSummary, NextVestingEvent, StockSummaryResponse
 from app.services import eligibility, settings as settings_service, vesting_engine
+from app.utils.redis_client import get_redis_client
+
+
+CACHE_TTL_SECONDS = 300
+
+
+def _cache_key(org_id: str, membership_id: UUID, as_of_date: date) -> str:
+    return f"stock_summary:{org_id}:{membership_id}:{as_of_date.isoformat()}"
+
+
+async def _get_cached_summary(
+    org_id: str, membership_id: UUID, as_of_date: date
+) -> StockSummaryResponse | None:
+    try:
+        redis = get_redis_client()
+        cached = await redis.get(_cache_key(org_id, membership_id, as_of_date))
+        if cached:
+            return StockSummaryResponse.model_validate_json(cached)
+    except Exception:
+        return None
+    return None
+
+
+async def _set_cached_summary(
+    summary: StockSummaryResponse, org_id: str, membership_id: UUID, as_of_date: date
+) -> None:
+    try:
+        redis = get_redis_client()
+        await redis.setex(
+            _cache_key(org_id, membership_id, as_of_date),
+            CACHE_TTL_SECONDS,
+            summary.model_dump_json(),
+        )
+    except Exception:
+        return None
 
 
 async def get_membership(
@@ -73,14 +108,19 @@ async def build_stock_summary(
     membership_id: UUID,
     as_of_date: date,
 ) -> StockSummaryResponse:
+    cached = await _get_cached_summary(ctx.org_id, membership_id, as_of_date)
+    if cached:
+        return cached
     membership = await get_membership(db, ctx, membership_id)
     if not membership:
         raise ValueError("Membership not found")
     org_settings = await settings_service.get_org_settings(db, ctx)
     grants = await vesting_engine.load_active_grants(db, ctx, membership_id)
-    return build_stock_summary_from_data(
+    summary = build_stock_summary_from_data(
         membership=membership,
         org_settings=org_settings,
         grants=grants,
         as_of_date=as_of_date,
     )
+    await _set_cached_summary(summary, ctx.org_id, membership_id, as_of_date)
+    return summary

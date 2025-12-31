@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.journal_entry import JournalEntry
 from app.models.types import EncryptedString
 from app.models.user import User
+from app.models.vesting_event import VestingEvent
 
 
 def test_partitioning_metadata_present() -> None:
@@ -57,3 +58,8 @@ def test_jwt_rs256_round_trip(monkeypatch, tmp_path) -> None:
 def test_user_unique_constraint() -> None:
     constraints = [c for c in User.__table__.constraints if hasattr(c, "name")]
     assert any(getattr(c, "name", "") == "uq_users_org_email" for c in constraints)
+
+
+def test_vesting_event_unique_constraint() -> None:
+    constraints = [c for c in VestingEvent.__table__.constraints if hasattr(c, "name")]
+    assert any(getattr(c, "name", "") == "uq_vesting_events_grant_date" for c in constraints)

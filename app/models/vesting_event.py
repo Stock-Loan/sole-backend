@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import BigInteger, CheckConstraint, Column, Date, DateTime, ForeignKey, String, func
+from sqlalchemy import BigInteger, CheckConstraint, Column, Date, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -12,6 +12,7 @@ class VestingEvent(Base):
     __allow_unmapped__ = True
     __table_args__ = (
         CheckConstraint("shares >= 0", name="ck_vesting_events_shares_nonnegative"),
+        UniqueConstraint("grant_id", "vest_date", name="uq_vesting_events_grant_date"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

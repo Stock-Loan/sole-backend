@@ -41,7 +41,26 @@ def test_vesting_schedule_rejects_over_allocation():
         VestingEventCreate(vest_date=date(2025, 6, 1), shares=60),
         VestingEventCreate(vest_date=date(2026, 1, 1), shares=60),
     ]
-    with pytest.raises(ValueError, match="cannot exceed total_shares"):
+    with pytest.raises(ValueError, match="must equal total_shares"):
+        _build_vesting_events(VestingStrategy.SCHEDULED, grant_date, 100, schedule)
+
+
+def test_vesting_schedule_rejects_under_allocation():
+    grant_date = date(2025, 1, 1)
+    schedule = [
+        VestingEventCreate(vest_date=date(2025, 6, 1), shares=30),
+        VestingEventCreate(vest_date=date(2026, 1, 1), shares=50),
+    ]
+    with pytest.raises(ValueError, match="must equal total_shares"):
+        _build_vesting_events(VestingStrategy.SCHEDULED, grant_date, 100, schedule)
+
+
+def test_vesting_schedule_rejects_pre_grant_dates():
+    grant_date = date(2025, 1, 1)
+    schedule = [
+        VestingEventCreate(vest_date=date(2024, 12, 31), shares=100),
+    ]
+    with pytest.raises(ValueError, match="cannot occur before grant_date"):
         _build_vesting_events(VestingStrategy.SCHEDULED, grant_date, 100, schedule)
 
 

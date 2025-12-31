@@ -1,10 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.v1 import api_router
+from app.core.errors import register_exception_handlers
+from app.core.response_envelope import register_response_envelope
 from app.core.limiter import limiter
 from app.core.logging import configure_logging
 from app.core.settings import settings
@@ -17,8 +17,9 @@ from app.middlewares.trust_proxies import TrustedProxiesMiddleware
 def create_app() -> FastAPI:
     configure_logging()
     app = FastAPI(title="SOLE Backend", version="0.1.0")
+    register_exception_handlers(app)
+    register_response_envelope(app)
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(TrustedProxiesMiddleware, proxies_count=settings.proxies_count)
     app.add_middleware(RequestContextMiddleware)

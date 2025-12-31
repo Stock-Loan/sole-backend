@@ -17,7 +17,7 @@ def _mock_env(monkeypatch):
 def test_health_live_returns_ok() -> None:
     response = client.get("/api/v1/health/live")
     assert response.status_code == 200
-    payload = response.json()
+    payload = response.json()["data"]
     assert payload.get("status") == "ok"
     assert "timestamp" in payload
 
@@ -34,7 +34,7 @@ def test_health_ready_ok(monkeypatch) -> None:
 
     response = client.get("/api/v1/health/ready")
     assert response.status_code == 200
-    payload = response.json()
+    payload = response.json()["data"]
     assert payload.get("status") == "ok"
     assert payload.get("ready") is True
     assert payload["checks"]["database"]["status"] == "ok"
@@ -53,7 +53,7 @@ def test_health_ready_degraded(monkeypatch) -> None:
 
     response = client.get("/api/v1/health")
     assert response.status_code == 200
-    payload = response.json()
+    payload = response.json()["data"]
     assert payload.get("status") == "degraded"
     assert payload.get("ready") is False
     assert payload["checks"]["database"]["status"] == "error"
@@ -71,7 +71,7 @@ def test_status_summary(monkeypatch) -> None:
 
     response = client.get("/api/v1/status/summary")
     assert response.status_code == 200
-    payload = response.json()
+    payload = response.json()["data"]
     assert payload.get("status") == "ok"
     assert payload.get("ready") is True
     assert payload.get("version") == health_module.APP_VERSION

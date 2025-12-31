@@ -17,6 +17,9 @@ from app.db.session import get_db
 from app.main import app
 from app.models.org_settings import OrgSettings
 from app.services import authz
+from app.models.audit_log import AuditLog
+from app.schemas.settings import OrgSettingsUpdate
+from app.services import settings as settings_service
 
 
 class DummyUser:
@@ -93,7 +96,7 @@ def test_org_settings_defaults_include_stock_rules():
 
     resp = client.get("/api/v1/org/settings")
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["data"]
     assert data["enforce_service_duration_rule"] is False
     assert data["min_service_duration_days"] is None
     assert data["enforce_min_vested_to_exercise"] is False
@@ -113,7 +116,7 @@ def test_org_settings_validation_rejects_inconsistent_rules():
         },
     )
     assert resp.status_code == 400
-    assert "min_service_duration_days must be null" in resp.json()["detail"]
+    assert "min_service_duration_days must be null" in resp.json()["message"]
 
 
 def test_org_settings_update_persists_stock_rules():
@@ -131,7 +134,7 @@ def test_org_settings_update_persists_stock_rules():
         },
     )
     assert update_resp.status_code == 200
-    update_data = update_resp.json()
+    update_data = update_resp.json()["data"]
     assert update_data["enforce_service_duration_rule"] is True
     assert update_data["min_service_duration_days"] == 180
     assert update_data["enforce_min_vested_to_exercise"] is True
@@ -139,6 +142,23 @@ def test_org_settings_update_persists_stock_rules():
 
     get_resp = client.get("/api/v1/org/settings")
     assert get_resp.status_code == 200
-    get_data = get_resp.json()
+    get_data = get_resp.json()["data"]
     assert get_data["min_service_duration_days"] == 180
     assert get_data["min_vested_shares_to_exercise"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_org_settings_update_writes_audit_log():
+    session = FakeSession()
+    ctx = deps.TenantContext(org_id="default")
+    session.settings_obj = OrgSettings(org_id="default")
+    payload = OrgSettingsUpdate(
+        allow_profile_edit=False,
+    )
+    await settings_service.update_org_settings(
+        session,
+        ctx,
+        payload,
+        actor_id="actor-1",
+    )
+    assert any(isinstance(obj, AuditLog) for obj in session.added)
