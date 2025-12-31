@@ -101,6 +101,13 @@ def test_org_settings_defaults_include_stock_rules():
     assert data["min_service_duration_days"] is None
     assert data["enforce_min_vested_to_exercise"] is False
     assert data["min_vested_shares_to_exercise"] is None
+    assert data["allowed_repayment_methods"] == ["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"]
+    assert data["min_loan_term_months"] == 6
+    assert data["max_loan_term_months"] == 60
+    assert data["allowed_interest_types"] == ["FIXED", "VARIABLE"]
+    assert data["fixed_interest_rate_annual_percent"] == "0"
+    assert data["require_down_payment"] is False
+    assert data["down_payment_percent"] is None
 
 
 def test_org_settings_validation_rejects_inconsistent_rules():
@@ -117,6 +124,45 @@ def test_org_settings_validation_rejects_inconsistent_rules():
     )
     assert resp.status_code == 400
     assert "min_service_duration_days must be null" in resp.json()["message"]
+
+
+def test_org_settings_validation_rejects_invalid_loan_term_bounds():
+    session = FakeSession()
+    override_dependencies(session)
+    client = TestClient(app)
+
+    resp = client.put(
+        "/api/v1/org/settings",
+        json={"min_loan_term_months": 24, "max_loan_term_months": 12},
+    )
+    assert resp.status_code == 400
+    assert "min_loan_term_months must be <= max_loan_term_months" in resp.json()["message"]
+
+
+def test_org_settings_validation_rejects_empty_repayment_methods():
+    session = FakeSession()
+    override_dependencies(session)
+    client = TestClient(app)
+
+    resp = client.put(
+        "/api/v1/org/settings",
+        json={"allowed_repayment_methods": []},
+    )
+    assert resp.status_code == 400
+    assert "allowed_repayment_methods must include at least one repayment method" in resp.json()["message"]
+
+
+def test_org_settings_validation_requires_down_payment_percent():
+    session = FakeSession()
+    override_dependencies(session)
+    client = TestClient(app)
+
+    resp = client.put(
+        "/api/v1/org/settings",
+        json={"require_down_payment": True},
+    )
+    assert resp.status_code == 400
+    assert "down_payment_percent is required" in resp.json()["message"]
 
 
 def test_org_settings_update_persists_stock_rules():
@@ -151,7 +197,15 @@ def test_org_settings_update_persists_stock_rules():
 async def test_org_settings_update_writes_audit_log():
     session = FakeSession()
     ctx = deps.TenantContext(org_id="default")
-    session.settings_obj = OrgSettings(org_id="default")
+    session.settings_obj = OrgSettings(
+        org_id="default",
+        allowed_repayment_methods=["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"],
+        min_loan_term_months=6,
+        max_loan_term_months=60,
+        allowed_interest_types=["FIXED", "VARIABLE"],
+        fixed_interest_rate_annual_percent=0,
+        require_down_payment=False,
+    )
     payload = OrgSettingsUpdate(
         allow_profile_edit=False,
     )

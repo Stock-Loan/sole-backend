@@ -1,4 +1,5 @@
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String, Numeric, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.db.base import Base
 
@@ -17,6 +18,29 @@ class OrgSettings(Base):
     min_service_duration_days = Column(Integer, nullable=True)
     enforce_min_vested_to_exercise = Column(Boolean, nullable=False, default=False, server_default="false")
     min_vested_shares_to_exercise = Column(BigInteger, nullable=True)
+    allowed_repayment_methods = Column(
+        JSONB,
+        nullable=False,
+        default=lambda: ["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"],
+        server_default=text(
+            "'[\"INTEREST_ONLY\", \"BALLOON\", \"PRINCIPAL_AND_INTEREST\"]'::jsonb"
+        ),
+    )
+    min_loan_term_months = Column(Integer, nullable=False, default=6, server_default="6")
+    max_loan_term_months = Column(Integer, nullable=False, default=60, server_default="60")
+    allowed_interest_types = Column(
+        JSONB,
+        nullable=False,
+        default=lambda: ["FIXED", "VARIABLE"],
+        server_default=text("'[\"FIXED\", \"VARIABLE\"]'::jsonb"),
+    )
+    fixed_interest_rate_annual_percent = Column(
+        Numeric(10, 4), nullable=False, default=0, server_default="0"
+    )
+    variable_base_rate_annual_percent = Column(Numeric(10, 4), nullable=True)
+    variable_margin_annual_percent = Column(Numeric(10, 4), nullable=True)
+    require_down_payment = Column(Boolean, nullable=False, default=False, server_default="false")
+    down_payment_percent = Column(Numeric(5, 2), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

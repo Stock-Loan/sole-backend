@@ -156,6 +156,7 @@ SYSTEM_ROLE_DEFINITIONS = {
                 PermissionCode.LOAN_WORKFLOW_HR_MANAGE,
                 PermissionCode.LOAN_DOCUMENT_VIEW,
                 PermissionCode.LOAN_DOCUMENT_MANAGE_HR,
+                PermissionCode.LOAN_MANAGE,
                 PermissionCode.LOAN_VIEW_ALL,
                 PermissionCode.LOAN_DASHBOARD_VIEW,
             ]
