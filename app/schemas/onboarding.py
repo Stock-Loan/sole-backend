@@ -3,7 +3,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 
-from app.schemas.common import MaritalStatus, normalize_marital_status
+from app.schemas.common import (
+    EmploymentStatus,
+    MaritalStatus,
+    normalize_employment_status,
+    normalize_marital_status,
+)
 
 
 class OnboardingUserCreate(BaseModel):
@@ -25,12 +30,17 @@ class OnboardingUserCreate(BaseModel):
     temporary_password: str | None = None
     employee_id: str
     employment_start_date: date | None = None
-    employment_status: str = "ACTIVE"
+    employment_status: EmploymentStatus = EmploymentStatus.ACTIVE
 
     @field_validator("marital_status", mode="before")
     @classmethod
     def _normalize_marital_status(cls, value):
         return normalize_marital_status(value)
+
+    @field_validator("employment_status", mode="before")
+    @classmethod
+    def _normalize_employment_status(cls, value):
+        return normalize_employment_status(value) or EmploymentStatus.ACTIVE
 
 
 class OnboardingUserOut(BaseModel):

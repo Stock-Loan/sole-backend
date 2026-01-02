@@ -2,7 +2,7 @@ from datetime import datetime, date
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 
-from app.schemas.common import MaritalStatus, normalize_marital_status
+from app.schemas.common import EmploymentStatus, MaritalStatus, normalize_employment_status, normalize_marital_status
 
 
 class UserSummary(BaseModel):
@@ -73,8 +73,15 @@ class UserDetailResponse(UserListItem):
 
 
 class UpdateMembershipRequest(BaseModel):
-    employment_status: str | None = None
+    model_config = ConfigDict(use_enum_values=True)
+
+    employment_status: EmploymentStatus | None = None
     platform_status: str | None = None
+
+    @field_validator("employment_status", mode="before")
+    @classmethod
+    def _normalize_employment_status(cls, value):
+        return normalize_employment_status(value) if value is not None else None
 
 
 class UpdateUserProfileRequest(BaseModel):

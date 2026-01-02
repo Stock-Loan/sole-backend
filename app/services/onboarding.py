@@ -16,7 +16,7 @@ from app.core.security import get_password_hash
 from app.services.authz import assign_default_employee_role
 from app.models.org_membership import OrgMembership
 from app.models.user import User
-from app.schemas.common import normalize_marital_status
+from app.schemas.common import EmploymentStatus, normalize_employment_status, normalize_marital_status
 from app.schemas.onboarding import (
     BulkOnboardingResult,
     BulkOnboardingRowError,
@@ -168,7 +168,7 @@ def _normalize_payload(payload: OnboardingUserCreate) -> OnboardingUserCreate:
         temporary_password=_normalize_text(payload.temporary_password),
         employee_id=_normalize_text(payload.employee_id),
         employment_start_date=payload.employment_start_date,
-        employment_status=_normalize_text(payload.employment_status, upper=True) or "ACTIVE",
+        employment_status=normalize_employment_status(payload.employment_status) or EmploymentStatus.ACTIVE,
     )
 
 
