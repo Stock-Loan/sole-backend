@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,8 +82,19 @@ async def bulk_onboard(
         content = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid encoding; expected UTF-8") from exc
-    result = await onboarding.bulk_onboard_users(db, ctx, content)
-    return result
+    try:
+        result = await onboarding.bulk_onboard_users(db, ctx, content)
+        return result
+    except onboarding.BulkOnboardCSVError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "code": exc.code,
+                "message": str(exc),
+                "data": {"successes": [], "errors": []},
+                "details": exc.details,
+            },
+        )
 
 
 @router.get("", response_model=UserListResponse, summary="List users for the current org")

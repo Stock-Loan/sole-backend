@@ -286,6 +286,13 @@ MAX_FIELD_LEN = {
 }
 
 
+class BulkOnboardCSVError(Exception):
+    def __init__(self, message: str, code: str, details: dict | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
 def generate_csv_template() -> str:
     output = io.StringIO()
     writer = csv.writer(output)
@@ -301,9 +308,17 @@ async def bulk_onboard_users(
     reader = csv.DictReader(io.StringIO(csv_content))
     # Header validation: strict order required
     if reader.fieldnames is None:
-        raise ValueError("CSV is empty or missing header")
+        raise BulkOnboardCSVError(
+            "CSV is empty or missing header",
+            code="csv_missing_header",
+            details={"expected_headers": CSV_COLUMNS, "received_headers": None},
+        )
     if reader.fieldnames != CSV_COLUMNS:
-        raise ValueError(f"Invalid headers. Expected: {CSV_COLUMNS}")
+        raise BulkOnboardCSVError(
+            "CSV headers do not match template",
+            code="csv_invalid_headers",
+            details={"expected_headers": CSV_COLUMNS, "received_headers": reader.fieldnames},
+        )
 
     successes: list[BulkOnboardingRowSuccess] = []
     errors: list[BulkOnboardingRowError] = []
@@ -316,6 +331,8 @@ async def bulk_onboard_users(
                 BulkOnboardingRowError(
                     row_number=idx,
                     email=row.get("email"),
+                    first_name=row.get("first_name"),
+                    last_name=row.get("last_name"),
                     employee_id=row.get("employee_id"),
                     error=f"Too many rows; maximum {MAX_BULK_ROWS} allowed",
                 )
@@ -327,6 +344,35 @@ async def bulk_onboard_users(
                 val = row.get(key) or ""
                 if len(val) > limit:
                     raise ValueError(f"{key} exceeds max length {limit}")
+
+            normalized_email = _normalize_text(row.get("email") or "", lower=True) or ""
+            normalized_employee_id = _normalize_text(row.get("employee_id") or "") or ""
+            existing_membership_id = None
+            if normalized_email:
+                user_stmt = select(User.id).where(User.org_id == ctx.org_id, User.email == normalized_email)
+                user_id = (await db.execute(user_stmt)).scalar_one_or_none()
+                if user_id:
+                    membership_stmt = select(OrgMembership.id).where(
+                        OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == user_id
+                    )
+                    existing_membership_id = (await db.execute(membership_stmt)).scalar_one_or_none()
+            if not existing_membership_id and normalized_employee_id:
+                employee_stmt = select(OrgMembership.id).where(
+                    OrgMembership.org_id == ctx.org_id, OrgMembership.employee_id == normalized_employee_id
+                )
+                existing_membership_id = (await db.execute(employee_stmt)).scalar_one_or_none()
+            if existing_membership_id:
+                errors.append(
+                    BulkOnboardingRowError(
+                        row_number=idx,
+                        email=row.get("email"),
+                        first_name=row.get("first_name"),
+                        last_name=row.get("last_name"),
+                        employee_id=row.get("employee_id"),
+                        error="Already onboarded",
+                    )
+                )
+                continue
 
             country_code, state_code = _normalize_location(
                 row.get("country") or None, row.get("state") or None
@@ -366,6 +412,8 @@ async def bulk_onboard_users(
                 BulkOnboardingRowError(
                     row_number=idx,
                     email=row.get("email"),
+                    first_name=row.get("first_name"),
+                    last_name=row.get("last_name"),
                     employee_id=row.get("employee_id"),
                     error="Duplicate user or employee_id",
                 )
@@ -375,12 +423,18 @@ async def bulk_onboard_users(
                 BulkOnboardingRowError(
                     row_number=idx,
                     email=row.get("email"),
+                    first_name=row.get("first_name"),
+                    last_name=row.get("last_name"),
                     employee_id=row.get("employee_id"),
                     error=str(exc),
                 )
             )
 
     if rows_processed == 0:
-        raise ValueError("CSV contains no data rows")
+        raise BulkOnboardCSVError(
+            "CSV contains no data rows",
+            code="csv_empty",
+            details={"expected_headers": CSV_COLUMNS},
+        )
 
     return BulkOnboardingResult(successes=successes, errors=errors)

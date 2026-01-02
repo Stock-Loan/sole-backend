@@ -99,6 +99,8 @@ class BulkOnboardingRowSuccess(BaseModel):
 class BulkOnboardingRowError(BaseModel):
     row_number: int
     email: EmailStr | None = None
+    first_name: str | None = None
+    last_name: str | None = None
     employee_id: str | None = None
     error: str
 
