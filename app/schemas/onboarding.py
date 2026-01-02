@@ -1,10 +1,14 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
+
+from app.schemas.common import MaritalStatus, normalize_marital_status
 
 
 class OnboardingUserCreate(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     email: EmailStr
     first_name: str
     last_name: str
@@ -12,7 +16,7 @@ class OnboardingUserCreate(BaseModel):
     preferred_name: str | None = None
     timezone: str | None = None
     phone_number: str | None = None
-    marital_status: str | None = None
+    marital_status: MaritalStatus | None = None
     country: str | None = None
     state: str | None = None
     address_line1: str | None = None
@@ -23,8 +27,15 @@ class OnboardingUserCreate(BaseModel):
     employment_start_date: date | None = None
     employment_status: str = "ACTIVE"
 
+    @field_validator("marital_status", mode="before")
+    @classmethod
+    def _normalize_marital_status(cls, value):
+        return normalize_marital_status(value)
+
 
 class OnboardingUserOut(BaseModel):
+    model_config = ConfigDict(use_enum_values=True, from_attributes=True)
+
     id: UUID
     org_id: str
     email: EmailStr
@@ -34,7 +45,7 @@ class OnboardingUserOut(BaseModel):
     preferred_name: str | None = None
     timezone: str | None = None
     phone_number: str | None = None
-    marital_status: str | None = None
+    marital_status: MaritalStatus | None = None
     country: str | None = None
     state: str | None = None
     address_line1: str | None = None
@@ -43,9 +54,6 @@ class OnboardingUserOut(BaseModel):
     is_active: bool
     is_superuser: bool
     created_at: datetime | None = None
-
-    class Config:
-        from_attributes = True
 
 
 class OnboardingMembershipOut(BaseModel):

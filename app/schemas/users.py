@@ -1,9 +1,13 @@
 from datetime import datetime, date
 from uuid import UUID
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
+
+from app.schemas.common import MaritalStatus, normalize_marital_status
 
 
 class UserSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
     id: UUID
     org_id: str
     email: EmailStr
@@ -13,7 +17,7 @@ class UserSummary(BaseModel):
     preferred_name: str | None = None
     timezone: str | None = None
     phone_number: str | None = None
-    marital_status: str | None = None
+    marital_status: MaritalStatus | None = None
     country: str | None = None
     state: str | None = None
     address_line1: str | None = None
@@ -22,9 +26,6 @@ class UserSummary(BaseModel):
     is_active: bool
     is_superuser: bool
     created_at: datetime | None = None
-
-    class Config:
-        from_attributes = True
 
 
 class MembershipSummary(BaseModel):
@@ -77,18 +78,25 @@ class UpdateMembershipRequest(BaseModel):
 
 
 class UpdateUserProfileRequest(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     first_name: str | None = None
     middle_name: str | None = None
     last_name: str | None = None
     preferred_name: str | None = None
     timezone: str | None = None
     phone_number: str | None = None
-    marital_status: str | None = None
+    marital_status: MaritalStatus | None = None
     country: str | None = None
     state: str | None = None
     address_line1: str | None = None
     address_line2: str | None = None
     postal_code: str | None = None
+
+    @field_validator("marital_status", mode="before")
+    @classmethod
+    def _normalize_marital_status(cls, value):
+        return normalize_marital_status(value)
 
 
 class BulkDeleteRequest(BaseModel):

@@ -10,6 +10,7 @@ from app.models.user import User
 from app.models.user_role import UserRole
 from app.models.org_settings import OrgSettings
 from app.models.employee_stock_grant import EmployeeStockGrant
+from app.models.loan_application import LoanApplication
 from app.models.vesting_event import VestingEvent
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "AccessControlList",
     "OrgSettings",
     "EmployeeStockGrant",
+    "LoanApplication",
     "VestingEvent",
 ]

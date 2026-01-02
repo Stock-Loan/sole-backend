@@ -1,0 +1,273 @@
+from uuid import UUID
+
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
+
+from app.api import deps
+from app.core.permissions import PermissionCode
+from app.db.session import get_db
+from app.models.loan_application import LoanApplication
+from app.models.user import User
+from app.schemas.loan import (
+    LoanApplicationDTO,
+    LoanApplicationDraftCreate,
+    LoanApplicationDraftUpdate,
+    LoanApplicationListResponse,
+    LoanApplicationSummaryDTO,
+    LoanApplicationStatus,
+)
+from app.services import loan_applications, loan_quotes
+
+router = APIRouter(prefix="/me/loan-applications", tags=["loan-applications"])
+
+
+async def _get_membership_or_404(
+    db: AsyncSession, ctx: deps.TenantContext, user_id
+):
+    membership = await loan_applications.get_membership_for_user(db, ctx, user_id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    return membership
+
+
+@router.get("", response_model=LoanApplicationListResponse, summary="List loan applications for the current user")
+async def list_loan_applications(
+    current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_VIEW_OWN)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+    status_filter: list[LoanApplicationStatus] | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+) -> LoanApplicationListResponse:
+    membership = await _get_membership_or_404(db, ctx, current_user.id)
+    conditions = [
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.org_membership_id == membership.id,
+    ]
+    if status_filter:
+        status_values = [value.value for value in status_filter]
+        conditions.append(LoanApplication.status.in_(status_values))
+    if created_from:
+        conditions.append(LoanApplication.created_at >= created_from)
+    if created_to:
+        conditions.append(LoanApplication.created_at <= created_to)
+
+    count_stmt = select(func.count()).select_from(LoanApplication).where(*conditions)
+    count_result = await db.execute(count_stmt)
+    total = int(count_result.scalar_one())
+
+    stmt = (
+        select(LoanApplication)
+        .where(*conditions)
+        .order_by(LoanApplication.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    apps = result.scalars().all()
+    return LoanApplicationListResponse(
+        items=[
+            LoanApplicationSummaryDTO.model_validate(app) for app in apps
+        ],
+        total=total,
+    )
+
+
+@router.get(
+    "/{application_id}",
+    response_model=LoanApplicationDTO,
+    summary="Get a loan application by id",
+)
+async def get_loan_application(
+    application_id: UUID,
+    current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_VIEW_OWN)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanApplicationDTO:
+    membership = await _get_membership_or_404(db, ctx, current_user.id)
+    stmt = select(LoanApplication).where(
+        LoanApplication.id == application_id,
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.org_membership_id == membership.id,
+    )
+    result = await db.execute(stmt)
+    application = result.scalar_one_or_none()
+    if not application:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+    return LoanApplicationDTO.model_validate(application)
+
+
+@router.post(
+    "",
+    response_model=LoanApplicationDTO,
+    status_code=201,
+    summary="Create a draft loan application",
+)
+async def create_loan_application(
+    payload: LoanApplicationDraftCreate,
+    current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_APPLY)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> LoanApplicationDTO:
+    membership = await _get_membership_or_404(db, ctx, current_user.id)
+    try:
+        application = await loan_applications.create_draft_application(
+            db,
+            ctx,
+            membership,
+            payload,
+            actor_id=current_user.id,
+            idempotency_key=idempotency_key,
+        )
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+    return LoanApplicationDTO.model_validate(application)
+
+
+@router.patch(
+    "/{application_id}",
+    response_model=LoanApplicationDTO,
+    summary="Update a draft loan application",
+)
+async def update_loan_application(
+    application_id: UUID,
+    payload: LoanApplicationDraftUpdate,
+    current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_APPLY)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanApplicationDTO:
+    membership = await _get_membership_or_404(db, ctx, current_user.id)
+    stmt = select(LoanApplication).where(
+        LoanApplication.id == application_id,
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.org_membership_id == membership.id,
+    )
+    result = await db.execute(stmt)
+    application = result.scalar_one_or_none()
+    if not application:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+    try:
+        updated = await loan_applications.update_draft_application(
+            db,
+            ctx,
+            membership,
+            application,
+            payload,
+            actor_id=current_user.id,
+        )
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+    except StaleDataError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "concurrent_update",
+                "message": "The loan application was updated by another request. Please refresh and retry.",
+                "details": {},
+            },
+        ) from exc
+    return LoanApplicationDTO.model_validate(updated)
+
+
+@router.post(
+    "/{application_id}/submit",
+    response_model=LoanApplicationDTO,
+    summary="Submit a draft loan application",
+)
+async def submit_loan_application(
+    application_id: UUID,
+    current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_APPLY)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> LoanApplicationDTO:
+    membership = await _get_membership_or_404(db, ctx, current_user.id)
+    stmt = select(LoanApplication).where(
+        LoanApplication.id == application_id,
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.org_membership_id == membership.id,
+    )
+    result = await db.execute(stmt)
+    application = result.scalar_one_or_none()
+    if not application:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+    try:
+        submitted = await loan_applications.submit_application(
+            db,
+            ctx,
+            membership,
+            application,
+            current_user,
+            actor_id=current_user.id,
+            idempotency_key=idempotency_key,
+        )
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+    except StaleDataError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "concurrent_update",
+                "message": "The loan application was updated by another request. Please refresh and retry.",
+                "details": {},
+            },
+        ) from exc
+    return LoanApplicationDTO.model_validate(submitted)
+
+
+@router.post(
+    "/{application_id}/cancel",
+    response_model=LoanApplicationDTO,
+    summary="Cancel a draft loan application",
+)
+async def cancel_loan_application(
+    application_id: UUID,
+    current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_APPLY)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanApplicationDTO:
+    membership = await _get_membership_or_404(db, ctx, current_user.id)
+    stmt = select(LoanApplication).where(
+        LoanApplication.id == application_id,
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.org_membership_id == membership.id,
+    )
+    result = await db.execute(stmt)
+    application = result.scalar_one_or_none()
+    if not application:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+    try:
+        cancelled = await loan_applications.cancel_draft_application(
+            db, ctx, application, actor_id=current_user.id
+        )
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+    except StaleDataError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "concurrent_update",
+                "message": "The loan application was updated by another request. Please refresh and retry.",
+                "details": {},
+            },
+        ) from exc
+    return LoanApplicationDTO.model_validate(cancelled)

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.models.audit_log import AuditLog
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.org_membership import OrgMembership
 from app.models.org_settings import OrgSettings
@@ -17,6 +18,7 @@ from app.schemas.loan import (
     LoanQuoteRequest,
     LoanQuoteResponse,
     LoanSelectionMode,
+    LoanShareAllocation,
 )
 from app.schemas.settings import LoanInterestType, LoanRepaymentMethod
 from app.services import eligibility, settings as settings_service, vesting_engine
@@ -33,6 +35,7 @@ class LoanQuoteError(ValueError):
 
 
 TWOPLACES = Decimal("0.01")
+ALLOCATION_STRATEGY_OLDEST = "OLDEST_VESTED_FIRST"
 
 
 def _as_decimal(value) -> Decimal:
@@ -90,22 +93,38 @@ def _loan_quote_option(
     )
 
 
-def _compute_purchase_price(
+def _allocate_shares_oldest_first(
     *,
     grant_summaries: Iterable[vesting_engine.GrantVestingSummary],
     shares_to_exercise: int,
-) -> Decimal:
+) -> tuple[Decimal, list[LoanShareAllocation]]:
     remaining = shares_to_exercise
     price = Decimal("0")
+    allocations: list[LoanShareAllocation] = []
     for summary in sorted(grant_summaries, key=lambda item: item.grant_date):
         if remaining <= 0:
             break
         if summary.vested_shares <= 0:
             continue
         take = min(summary.vested_shares, remaining)
-        price += _as_decimal(summary.exercise_price) * Decimal(take)
+        if take <= 0:
+            continue
+        exercise_price = _as_decimal(summary.exercise_price)
+        purchase_price = (exercise_price * Decimal(take)).quantize(
+            TWOPLACES, rounding=ROUND_HALF_UP
+        )
+        allocations.append(
+            LoanShareAllocation(
+                grant_id=summary.grant_id,
+                grant_date=summary.grant_date,
+                shares=int(take),
+                exercise_price=exercise_price.quantize(TWOPLACES, rounding=ROUND_HALF_UP),
+                purchase_price=purchase_price,
+            )
+        )
+        price += purchase_price
         remaining -= take
-    return price
+    return price, allocations
 
 
 def _resolve_shares_to_exercise(
@@ -119,14 +138,18 @@ def _resolve_shares_to_exercise(
         raise LoanQuoteError(
             code="no_exercisable_shares",
             message="No exercisable shares are available",
-            details={"total_exercisable_shares": total_exercisable_shares},
+            details={"field": "selection_value", "total_exercisable_shares": total_exercisable_shares},
         )
     if selection_mode == LoanSelectionMode.PERCENT:
         if selection_value <= 0 or selection_value > 100:
             raise LoanQuoteError(
                 code="invalid_selection",
                 message="Selection percent must be between 0 and 100",
-                details={"selection_value": str(selection_value)},
+                details={
+                    "field": "selection_value",
+                    "constraint": "0 < value <= 100",
+                    "selection_value": str(selection_value),
+                },
             )
         shares = int(
             (Decimal(total_exercisable_shares) * selection_value / Decimal("100")).to_integral_value(
@@ -138,26 +161,42 @@ def _resolve_shares_to_exercise(
             raise LoanQuoteError(
                 code="invalid_selection",
                 message="Selection shares must be greater than zero",
-                details={"selection_value": str(selection_value)},
+                details={
+                    "field": "selection_value",
+                    "constraint": "value > 0",
+                    "selection_value": str(selection_value),
+                },
             )
         if selection_value != selection_value.to_integral_value():
             raise LoanQuoteError(
                 code="invalid_selection",
                 message="Selection shares must be a whole number",
-                details={"selection_value": str(selection_value)},
+                details={
+                    "field": "selection_value",
+                    "constraint": "integer",
+                    "selection_value": str(selection_value),
+                },
             )
         shares = int(selection_value)
     if shares <= 0:
         raise LoanQuoteError(
             code="invalid_selection",
             message="Selection results in zero exercisable shares",
-            details={"selection_value": str(selection_value)},
+            details={
+                "field": "selection_value",
+                "constraint": "results_in_positive_shares",
+                "selection_value": str(selection_value),
+            },
         )
     if shares > total_exercisable_shares:
         raise LoanQuoteError(
             code="shares_exceed_eligibility",
             message="Requested shares exceed exercisable shares",
-            details={"requested_shares": shares, "total_exercisable_shares": total_exercisable_shares},
+            details={
+                "field": "selection_value",
+                "requested_shares": shares,
+                "total_exercisable_shares": total_exercisable_shares,
+            },
         )
     return shares
 
@@ -202,7 +241,7 @@ def build_loan_quote_from_data(
     )
 
     grant_summaries = vesting_engine.build_grant_summaries(grants, as_of_date)
-    purchase_price = _compute_purchase_price(
+    purchase_price, allocation = _allocate_shares_oldest_first(
         grant_summaries=grant_summaries, shares_to_exercise=shares_to_exercise
     )
 
@@ -222,13 +261,19 @@ def build_loan_quote_from_data(
         raise LoanQuoteError(
             code="interest_type_not_allowed",
             message="Desired interest type is not allowed by org policy",
-            details={"allowed_interest_types": [item.value for item in allowed_interest_types]},
+            details={
+                "field": "desired_interest_type",
+                "allowed_interest_types": [item.value for item in allowed_interest_types],
+            },
         )
     if desired_repayment_method and desired_repayment_method not in allowed_repayment_methods:
         raise LoanQuoteError(
             code="repayment_method_not_allowed",
             message="Desired repayment method is not allowed by org policy",
-            details={"allowed_repayment_methods": [item.value for item in allowed_repayment_methods]},
+            details={
+                "field": "desired_repayment_method",
+                "allowed_repayment_methods": [item.value for item in allowed_repayment_methods],
+            },
         )
 
     min_term = int(org_settings.min_loan_term_months or 0)
@@ -238,7 +283,11 @@ def build_loan_quote_from_data(
         raise LoanQuoteError(
             code="invalid_term",
             message="Loan term is outside of org policy bounds",
-            details={"min_loan_term_months": min_term, "max_loan_term_months": max_term},
+            details={
+                "field": "desired_term_months",
+                "min_loan_term_months": min_term,
+                "max_loan_term_months": max_term,
+            },
         )
 
     interest_types = [desired_interest_type] if desired_interest_type else allowed_interest_types
@@ -289,7 +338,31 @@ def build_loan_quote_from_data(
         loan_principal=loan_principal,
         options=options,
         eligibility_result=eligibility_result,
+        allocation_strategy=ALLOCATION_STRATEGY_OLDEST,
+        allocation=allocation,
     )
+
+
+async def record_quote_audit(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    *,
+    actor_id,
+    membership: OrgMembership,
+    request: LoanQuoteRequest,
+    quote: LoanQuoteResponse,
+) -> None:
+    entry = AuditLog(
+        org_id=ctx.org_id,
+        actor_id=actor_id,
+        action="loan_quote.requested",
+        resource_type="loan_quote",
+        resource_id=str(membership.id),
+        old_value={"request": request.model_dump(mode="json")},
+        new_value={"quote": quote.model_dump(mode="json")},
+    )
+    db.add(entry)
+    await db.commit()
 
 
 async def calculate_loan_quote(

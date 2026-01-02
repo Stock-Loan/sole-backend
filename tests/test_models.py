@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.journal_entry import JournalEntry
 from app.models.types import EncryptedString
 from app.models.user import User
+from app.models.loan_application import LoanApplication
 from app.models.vesting_event import VestingEvent
 
 
@@ -63,3 +64,11 @@ def test_user_unique_constraint() -> None:
 def test_vesting_event_unique_constraint() -> None:
     constraints = [c for c in VestingEvent.__table__.constraints if hasattr(c, "name")]
     assert any(getattr(c, "name", "") == "uq_vesting_events_grant_date" for c in constraints)
+
+
+def test_loan_application_constraints_present() -> None:
+    constraints = [c for c in LoanApplication.__table__.constraints if hasattr(c, "name")]
+    names = {getattr(c, "name", "") for c in constraints}
+    assert "ck_loan_app_shares_nonneg" in names
+    assert "ck_loan_app_status" in names
+    assert "ck_loan_app_selection_mode" in names

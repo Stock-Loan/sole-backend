@@ -16,6 +16,7 @@ from app.core.security import get_password_hash
 from app.services.authz import assign_default_employee_role
 from app.models.org_membership import OrgMembership
 from app.models.user import User
+from app.schemas.common import normalize_marital_status
 from app.schemas.onboarding import (
     BulkOnboardingResult,
     BulkOnboardingRowError,
@@ -158,7 +159,7 @@ def _normalize_payload(payload: OnboardingUserCreate) -> OnboardingUserCreate:
         preferred_name=_normalize_text(payload.preferred_name, title=True),
         timezone=_normalize_text(payload.timezone),
         phone_number=_normalize_text(payload.phone_number),
-        marital_status=_normalize_text(payload.marital_status, upper=True),
+        marital_status=normalize_marital_status(payload.marital_status),
         country=_normalize_text(payload.country, upper=True),
         state=_normalize_text(payload.state, upper=True),
         address_line1=_normalize_text(payload.address_line1),
