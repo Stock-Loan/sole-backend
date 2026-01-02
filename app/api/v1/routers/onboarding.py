@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func, or_, delete
+from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,10 +90,6 @@ async def bulk_onboard(
 async def list_users(
     page: int = 1,
     page_size: int = 20,
-    search: str | None = None,
-    employment_status: str | None = None,
-    platform_status: str | None = None,
-    role_id: str | None = None,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     _: User = Depends(deps.require_permission(PermissionCode.USER_VIEW)),
     db: AsyncSession = Depends(get_db),
@@ -105,31 +101,13 @@ async def list_users(
     offset = (page - 1) * page_size
 
     filters = [OrgMembership.org_id == ctx.org_id]
-    if search:
-        pattern = f"%{search.strip()}%"
-        filters.append(
-            or_(
-                UserModel.full_name.ilike(pattern),
-                UserModel.preferred_name.ilike(pattern),
-                UserModel.email.ilike(pattern),
-            )
-        )
-    if employment_status:
-        filters.append(OrgMembership.employment_status.ilike(employment_status.strip()))
-    if platform_status:
-        filters.append(OrgMembership.platform_status.ilike(platform_status.strip()))
-    
+
     base_stmt = (
         select(OrgMembership, UserModel, Department)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .join(Department, OrgMembership.department_id == Department.id, isouter=True)
         .where(*filters)
-        .order_by(UserModel.created_at)
     )
-    if role_id:
-        base_stmt = base_stmt.join(UserRole, UserRole.user_id == UserModel.id).where(
-            UserRole.role_id == role_id, UserRole.org_id == ctx.org_id
-        )
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     count_result = await db.execute(count_stmt)
     total = count_result.scalar_one()

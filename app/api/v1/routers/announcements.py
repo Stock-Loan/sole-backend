@@ -15,8 +15,6 @@ from app.schemas.announcements import (
     AnnouncementListResponse,
     AnnouncementOut,
     AnnouncementUpdate,
-    ALLOWED_STATUSES,
-    ALLOWED_TYPES,
 )
 from app.services import announcements as announcement_service
 from app.services import authz
@@ -40,40 +38,17 @@ async def _get_announcement_or_404(
 
 @router.get("", response_model=AnnouncementListResponse, summary="List announcements")
 async def list_announcements(
-    status_filter: str | None = Query(None, description="Filter by status (requires manage permission unless PUBLISHED)"),
-    type_filter: str | None = Query(None, description="Filter by type"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    _: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementListResponse:
-    has_manage = await authz.check_permission(current_user, ctx, PermissionCode.ANNOUNCEMENT_MANAGE, db)
-
     filters = [Announcement.org_id == ctx.org_id]
-    # Default bell/consumer view: published only, even for admins
-    default_status = "PUBLISHED"
-
-    if status_filter:
-        normalized = status_filter.strip().upper()
-        if normalized not in ALLOWED_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status filter")
-        if not has_manage:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Missing permission: announcement.manage",
-            )
-        filters.append(Announcement.status == normalized)
-    else:
-        filters.append(Announcement.status == default_status)
-    if type_filter:
-        normalized_type = type_filter.strip().upper()
-        if normalized_type not in ALLOWED_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid type filter")
-        filters.append(Announcement.type == normalized_type)
+    filters.append(Announcement.status == "PUBLISHED")
 
     offset = (page - 1) * page_size
-    base_stmt = select(Announcement).where(*filters).order_by(Announcement.created_at.desc())
+    base_stmt = select(Announcement).where(*filters)
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
 
@@ -89,8 +64,6 @@ async def list_announcements(
 
 @router.get("/admin", response_model=AnnouncementListResponse, summary="Admin list of announcements (all statuses)")
 async def list_admin_announcements(
-    status_filter: str | None = Query(None, description="Filter by status"),
-    type_filter: str | None = Query(None, description="Filter by type"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -98,19 +71,9 @@ async def list_admin_announcements(
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementListResponse:
     filters = [Announcement.org_id == ctx.org_id]
-    if status_filter:
-        normalized = status_filter.strip().upper()
-        if normalized not in ALLOWED_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status filter")
-        filters.append(Announcement.status == normalized)
-    if type_filter:
-        normalized_type = type_filter.strip().upper()
-        if normalized_type not in ALLOWED_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid type filter")
-        filters.append(Announcement.type == normalized_type)
 
     offset = (page - 1) * page_size
-    base_stmt = select(Announcement).where(*filters).order_by(Announcement.created_at.desc())
+    base_stmt = select(Announcement).where(*filters)
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
 
@@ -145,7 +108,6 @@ async def list_unread_announcements(
             Announcement.status == "PUBLISHED",
             unread_filter,
         )
-        .order_by(Announcement.created_at.desc())
     )
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()

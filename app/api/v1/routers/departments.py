@@ -29,16 +29,13 @@ router = APIRouter(prefix="/departments", tags=["departments"])
 async def list_departments(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    include_archived: bool = False,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     _: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_VIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> DepartmentListResponse:
     offset = (page - 1) * page_size
     filters = [Department.org_id == ctx.org_id]
-    if not include_archived:
-        filters.append(Department.is_archived.is_(False))
-    base = select(Department).where(*filters).order_by(Department.name)
+    base = select(Department).where(*filters)
     count_stmt = select(func.count()).select_from(Department).where(*filters)
     total = (await db.execute(count_stmt)).scalar_one()
 

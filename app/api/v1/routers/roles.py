@@ -1,8 +1,8 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, delete
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select, delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,14 +22,19 @@ logger = logging.getLogger(__name__)
 
 @router.get("", response_model=RoleListResponse, summary="List roles for current org")
 async def list_roles(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     _: User = Depends(deps.require_permission(PermissionCode.ROLE_VIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> RoleListResponse:
-    stmt = select(Role).where(Role.org_id == ctx.org_id).order_by(Role.name)
-    result = await db.execute(stmt)
+    offset = (page - 1) * page_size
+    stmt = select(Role).where(Role.org_id == ctx.org_id)
+    count_stmt = select(func.count()).select_from(Role).where(Role.org_id == ctx.org_id)
+    total = (await db.execute(count_stmt)).scalar_one()
+    result = await db.execute(stmt.offset(offset).limit(page_size))
     roles = result.scalars().all()
-    return RoleListResponse(items=roles)
+    return RoleListResponse(items=roles, total=total)
 
 
 @router.post("", response_model=RoleOut, status_code=201, summary="Create a custom role")

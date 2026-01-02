@@ -61,6 +61,7 @@ class RoleOut(BaseModel):
 
 class RoleListResponse(BaseModel):
     items: list[RoleOut]
+    total: int
 
 
 class RoleAssignmentRequest(BaseModel):
