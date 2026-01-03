@@ -4,7 +4,7 @@ from datetime import date
 from typing import Iterable
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -61,6 +61,11 @@ def _build_vesting_events(
     # Scheduled vesting requires explicit events
     if not events:
         raise ValueError("Scheduled vesting requires vesting_events")
+    seen_dates = set()
+    for event in events:
+        if event.vest_date in seen_dates:
+            raise ValueError("Vesting events cannot share the same vest_date")
+        seen_dates.add(event.vest_date)
     if any(event.vest_date < grant_date for event in events):
         raise ValueError("Vesting events cannot occur before grant_date")
     total_event_shares = _sum_event_shares(events)
@@ -234,22 +239,32 @@ async def get_membership(
 
 
 async def list_grants(
-    db: AsyncSession, ctx: deps.TenantContext, membership_id: UUID
-) -> list[EmployeeStockGrant]:
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    membership_id: UUID,
+    *,
+    offset: int = 0,
+    limit: int = 20,
+) -> tuple[list[EmployeeStockGrant], int]:
+    filters = [
+        EmployeeStockGrant.org_id == ctx.org_id,
+        EmployeeStockGrant.org_membership_id == membership_id,
+    ]
+    count_stmt = select(func.count()).select_from(EmployeeStockGrant).where(*filters)
+    total = (await db.execute(count_stmt)).scalar_one()
     stmt = (
         select(EmployeeStockGrant)
         .options(selectinload(EmployeeStockGrant.vesting_events))
-        .where(
-            EmployeeStockGrant.org_id == ctx.org_id,
-            EmployeeStockGrant.org_membership_id == membership_id,
-        )
+        .where(*filters)
         .order_by(EmployeeStockGrant.grant_date.desc())
+        .offset(offset)
+        .limit(limit)
     )
     result = await db.execute(stmt)
     grants = result.scalars().all()
     for grant in grants:
         _apply_vesting_summary(grant)
-    return grants
+    return grants, total
 
 
 async def get_grant(
@@ -312,7 +327,7 @@ async def create_grant(
 
     db.add(grant)
     await db.commit()
-    await db.refresh(grant)
+    await db.refresh(grant, attribute_names=["vesting_events"])
     _apply_vesting_summary(grant)
     await _record_audit_log(
         db,
@@ -353,6 +368,9 @@ async def update_grant(
             updated_total_shares,
             payload.vesting_events,
         )
+        # Clear existing events first to avoid unique constraint collisions on (grant_id, vest_date)
+        grant.vesting_events = []
+        await db.flush()
         grant.vesting_events = [
             VestingEvent(
                 org_id=ctx.org_id,
