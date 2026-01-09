@@ -131,10 +131,31 @@ async def check_permission(
     return target in permission_set
 
 
+EMPLOYEE_DEFAULT_PERMISSIONS = PermissionCode.normalize(
+    [
+        PermissionCode.ORG_DASHBOARD_VIEW,
+        PermissionCode.STOCK_SELF_VIEW,
+        PermissionCode.LOAN_APPLY,
+        PermissionCode.LOAN_VIEW_OWN,
+        PermissionCode.LOAN_CANCEL_OWN,
+        PermissionCode.LOAN_DOCUMENT_SELF_VIEW,
+        PermissionCode.LOAN_DOCUMENT_SELF_UPLOAD_83B,
+        PermissionCode.LOAN_SCHEDULE_SELF_VIEW,
+        PermissionCode.LOAN_WHAT_IF_SELF_SIMULATE,
+        PermissionCode.LOAN_EXPORT_SELF,
+    ]
+)
+
+
+def _org_admin_permissions() -> list[str]:
+    employee_set = set(EMPLOYEE_DEFAULT_PERMISSIONS)
+    return [perm for perm in PermissionCode.list_all() if perm not in employee_set]
+
+
 SYSTEM_ROLE_DEFINITIONS = {
     "ORG_ADMIN": {
         "description": "Full control within the organization",
-        "permissions": PermissionCode.list_all(),
+        "permissions": _org_admin_permissions(),
     },
     "HR": {
         "description": "HR role with user management and HR loan workflow permissions",
@@ -149,6 +170,7 @@ SYSTEM_ROLE_DEFINITIONS = {
                 PermissionCode.STOCK_VIEW,
                 PermissionCode.STOCK_VESTING_VIEW,
                 PermissionCode.STOCK_ELIGIBILITY_VIEW,
+                PermissionCode.STOCK_DASHBOARD_VIEW,
                 PermissionCode.ANNOUNCEMENT_VIEW,
                 PermissionCode.ANNOUNCEMENT_MANAGE,
                 PermissionCode.PERMISSION_CATALOG_VIEW,
@@ -197,22 +219,7 @@ SYSTEM_ROLE_DEFINITIONS = {
     },
     "EMPLOYEE": {
         "description": "Base employee role with self-service access",
-        "permissions": PermissionCode.normalize(
-            [
-                PermissionCode.ORG_DASHBOARD_VIEW,
-                PermissionCode.STOCK_VESTING_VIEW,
-                PermissionCode.STOCK_SELF_VIEW,
-                PermissionCode.STOCK_DASHBOARD_VIEW,
-                PermissionCode.LOAN_APPLY,
-                PermissionCode.LOAN_VIEW_OWN,
-                PermissionCode.LOAN_CANCEL_OWN,
-                PermissionCode.LOAN_DOCUMENT_SELF_VIEW,
-                PermissionCode.LOAN_DOCUMENT_SELF_UPLOAD_83B,
-                PermissionCode.LOAN_SCHEDULE_SELF_VIEW,
-                PermissionCode.LOAN_WHAT_IF_SELF_SIMULATE,
-                PermissionCode.LOAN_EXPORT_SELF,
-            ]
-        ),
+        "permissions": EMPLOYEE_DEFAULT_PERMISSIONS,
     },
 }
 
@@ -267,6 +274,9 @@ async def ensure_org_admin_for_seed_user(db: AsyncSession, seed_user_id, org_ids
         admin_role = roles.get("ORG_ADMIN")
         if admin_role:
             await ensure_user_in_role(db, org_id, seed_user_id, admin_role)
+        employee_role = roles.get("EMPLOYEE")
+        if employee_role:
+            await ensure_user_in_role(db, org_id, seed_user_id, employee_role)
 
 
 async def assign_default_employee_role(

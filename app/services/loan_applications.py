@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.models.audit_log import AuditLog
@@ -12,6 +13,7 @@ from app.models.loan_application import LoanApplication
 from app.models.org_membership import OrgMembership
 from app.models.org_settings import OrgSettings
 from app.models.user import User
+from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.schemas.common import MaritalStatus, normalize_marital_status
 from app.schemas.loan import (
     LoanApplicationDraftCreate,
@@ -60,6 +62,8 @@ def _application_snapshot(application: LoanApplication) -> dict:
         "org_id": application.org_id,
         "org_membership_id": str(application.org_membership_id),
         "status": application.status,
+        "activation_date": _serialize_snapshot_value(application.activation_date),
+        "election_83b_due_date": _serialize_snapshot_value(application.election_83b_due_date),
         "version": application.version,
         "as_of_date": _serialize_snapshot_value(application.as_of_date),
         "selection_mode": application.selection_mode,
@@ -171,6 +175,38 @@ def _missing_spouse_fields(application: LoanApplication) -> list[str]:
     return missing
 
 
+CORE_WORKFLOW_STAGES: list[tuple[str, str]] = [
+    ("HR_REVIEW", "HR"),
+    ("FINANCE_PROCESSING", "FINANCE"),
+    ("LEGAL_EXECUTION", "LEGAL"),
+]
+
+
+async def _ensure_core_workflow_stages(
+    db: AsyncSession, ctx: deps.TenantContext, application: LoanApplication
+) -> None:
+    if not application.id:
+        return
+    stmt = select(LoanWorkflowStage).where(
+        LoanWorkflowStage.org_id == ctx.org_id,
+        LoanWorkflowStage.loan_application_id == application.id,
+    )
+    result = await db.execute(stmt)
+    existing = {stage.stage_type for stage in result.scalars().all()}
+    for stage_type, role_hint in CORE_WORKFLOW_STAGES:
+        if stage_type in existing:
+            continue
+        db.add(
+            LoanWorkflowStage(
+                org_id=ctx.org_id,
+                loan_application_id=application.id,
+                stage_type=stage_type,
+                status="PENDING",
+                assigned_role_hint=role_hint,
+            )
+        )
+
+
 def _selection_value_from_application(application: LoanApplication) -> Decimal:
     mode = LoanSelectionMode(application.selection_mode)
     if mode == LoanSelectionMode.SHARES:
@@ -227,6 +263,30 @@ async def get_membership_for_user(
     stmt = select(OrgMembership).where(
         OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == user_id
     )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_application_with_related(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    application_id,
+    *,
+    membership_id=None,
+) -> LoanApplication | None:
+    stmt = (
+        select(LoanApplication)
+        .options(
+            selectinload(LoanApplication.workflow_stages),
+            selectinload(LoanApplication.documents),
+        )
+        .where(
+            LoanApplication.org_id == ctx.org_id,
+            LoanApplication.id == application_id,
+        )
+    )
+    if membership_id is not None:
+        stmt = stmt.where(LoanApplication.org_membership_id == membership_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -404,6 +464,9 @@ async def submit_application(
             and application.status == LoanApplicationStatus.SUBMITTED.value
             and application.submit_idempotency_key == idempotency_key
         ):
+            await _ensure_core_workflow_stages(db, ctx, application)
+            await db.commit()
+            await db.refresh(application)
             return application
         raise loan_quotes.LoanQuoteError(
             code="invalid_status",
@@ -471,6 +534,7 @@ async def submit_application(
         application.submit_idempotency_key = idempotency_key
 
     db.add(application)
+    await _ensure_core_workflow_stages(db, ctx, application)
     _record_audit_log(
         db=db,
         ctx=ctx,

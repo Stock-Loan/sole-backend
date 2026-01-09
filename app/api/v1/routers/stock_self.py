@@ -9,8 +9,8 @@ from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.org_membership import OrgMembership
 from app.models.user import User
-from app.schemas.stock import StockSummaryResponse
-from app.services import stock_summary
+from app.schemas.stock import StockGrantListResponse, StockSummaryResponse
+from app.services import stock_grants, stock_summary
 
 router = APIRouter(prefix="/me", tags=["stock-self"])
 
@@ -40,3 +40,30 @@ async def get_my_stock_summary(
         membership.id,
         as_of or date.today(),
     )
+
+
+@router.get(
+    "/stock/grants",
+    response_model=StockGrantListResponse,
+    summary="List stock grants for the current user",
+)
+async def list_my_stock_grants(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(deps.require_permission(PermissionCode.STOCK_SELF_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> StockGrantListResponse:
+    stmt = select(OrgMembership).where(
+        OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == current_user.id
+    )
+    result = await db.execute(stmt)
+    membership = result.scalar_one_or_none()
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+
+    offset = (page - 1) * page_size
+    grants, total = await stock_grants.list_grants(
+        db, ctx, membership.id, offset=offset, limit=page_size
+    )
+    return StockGrantListResponse(items=grants, total=total)

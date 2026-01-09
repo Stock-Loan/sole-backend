@@ -19,6 +19,36 @@ class LoanApplicationStatus(str, Enum):
     DRAFT = "DRAFT"
     SUBMITTED = "SUBMITTED"
     CANCELLED = "CANCELLED"
+    IN_REVIEW = "IN_REVIEW"
+    ACTIVE = "ACTIVE"
+    REJECTED = "REJECTED"
+
+
+class LoanWorkflowStageType(str, Enum):
+    HR_REVIEW = "HR_REVIEW"
+    FINANCE_PROCESSING = "FINANCE_PROCESSING"
+    LEGAL_EXECUTION = "LEGAL_EXECUTION"
+    LEGAL_POST_ISSUANCE = "LEGAL_POST_ISSUANCE"
+    BORROWER_83B_ELECTION = "BORROWER_83B_ELECTION"
+
+
+class LoanWorkflowStageStatus(str, Enum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+
+
+class LoanDocumentType(str, Enum):
+    NOTICE_OF_STOCK_OPTION_GRANT = "NOTICE_OF_STOCK_OPTION_GRANT"
+    PAYMENT_INSTRUCTIONS = "PAYMENT_INSTRUCTIONS"
+    PAYMENT_CONFIRMATION = "PAYMENT_CONFIRMATION"
+    STOCK_OPTION_EXERCISE_AND_LOAN_AGREEMENT = "STOCK_OPTION_EXERCISE_AND_LOAN_AGREEMENT"
+    SECURED_PROMISSORY_NOTE = "SECURED_PROMISSORY_NOTE"
+    SPOUSE_PARTNER_CONSENT = "SPOUSE_PARTNER_CONSENT"
+    STOCK_POWER_AND_ASSIGNMENT = "STOCK_POWER_AND_ASSIGNMENT"
+    INVESTMENT_REPRESENTATION_STATEMENT = "INVESTMENT_REPRESENTATION_STATEMENT"
+    SHARE_CERTIFICATE = "SHARE_CERTIFICATE"
+    SECTION_83B_ELECTION = "SECTION_83B_ELECTION"
 
 
 class LoanQuoteRequest(BaseModel):
@@ -187,6 +217,8 @@ class LoanApplicationDTO(BaseModel):
     org_id: str
     org_membership_id: UUID
     status: LoanApplicationStatus
+    activation_date: datetime | None = None
+    election_83b_due_date: date | None = None
     version: int
     as_of_date: date
     selection_mode: LoanSelectionMode
@@ -216,6 +248,8 @@ class LoanApplicationDTO(BaseModel):
     spouse_email: EmailStr | None = None
     spouse_phone: str | None = None
     spouse_address: str | None = None
+    workflow_stages: list["LoanWorkflowStageDTO"] | None = None
+    documents: list["LoanDocumentDTO"] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -223,3 +257,37 @@ class LoanApplicationDTO(BaseModel):
 class LoanApplicationListResponse(BaseModel):
     items: list[LoanApplicationSummaryDTO]
     total: int
+
+
+class LoanWorkflowStageDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+    id: UUID
+    org_id: str
+    loan_application_id: UUID
+    stage_type: LoanWorkflowStageType
+    status: LoanWorkflowStageStatus
+    assigned_role_hint: str | None = None
+    completed_by_user_id: UUID | None = None
+    completed_at: datetime | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class LoanDocumentDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+    id: UUID
+    org_id: str
+    loan_application_id: UUID
+    stage_type: LoanWorkflowStageType
+    document_type: LoanDocumentType
+    file_name: str
+    storage_path_or_url: str
+    uploaded_by_user_id: UUID | None = None
+    uploaded_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+LoanApplicationDTO.model_rebuild()

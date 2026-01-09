@@ -17,14 +17,20 @@ from app.api import deps
 from app.db.session import get_db
 from app.main import app
 from app.models.loan_application import LoanApplication
+from app.models.loan_document import LoanDocument
+from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.org_membership import OrgMembership
 from app.models.user import User
 from app.schemas.loan import (
+    LoanApplicationDTO,
     LoanApplicationDraftUpdate,
     LoanApplicationStatus,
+    LoanDocumentType,
     LoanQuoteOption,
     LoanQuoteResponse,
     LoanSelectionMode,
+    LoanWorkflowStageStatus,
+    LoanWorkflowStageType,
 )
 from app.schemas.settings import LoanInterestType, LoanRepaymentMethod
 from app.schemas.stock import EligibilityResult
@@ -48,10 +54,11 @@ class FakeResult:
 
 
 class FakeSession:
-    def __init__(self, membership=None, applications=None, application=None):
+    def __init__(self, membership=None, applications=None, application=None, stages=None):
         self.membership = membership
         self.applications = applications or []
         self.application = application
+        self.stages = stages or []
         self.added = []
 
     async def execute(self, stmt):
@@ -62,6 +69,8 @@ class FakeSession:
             if self.application is not None:
                 return FakeResult(scalar=self.application)
             return FakeResult(items=self.applications)
+        if entity is LoanWorkflowStage:
+            return FakeResult(items=self.stages)
         return FakeResult()
 
     def add(self, obj):
@@ -471,3 +480,202 @@ async def test_submit_single_employee_no_spouse_required(monkeypatch):
         FakeSession(), deps.TenantContext(org_id="default"), membership, application, user
     )
     assert submitted.status == LoanApplicationStatus.SUBMITTED.value
+
+
+def test_loan_application_serializes_workflow_and_documents():
+    application_id = uuid4()
+    membership_id = uuid4()
+    application = LoanApplication(
+        id=application_id,
+        org_id="default",
+        org_membership_id=membership_id,
+        status=LoanApplicationStatus.DRAFT.value,
+        as_of_date=date(2025, 12, 31),
+        selection_mode="SHARES",
+        selection_value_snapshot=Decimal("10"),
+        shares_to_exercise=10,
+        total_exercisable_shares_snapshot=100,
+        purchase_price=Decimal("12.50"),
+        down_payment_amount=Decimal("0"),
+        loan_principal=Decimal("12.50"),
+        interest_type="FIXED",
+        repayment_method="INTEREST_ONLY",
+        term_months=12,
+        nominal_annual_rate_percent=Decimal("8.5"),
+        estimated_monthly_payment=Decimal("0.09"),
+        total_payable_amount=Decimal("13.58"),
+        total_interest_amount=Decimal("1.08"),
+        org_settings_snapshot={},
+        eligibility_result_snapshot={},
+    )
+    stage = LoanWorkflowStage(
+        id=uuid4(),
+        org_id="default",
+        loan_application_id=application_id,
+        stage_type=LoanWorkflowStageType.HR_REVIEW.value,
+        status=LoanWorkflowStageStatus.PENDING.value,
+        assigned_role_hint="HR",
+    )
+    document = LoanDocument(
+        id=uuid4(),
+        org_id="default",
+        loan_application_id=application_id,
+        stage_type=LoanWorkflowStageType.HR_REVIEW.value,
+        document_type=LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT.value,
+        file_name="notice.pdf",
+        storage_path_or_url="s3://bucket/notice.pdf",
+    )
+    application.workflow_stages = [stage]
+    application.documents = [document]
+
+    dto = LoanApplicationDTO.model_validate(application)
+    assert dto.workflow_stages is not None
+    assert dto.documents is not None
+    assert dto.workflow_stages[0].stage_type == LoanWorkflowStageType.HR_REVIEW
+    assert dto.documents[0].document_type == LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT
+
+
+@pytest.mark.asyncio
+async def test_submit_creates_core_workflow_stages(monkeypatch):
+    user = DummyUser()
+    user.marital_status = "SINGLE"
+    membership = _membership(user)
+    application = LoanApplication(
+        id=uuid4(),
+        org_id="default",
+        org_membership_id=membership.id,
+        status=LoanApplicationStatus.DRAFT.value,
+        as_of_date=date(2025, 12, 31),
+        selection_mode="SHARES",
+        selection_value_snapshot=Decimal("10"),
+        shares_to_exercise=10,
+        total_exercisable_shares_snapshot=100,
+        purchase_price=Decimal("12.50"),
+        down_payment_amount=Decimal("0"),
+        loan_principal=Decimal("12.50"),
+        interest_type="FIXED",
+        repayment_method="INTEREST_ONLY",
+        term_months=12,
+        nominal_annual_rate_percent=Decimal("8.5"),
+        estimated_monthly_payment=Decimal("0.09"),
+        total_payable_amount=Decimal("13.58"),
+        total_interest_amount=Decimal("1.08"),
+        org_settings_snapshot={},
+        eligibility_result_snapshot={},
+        marital_status_snapshot="SINGLE",
+    )
+
+    async def _settings(*args, **kwargs):
+        return _org_settings()
+
+    async def _quote(*args, **kwargs):
+        return LoanQuoteResponse(
+            as_of_date=date(2025, 12, 31),
+            selection_mode=LoanSelectionMode.SHARES,
+            selection_value=Decimal("10"),
+            total_exercisable_shares=100,
+            shares_to_exercise=10,
+            purchase_price=Decimal("12.50"),
+            down_payment_amount=Decimal("0"),
+            loan_principal=Decimal("12.50"),
+            options=[
+                LoanQuoteOption(
+                    interest_type=LoanInterestType.FIXED,
+                    repayment_method=LoanRepaymentMethod.INTEREST_ONLY,
+                    term_months=12,
+                    nominal_annual_rate=Decimal("8.5"),
+                    estimated_monthly_payment=Decimal("0.09"),
+                    total_payable=Decimal("13.58"),
+                    total_interest=Decimal("1.08"),
+                )
+            ],
+            eligibility_result=EligibilityResult(
+                eligible_to_exercise=True,
+                total_granted_shares=100,
+                total_vested_shares=100,
+                total_unvested_shares=0,
+                reasons=[],
+            ),
+        )
+
+    monkeypatch.setattr(settings_service, "get_org_settings", _settings)
+    monkeypatch.setattr(loan_quotes, "calculate_loan_quote", _quote)
+
+    session = FakeSession(stages=[])
+    submitted = await loan_applications.submit_application(
+        session, deps.TenantContext(org_id="default"), membership, application, user
+    )
+    assert submitted.status == LoanApplicationStatus.SUBMITTED.value
+    stages_added = [obj for obj in session.added if isinstance(obj, LoanWorkflowStage)]
+    assert {stage.stage_type for stage in stages_added} == {
+        LoanWorkflowStageType.HR_REVIEW.value,
+        LoanWorkflowStageType.FINANCE_PROCESSING.value,
+        LoanWorkflowStageType.LEGAL_EXECUTION.value,
+    }
+
+
+@pytest.mark.asyncio
+async def test_submit_idempotent_does_not_duplicate_stages():
+    user = DummyUser()
+    membership = _membership(user)
+    application = LoanApplication(
+        id=uuid4(),
+        org_id="default",
+        org_membership_id=membership.id,
+        status=LoanApplicationStatus.SUBMITTED.value,
+        as_of_date=date(2025, 12, 31),
+        selection_mode="SHARES",
+        selection_value_snapshot=Decimal("10"),
+        shares_to_exercise=10,
+        total_exercisable_shares_snapshot=100,
+        purchase_price=Decimal("12.50"),
+        down_payment_amount=Decimal("0"),
+        loan_principal=Decimal("12.50"),
+        interest_type="FIXED",
+        repayment_method="INTEREST_ONLY",
+        term_months=12,
+        nominal_annual_rate_percent=Decimal("8.5"),
+        estimated_monthly_payment=Decimal("0.09"),
+        total_payable_amount=Decimal("13.58"),
+        total_interest_amount=Decimal("1.08"),
+        org_settings_snapshot={},
+        eligibility_result_snapshot={},
+    )
+    application.submit_idempotency_key = "same-key"
+
+    existing_stages = [
+        LoanWorkflowStage(
+            id=uuid4(),
+            org_id="default",
+            loan_application_id=application.id,
+            stage_type=LoanWorkflowStageType.HR_REVIEW.value,
+            status=LoanWorkflowStageStatus.PENDING.value,
+        ),
+        LoanWorkflowStage(
+            id=uuid4(),
+            org_id="default",
+            loan_application_id=application.id,
+            stage_type=LoanWorkflowStageType.FINANCE_PROCESSING.value,
+            status=LoanWorkflowStageStatus.PENDING.value,
+        ),
+        LoanWorkflowStage(
+            id=uuid4(),
+            org_id="default",
+            loan_application_id=application.id,
+            stage_type=LoanWorkflowStageType.LEGAL_EXECUTION.value,
+            status=LoanWorkflowStageStatus.PENDING.value,
+        ),
+    ]
+    session = FakeSession(stages=existing_stages)
+
+    result = await loan_applications.submit_application(
+        session,
+        deps.TenantContext(org_id="default"),
+        membership,
+        application,
+        user,
+        idempotency_key="same-key",
+    )
+    assert result.status == LoanApplicationStatus.SUBMITTED.value
+    stages_added = [obj for obj in session.added if isinstance(obj, LoanWorkflowStage)]
+    assert stages_added == []

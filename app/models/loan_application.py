@@ -13,6 +13,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
 
 from app.db.base import Base
 
@@ -39,7 +40,7 @@ class LoanApplication(Base):
         CheckConstraint("total_interest_amount >= 0", name="ck_loan_app_total_interest_nonneg"),
         CheckConstraint("version >= 1", name="ck_loan_app_version_positive"),
         CheckConstraint(
-            "status IN ('DRAFT', 'SUBMITTED', 'CANCELLED')",
+            "status IN ('DRAFT', 'SUBMITTED', 'CANCELLED', 'IN_REVIEW', 'ACTIVE', 'REJECTED')",
             name="ck_loan_app_status",
         ),
         CheckConstraint(
@@ -93,6 +94,8 @@ class LoanApplication(Base):
     allocation_snapshot = Column(JSONB, nullable=False, default=list)
     org_settings_snapshot = Column(JSONB, nullable=False, default=dict)
     eligibility_result_snapshot = Column(JSONB, nullable=False, default=dict)
+    activation_date = Column(DateTime(timezone=True), nullable=True)
+    election_83b_due_date = Column(Date, nullable=True)
     marital_status_snapshot = Column(String(50), nullable=True)
     spouse_first_name = Column(String(100), nullable=True)
     spouse_middle_name = Column(String(100), nullable=True)
@@ -109,3 +112,14 @@ class LoanApplication(Base):
     )
 
     __mapper_args__ = {"version_id_col": version}
+
+    workflow_stages = relationship(
+        "LoanWorkflowStage",
+        back_populates="loan_application",
+        cascade="all, delete-orphan",
+    )
+    documents = relationship(
+        "LoanDocument",
+        back_populates="loan_application",
+        cascade="all, delete-orphan",
+    )

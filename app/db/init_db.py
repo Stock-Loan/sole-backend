@@ -66,6 +66,11 @@ async def init_db() -> None:
                 org_ids = [settings.default_org_id] + [oid.strip() for oid in settings.extra_seed_org_ids.split(",") if oid.strip()]
                 await ensure_org_admin_for_seed_user(session, user.id, org_ids)
 
+        # Ensure admin also has EMPLOYEE role (everyone gets EMPLOYEE by default)
+        employee_role = roles.get("EMPLOYEE")
+        if employee_role and user:
+            await ensure_user_in_role(session, settings.default_org_id, user.id, employee_role)
+
         # Ensure admin has an org membership in the default org for permission checks
         mem_stmt = select(OrgMembership).where(
             OrgMembership.org_id == settings.default_org_id, OrgMembership.user_id == user.id

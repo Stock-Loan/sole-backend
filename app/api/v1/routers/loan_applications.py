@@ -91,13 +91,9 @@ async def get_loan_application(
     db: AsyncSession = Depends(get_db),
 ) -> LoanApplicationDTO:
     membership = await _get_membership_or_404(db, ctx, current_user.id)
-    stmt = select(LoanApplication).where(
-        LoanApplication.id == application_id,
-        LoanApplication.org_id == ctx.org_id,
-        LoanApplication.org_membership_id == membership.id,
+    application = await loan_applications.get_application_with_related(
+        db, ctx, application_id, membership_id=membership.id
     )
-    result = await db.execute(stmt)
-    application = result.scalar_one_or_none()
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
     return LoanApplicationDTO.model_validate(application)
@@ -131,7 +127,10 @@ async def create_loan_application(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": exc.code, "message": exc.message, "details": exc.details},
         ) from exc
-    return LoanApplicationDTO.model_validate(application)
+    hydrated = await loan_applications.get_application_with_related(
+        db, ctx, application.id, membership_id=membership.id
+    )
+    return LoanApplicationDTO.model_validate(hydrated or application)
 
 
 @router.patch(
@@ -179,7 +178,10 @@ async def update_loan_application(
                 "details": {},
             },
         ) from exc
-    return LoanApplicationDTO.model_validate(updated)
+    hydrated = await loan_applications.get_application_with_related(
+        db, ctx, updated.id, membership_id=membership.id
+    )
+    return LoanApplicationDTO.model_validate(hydrated or updated)
 
 
 @router.post(
@@ -228,7 +230,10 @@ async def submit_loan_application(
                 "details": {},
             },
         ) from exc
-    return LoanApplicationDTO.model_validate(submitted)
+    hydrated = await loan_applications.get_application_with_related(
+        db, ctx, submitted.id, membership_id=membership.id
+    )
+    return LoanApplicationDTO.model_validate(hydrated or submitted)
 
 
 @router.post(
@@ -270,4 +275,7 @@ async def cancel_loan_application(
                 "details": {},
             },
         ) from exc
-    return LoanApplicationDTO.model_validate(cancelled)
+    hydrated = await loan_applications.get_application_with_related(
+        db, ctx, cancelled.id, membership_id=membership.id
+    )
+    return LoanApplicationDTO.model_validate(hydrated or cancelled)
