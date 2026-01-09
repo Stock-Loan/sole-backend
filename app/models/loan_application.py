@@ -70,6 +70,7 @@ class LoanApplication(Base):
         index=True,
     )
     status = Column(String(30), nullable=False, default="DRAFT", index=True)
+    decision_reason = Column(String(500), nullable=True)
     version = Column(Integer, nullable=False, default=1)
     create_idempotency_key = Column(String(100), nullable=True)
     submit_idempotency_key = Column(String(100), nullable=True)

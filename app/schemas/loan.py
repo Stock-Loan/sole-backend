@@ -62,6 +62,10 @@ class LoanQuoteRequest(BaseModel):
     desired_term_months: int | None = Field(default=None, ge=1)
 
 
+class LoanWhatIfRequest(LoanQuoteRequest):
+    org_membership_id: UUID | None = None
+
+
 class LoanQuoteOption(BaseModel):
     model_config = ConfigDict(use_enum_values=True, json_encoders={Decimal: lambda value: str(value)})
 
@@ -217,6 +221,7 @@ class LoanApplicationDTO(BaseModel):
     org_id: str
     org_membership_id: UUID
     status: LoanApplicationStatus
+    decision_reason: str | None = None
     activation_date: datetime | None = None
     election_83b_due_date: date | None = None
     version: int
@@ -262,6 +267,43 @@ class LoanApplicationListResponse(BaseModel):
     total: int
 
 
+class LoanDashboardSummary(BaseModel):
+    org_id: str
+    as_of: date
+    total_loans: int
+    status_counts: dict[str, int]
+    open_stage_counts: dict[str, int]
+    created_last_30_days: int
+    activated_last_30_days: int
+
+
+class LoanScheduleEntry(BaseModel):
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
+    period: int
+    due_date: date | None
+    payment: Decimal
+    principal: Decimal
+    interest: Decimal
+    remaining_balance: Decimal
+
+
+class LoanScheduleResponse(BaseModel):
+    model_config = ConfigDict(
+        use_enum_values=True,
+        json_encoders={Decimal: lambda value: str(value)},
+    )
+
+    loan_id: UUID
+    as_of_date: date
+    repayment_method: LoanRepaymentMethod
+    term_months: int
+    principal: Decimal
+    annual_rate_percent: Decimal
+    estimated_monthly_payment: Decimal
+    entries: list[LoanScheduleEntry]
+
+
 class LoanWorkflowStageDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
@@ -296,6 +338,19 @@ class LoanDocumentDTO(BaseModel):
 LoanApplicationDTO.model_rebuild()
 
 
+class LoanDocumentGroup(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
+    stage_type: LoanWorkflowStageType
+    documents: list[LoanDocumentDTO]
+
+
+class LoanDocumentListResponse(BaseModel):
+    loan_id: UUID
+    total: int
+    groups: list[LoanDocumentGroup]
+
+
 class LoanWorkflowStageUpdateRequest(BaseModel):
     status: LoanWorkflowStageStatus
     notes: str | None = None
@@ -305,6 +360,11 @@ class LoanDocumentCreateRequest(BaseModel):
     document_type: LoanDocumentType
     file_name: str = Field(min_length=1)
     storage_path_or_url: str = Field(min_length=1)
+
+
+class LoanAdminUpdateRequest(BaseModel):
+    status: LoanApplicationStatus | None = None
+    decision_reason: str | None = None
 
 
 class LoanHRReviewResponse(BaseModel):

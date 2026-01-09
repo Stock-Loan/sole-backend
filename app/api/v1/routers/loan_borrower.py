@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,8 +14,18 @@ from app.db.session import get_db
 from app.models.loan_application import LoanApplication
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
-from app.schemas.loan import LoanDocumentCreateRequest, LoanDocumentDTO, LoanDocumentType, LoanWorkflowStageType
-from app.services import loan_applications
+from app.schemas.loan import (
+    LoanDocumentCreateRequest,
+    LoanDocumentDTO,
+    LoanDocumentGroup,
+    LoanDocumentListResponse,
+    LoanDocumentType,
+    LoanQuoteResponse,
+    LoanScheduleResponse,
+    LoanWhatIfRequest,
+    LoanWorkflowStageType,
+)
+from app.services import loan_applications, loan_exports, loan_quotes, loan_schedules
 
 
 router = APIRouter(prefix="/me/loans", tags=["loan-borrower"])
@@ -36,6 +47,139 @@ async def _get_application_or_404(
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
     return application
+
+
+@router.post(
+    "/what-if",
+    response_model=LoanQuoteResponse,
+    summary="Run self-service loan what-if simulation",
+)
+async def simulate_self_loan(
+    payload: LoanWhatIfRequest,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WHAT_IF_SELF_SIMULATE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanQuoteResponse:
+    if payload.org_membership_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "membership_not_allowed",
+                "message": "org_membership_id is not allowed for self-service simulations",
+                "details": {"field": "org_membership_id"},
+            },
+        )
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    try:
+        quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, payload)
+        await loan_quotes.record_quote_audit(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            membership=membership,
+            request=payload,
+            quote=quote,
+        )
+        return quote
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+
+
+@router.get(
+    "/{loan_id}/documents",
+    response_model=LoanDocumentListResponse,
+    summary="List borrower loan documents",
+)
+async def list_borrower_documents(
+    loan_id: UUID,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_SELF_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentListResponse:
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    await _get_application_or_404(db, ctx, loan_id, membership.id)
+
+    stmt = select(LoanDocument).where(
+        LoanDocument.org_id == ctx.org_id,
+        LoanDocument.loan_application_id == loan_id,
+    ).order_by(LoanDocument.uploaded_at.desc())
+    documents = (await db.execute(stmt)).scalars().all()
+
+    grouped: dict[str, list[LoanDocumentDTO]] = {}
+    for document in documents:
+        grouped.setdefault(document.stage_type, []).append(LoanDocumentDTO.model_validate(document))
+
+    groups = [
+        LoanDocumentGroup(stage_type=stage_type, documents=items)
+        for stage_type, items in sorted(grouped.items())
+    ]
+    return LoanDocumentListResponse(
+        loan_id=loan_id,
+        total=len(documents),
+        groups=groups,
+    )
+
+
+@router.get(
+    "/{loan_id}/schedule",
+    response_model=LoanScheduleResponse,
+    summary="Get borrower loan amortization schedule",
+)
+async def get_borrower_schedule(
+    loan_id: UUID,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_SCHEDULE_SELF_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanScheduleResponse:
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    application = await _get_application_or_404(db, ctx, loan_id, membership.id)
+    try:
+        return loan_schedules.build_schedule(application)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_schedule", "message": str(exc), "details": {}},
+        ) from exc
+
+
+@router.get(
+    "/{loan_id}/export",
+    response_class=StreamingResponse,
+    summary="Export borrower loan details as CSV",
+)
+async def export_borrower_loan(
+    loan_id: UUID,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_SELF)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    application = await _get_application_or_404(db, ctx, loan_id, membership.id)
+    try:
+        schedule = loan_schedules.build_schedule(application)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_schedule", "message": str(exc), "details": {}},
+        ) from exc
+    content = loan_exports.loan_export_to_csv(application, schedule)
+    filename = f"loan_export_{loan_id}.csv"
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(

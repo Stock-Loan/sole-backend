@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -62,6 +62,7 @@ def _application_snapshot(application: LoanApplication) -> dict:
         "org_id": application.org_id,
         "org_membership_id": str(application.org_membership_id),
         "status": application.status,
+        "decision_reason": application.decision_reason,
         "activation_date": _serialize_snapshot_value(application.activation_date),
         "election_83b_due_date": _serialize_snapshot_value(application.election_83b_due_date),
         "version": application.version,
@@ -281,6 +282,17 @@ async def get_membership_for_user(
     return result.scalar_one_or_none()
 
 
+async def get_membership_by_id(
+    db: AsyncSession, ctx: deps.TenantContext, membership_id
+) -> OrgMembership | None:
+    stmt = select(OrgMembership).where(
+        OrgMembership.org_id == ctx.org_id,
+        OrgMembership.id == membership_id,
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_application_with_related(
     db: AsyncSession,
     ctx: deps.TenantContext,
@@ -303,6 +315,137 @@ async def get_application_with_related(
         stmt = stmt.where(LoanApplication.org_membership_id == membership_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def list_admin_applications(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    *,
+    limit: int,
+    offset: int,
+    statuses: list[LoanApplicationStatus] | list[str] | None = None,
+    stage_type: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+) -> tuple[list[LoanApplication], int]:
+    if statuses:
+        statuses = _normalize_status_values(statuses)
+    stage_type = _normalize_stage_type(stage_type)
+    conditions = [LoanApplication.org_id == ctx.org_id]
+    if statuses:
+        conditions.append(LoanApplication.status.in_(statuses))
+    if created_from is not None:
+        conditions.append(LoanApplication.created_at >= created_from)
+    if created_to is not None:
+        conditions.append(LoanApplication.created_at <= created_to)
+
+    if stage_type:
+        conditions.extend(
+            [
+                LoanWorkflowStage.org_id == ctx.org_id,
+                LoanWorkflowStage.loan_application_id == LoanApplication.id,
+                LoanWorkflowStage.stage_type == stage_type,
+            ]
+        )
+        count_stmt = (
+            select(func.count(func.distinct(LoanApplication.id)))
+            .select_from(LoanApplication)
+            .join(LoanWorkflowStage, LoanWorkflowStage.loan_application_id == LoanApplication.id)
+            .where(*conditions)
+        )
+        count_result = await db.execute(count_stmt)
+        total = int(count_result.scalar_one() or 0)
+
+        stmt = (
+            select(LoanApplication)
+            .join(LoanWorkflowStage, LoanWorkflowStage.loan_application_id == LoanApplication.id)
+            .where(*conditions)
+            .order_by(LoanApplication.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    else:
+        count_stmt = select(func.count()).select_from(LoanApplication).where(*conditions)
+        count_result = await db.execute(count_stmt)
+        total = int(count_result.scalar_one() or 0)
+
+        stmt = (
+            select(LoanApplication)
+            .where(*conditions)
+            .order_by(LoanApplication.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+
+    result = await db.execute(stmt)
+    applications = result.scalars().all()
+    return applications, total
+
+
+def _normalize_status_values(statuses: list[LoanApplicationStatus] | list[str]) -> list[str]:
+    values: list[str] = []
+    for status in statuses:
+        if isinstance(status, LoanApplicationStatus):
+            values.append(status.value)
+        else:
+            values.append(str(status))
+    return values
+
+
+def _normalize_stage_type(stage_type: str | None) -> str | None:
+    if stage_type is None:
+        return None
+    return stage_type.value if hasattr(stage_type, "value") else str(stage_type)
+
+
+def _validate_admin_status_transition(current_status: str, next_status: str) -> None:
+    if next_status == current_status:
+        return
+    if next_status == LoanApplicationStatus.IN_REVIEW.value:
+        if current_status not in {
+            LoanApplicationStatus.SUBMITTED.value,
+            LoanApplicationStatus.IN_REVIEW.value,
+        }:
+            raise ValueError("Only SUBMITTED loans can transition to IN_REVIEW")
+        return
+    if next_status == LoanApplicationStatus.REJECTED.value:
+        if current_status not in {
+            LoanApplicationStatus.SUBMITTED.value,
+            LoanApplicationStatus.IN_REVIEW.value,
+        }:
+            raise ValueError("Only SUBMITTED or IN_REVIEW loans can be rejected")
+        return
+    raise ValueError("Only IN_REVIEW or REJECTED status updates are supported")
+
+
+async def update_admin_application(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    application: LoanApplication,
+    *,
+    next_status: LoanApplicationStatus,
+    decision_reason: str | None,
+    actor_id,
+) -> LoanApplication:
+    old_snapshot = _application_snapshot(application)
+    next_value = next_status.value if isinstance(next_status, LoanApplicationStatus) else str(next_status)
+    _validate_admin_status_transition(application.status, next_value)
+
+    application.status = next_value
+    if decision_reason is not None:
+        application.decision_reason = decision_reason
+
+    _record_audit_log(
+        db=db,
+        ctx=ctx,
+        actor_id=actor_id,
+        action="loan_application.admin_update",
+        application=application,
+        old_value=old_snapshot,
+    )
+    await db.commit()
+    await db.refresh(application)
+    return application
 
 
 async def create_draft_application(

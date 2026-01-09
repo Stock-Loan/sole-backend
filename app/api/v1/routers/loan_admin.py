@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,24 +14,319 @@ from app.db.session import get_db
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.schemas.loan import (
+    LoanAdminUpdateRequest,
     LoanApplicationDTO,
     LoanApplicationListResponse,
     LoanApplicationSummaryDTO,
+    LoanApplicationStatus,
     LoanDocumentCreateRequest,
+    LoanDocumentGroup,
+    LoanDocumentListResponse,
     LoanDocumentDTO,
     LoanDocumentType,
     LoanFinanceReviewResponse,
     LoanHRReviewResponse,
     LoanLegalReviewResponse,
+    LoanQuoteResponse,
+    LoanScheduleResponse,
+    LoanWhatIfRequest,
     LoanWorkflowStageType,
     LoanWorkflowStageDTO,
     LoanWorkflowStageStatus,
     LoanWorkflowStageUpdateRequest,
 )
-from app.services import loan_applications, loan_queue, loan_workflow, stock_summary
+from app.services import loan_applications, loan_exports, loan_queue, loan_quotes, loan_schedules, loan_workflow, stock_summary
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
+
+
+@router.get(
+    "",
+    response_model=LoanApplicationListResponse,
+    summary="List loan applications for the org",
+)
+async def list_loans(
+    statuses: list[LoanApplicationStatus] | None = Query(default=None, alias="status"),
+    stage_type: LoanWorkflowStageType | None = Query(default=None),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_VIEW_ALL)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanApplicationListResponse:
+    if created_from and created_to and created_from > created_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_date_range",
+                "message": "created_from must be earlier than created_to",
+                "details": {"created_from": created_from.isoformat(), "created_to": created_to.isoformat()},
+            },
+        )
+
+    applications, total = await loan_applications.list_admin_applications(
+        db,
+        ctx,
+        limit=limit,
+        offset=offset,
+        statuses=statuses,
+        stage_type=stage_type.value if stage_type else None,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    return LoanApplicationListResponse(
+        items=[LoanApplicationSummaryDTO.model_validate(app) for app in applications],
+        total=total,
+    )
+
+
+@router.post(
+    "/what-if",
+    response_model=LoanQuoteResponse,
+    summary="Run org-level loan what-if simulation",
+)
+async def simulate_loan(
+    payload: LoanWhatIfRequest,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WHAT_IF_SIMULATE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanQuoteResponse:
+    if payload.org_membership_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "membership_required",
+                "message": "org_membership_id is required for org-level simulations",
+                "details": {"field": "org_membership_id"},
+            },
+        )
+    membership = await loan_applications.get_membership_by_id(db, ctx, payload.org_membership_id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    try:
+        quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, payload)
+        await loan_quotes.record_quote_audit(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            membership=membership,
+            request=payload,
+            quote=quote,
+        )
+        return quote
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+
+
+@router.get(
+    "/{loan_id}",
+    response_model=LoanApplicationDTO,
+    summary="Get loan application detail",
+)
+async def get_loan(
+    loan_id: UUID,
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_VIEW_ALL)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanApplicationDTO:
+    application = await loan_applications.get_application_with_related(db, ctx, loan_id)
+    if not application:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    return LoanApplicationDTO.model_validate(application).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+        }
+    )
+
+
+@router.get(
+    "/{loan_id}/documents",
+    response_model=LoanDocumentListResponse,
+    summary="List loan documents",
+)
+async def list_loan_documents(
+    loan_id: UUID,
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentListResponse:
+    await _get_application_or_404(db, ctx, loan_id)
+    stmt = select(LoanDocument).where(
+        LoanDocument.org_id == ctx.org_id,
+        LoanDocument.loan_application_id == loan_id,
+    ).order_by(LoanDocument.uploaded_at.desc())
+    documents = (await db.execute(stmt)).scalars().all()
+
+    grouped: dict[str, list[LoanDocumentDTO]] = {}
+    for document in documents:
+        grouped.setdefault(document.stage_type, []).append(LoanDocumentDTO.model_validate(document))
+
+    groups = [
+        LoanDocumentGroup(stage_type=stage_type, documents=items)
+        for stage_type, items in sorted(grouped.items())
+    ]
+    return LoanDocumentListResponse(
+        loan_id=loan_id,
+        total=len(documents),
+        groups=groups,
+    )
+
+
+@router.get(
+    "/{loan_id}/schedule",
+    response_model=LoanScheduleResponse,
+    summary="Get loan amortization schedule",
+)
+async def get_loan_schedule(
+    loan_id: UUID,
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_SCHEDULE_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanScheduleResponse:
+    application = await _get_application_or_404(db, ctx, loan_id)
+    try:
+        return loan_schedules.build_schedule(application)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_schedule", "message": str(exc), "details": {}},
+        ) from exc
+
+
+@router.get(
+    "/{loan_id}/schedule/export",
+    response_class=StreamingResponse,
+    summary="Export loan amortization schedule as CSV",
+)
+async def export_loan_schedule(
+    loan_id: UUID,
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_SCHEDULE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    application = await _get_application_or_404(db, ctx, loan_id)
+    try:
+        schedule = loan_schedules.build_schedule(application)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_schedule", "message": str(exc), "details": {}},
+        ) from exc
+    content = loan_exports.schedule_to_csv(schedule)
+    filename = f"loan_schedule_{loan_id}.csv"
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/what-if/export",
+    response_class=StreamingResponse,
+    summary="Export org loan what-if results as CSV",
+)
+async def export_loan_what_if(
+    payload: LoanWhatIfRequest = Depends(),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_WHAT_IF)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    if payload.org_membership_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "membership_required",
+                "message": "org_membership_id is required for org-level exports",
+                "details": {"field": "org_membership_id"},
+            },
+        )
+    membership = await loan_applications.get_membership_by_id(db, ctx, payload.org_membership_id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    try:
+        quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, payload)
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+    content = loan_exports.what_if_to_csv(payload, quote)
+    filename = "loan_what_if_export.csv"
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.patch(
+    "/{loan_id}",
+    response_model=LoanApplicationDTO,
+    summary="Update loan application status",
+)
+async def update_loan(
+    loan_id: UUID,
+    payload: LoanAdminUpdateRequest,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_MANAGE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanApplicationDTO:
+    if payload.status is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "missing_status",
+                "message": "status is required",
+                "details": {"field": "status"},
+            },
+        )
+    if payload.status == LoanApplicationStatus.REJECTED and not (payload.decision_reason or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "decision_reason_required",
+                "message": "decision_reason is required when rejecting a loan",
+                "details": {"field": "decision_reason"},
+            },
+        )
+
+    application = await loan_applications.get_application_with_related(db, ctx, loan_id)
+    if not application:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+
+    try:
+        updated = await loan_applications.update_admin_application(
+            db,
+            ctx,
+            application,
+            next_status=payload.status,
+            decision_reason=payload.decision_reason,
+            actor_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_status_transition", "message": str(exc), "details": {}},
+        ) from exc
+
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(updated)
+    return LoanApplicationDTO.model_validate(updated).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+        }
+    )
 
 
 @router.get(
