@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.schemas.common import MaritalStatus, normalize_marital_status
 from app.schemas.settings import LoanInterestType, LoanRepaymentMethod
-from app.schemas.stock import EligibilityResult
+from app.schemas.stock import EligibilityResult, StockSummaryResponse
 
 
 class LoanSelectionMode(str, Enum):
@@ -291,3 +291,20 @@ class LoanDocumentDTO(BaseModel):
 
 
 LoanApplicationDTO.model_rebuild()
+
+
+class LoanWorkflowStageUpdateRequest(BaseModel):
+    status: LoanWorkflowStageStatus
+    notes: str | None = None
+
+
+class LoanDocumentCreateRequest(BaseModel):
+    document_type: LoanDocumentType
+    file_name: str = Field(min_length=1)
+    storage_path_or_url: str = Field(min_length=1)
+
+
+class LoanHRReviewResponse(BaseModel):
+    loan_application: LoanApplicationDTO
+    stock_summary: StockSummaryResponse
+    hr_stage: LoanWorkflowStageDTO | None = None
