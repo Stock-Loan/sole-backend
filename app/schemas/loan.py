@@ -250,6 +250,9 @@ class LoanApplicationDTO(BaseModel):
     spouse_address: str | None = None
     workflow_stages: list["LoanWorkflowStageDTO"] | None = None
     documents: list["LoanDocumentDTO"] | None = None
+    has_share_certificate: bool | None = None
+    has_83b_election: bool | None = None
+    days_until_83b_due: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -308,3 +311,13 @@ class LoanHRReviewResponse(BaseModel):
     loan_application: LoanApplicationDTO
     stock_summary: StockSummaryResponse
     hr_stage: LoanWorkflowStageDTO | None = None
+
+
+class LoanFinanceReviewResponse(BaseModel):
+    loan_application: LoanApplicationDTO
+    finance_stage: LoanWorkflowStageDTO | None = None
+
+
+class LoanLegalReviewResponse(BaseModel):
+    loan_application: LoanApplicationDTO
+    legal_stage: LoanWorkflowStageDTO | None = None

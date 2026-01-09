@@ -18,6 +18,7 @@ from app.api.v1.routers import (
     loan_quotes,
     loan_applications,
     loan_admin,
+    loan_borrower,
 )
 
 api_router = APIRouter()
@@ -38,5 +39,6 @@ api_router.include_router(stock_self.router)
 api_router.include_router(loan_quotes.router)
 api_router.include_router(loan_applications.router)
 api_router.include_router(loan_admin.router)
+api_router.include_router(loan_borrower.router)
 
 __all__ = ["api_router"]

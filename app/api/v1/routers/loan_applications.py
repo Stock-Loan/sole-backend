@@ -96,7 +96,15 @@ async def get_loan_application(
     )
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
-    return LoanApplicationDTO.model_validate(application)
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    payload = LoanApplicationDTO.model_validate(application).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+        }
+    )
+    return payload
 
 
 @router.post(
@@ -130,7 +138,15 @@ async def create_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, application.id, membership_id=membership.id
     )
-    return LoanApplicationDTO.model_validate(hydrated or application)
+    target = hydrated or application
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
+    return LoanApplicationDTO.model_validate(target).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+        }
+    )
 
 
 @router.patch(
@@ -181,7 +197,15 @@ async def update_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, updated.id, membership_id=membership.id
     )
-    return LoanApplicationDTO.model_validate(hydrated or updated)
+    target = hydrated or updated
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
+    return LoanApplicationDTO.model_validate(target).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+        }
+    )
 
 
 @router.post(
@@ -233,7 +257,15 @@ async def submit_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, submitted.id, membership_id=membership.id
     )
-    return LoanApplicationDTO.model_validate(hydrated or submitted)
+    target = hydrated or submitted
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
+    return LoanApplicationDTO.model_validate(target).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+        }
+    )
 
 
 @router.post(
@@ -278,4 +310,12 @@ async def cancel_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, cancelled.id, membership_id=membership.id
     )
-    return LoanApplicationDTO.model_validate(hydrated or cancelled)
+    target = hydrated or cancelled
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
+    return LoanApplicationDTO.model_validate(target).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+        }
+    )

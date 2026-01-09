@@ -98,6 +98,20 @@ def _application_snapshot(application: LoanApplication) -> dict:
     }
 
 
+def _compute_workflow_flags(application: LoanApplication) -> tuple[bool | None, bool | None, int | None]:
+    if application.activation_date is None or application.election_83b_due_date is None:
+        return None, None, None
+    documents = application.documents or []
+    has_share_certificate = any(
+        doc.document_type == "SHARE_CERTIFICATE" for doc in documents
+    )
+    has_83b_election = any(
+        doc.document_type == "SECTION_83B_ELECTION" for doc in documents
+    )
+    days_until = (application.election_83b_due_date - date.today()).days
+    return has_share_certificate, has_83b_election, days_until
+
+
 def _quote_inputs_snapshot(request: LoanQuoteRequest) -> dict:
     return {
         "selection_mode": request.selection_mode.value
