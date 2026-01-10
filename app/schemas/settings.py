@@ -61,6 +61,32 @@ class OrgSettingsResponse(OrgSettingsBase):
     )
 
 
+class OrgPolicyResponse(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        use_enum_values=True,
+        json_encoders={Decimal: lambda value: str(value)},
+    )
+
+    org_id: str
+    allow_user_data_export: bool
+    allow_profile_edit: bool
+    require_two_factor: bool
+    enforce_service_duration_rule: bool
+    min_service_duration_days: int | None = None
+    enforce_min_vested_to_exercise: bool
+    min_vested_shares_to_exercise: int | None = None
+    allowed_repayment_methods: list[LoanRepaymentMethod]
+    min_loan_term_months: int
+    max_loan_term_months: int
+    allowed_interest_types: list[LoanInterestType]
+    fixed_interest_rate_annual_percent: Decimal | None = None
+    variable_base_rate_annual_percent: Decimal | None = None
+    variable_margin_annual_percent: Decimal | None = None
+    require_down_payment: bool
+    down_payment_percent: Decimal | None = None
+
+
 class OrgSettingsUpdate(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 

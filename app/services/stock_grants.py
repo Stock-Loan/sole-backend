@@ -22,6 +22,7 @@ from app.schemas.stock import (
     VestingEventCreate,
     VestingStrategy,
 )
+from app.services import stock_dashboard, stock_summary
 
 
 def _ensure_membership_active(membership: OrgMembership) -> None:
@@ -37,6 +38,11 @@ def _normalize_strategy(value: VestingStrategy | str) -> str:
 
 def _sum_event_shares(events: Iterable[VestingEventCreate | VestingEvent]) -> int:
     return sum(int(e.shares) for e in events)
+
+
+async def _invalidate_stock_caches(ctx: deps.TenantContext, membership_id: UUID) -> None:
+    await stock_summary.invalidate_stock_summary_cache(ctx.org_id, membership_id)
+    await stock_dashboard.invalidate_stock_dashboard_cache(ctx.org_id)
 
 
 def _build_vesting_events(
@@ -337,6 +343,7 @@ async def create_grant(
         grant=grant,
         old_value=None,
     )
+    await _invalidate_stock_caches(ctx, membership_id)
     return grant
 
 
@@ -406,4 +413,5 @@ async def update_grant(
         grant=grant,
         old_value=old_snapshot,
     )
+    await _invalidate_stock_caches(ctx, grant.org_membership_id)
     return grant

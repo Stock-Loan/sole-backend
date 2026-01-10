@@ -12,7 +12,9 @@ from app.models.role import Role
 from app.models.user import User
 from app.models.user_role import UserRole
 from app.schemas.self import OrgSummary, RoleSummary, SelfContextResponse
+from app.schemas.settings import OrgPolicyResponse
 from app.schemas.users import UserDetailResponse
+from app.services import settings as settings_service
 
 router = APIRouter(prefix="/self", tags=["self"])
 
@@ -51,6 +53,16 @@ async def get_self_context(
         roles=[RoleSummary.model_validate(r) for r in roles],
         permissions=sorted(perm_set),
     )
+
+
+@router.get("/policy", response_model=OrgPolicyResponse, summary="Get current org policy")
+async def get_self_policy(
+    current_user: User = Depends(deps.require_authenticated_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> OrgPolicyResponse:
+    settings = await settings_service.get_org_settings(db, ctx)
+    return OrgPolicyResponse.model_validate(settings)
 
 
 @router.get("/profile", response_model=UserDetailResponse, summary="Get current user profile")

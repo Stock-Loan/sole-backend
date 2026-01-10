@@ -45,6 +45,16 @@ async def _set_cached_summary(summary: StockDashboardSummary, org_id: str, as_of
         return None
 
 
+async def invalidate_stock_dashboard_cache(org_id: str) -> None:
+    pattern = f"stock_dashboard:{org_id}:*"
+    try:
+        redis = get_redis_client()
+        async for key in redis.scan_iter(match=pattern, count=500):
+            await redis.delete(key)
+    except Exception:
+        return None
+
+
 def _categorize_ineligible(reasons: list) -> str:
     codes = {reason.code for reason in reasons}
     if EligibilityReasonCode.INSUFFICIENT_SERVICE_DURATION in codes:
