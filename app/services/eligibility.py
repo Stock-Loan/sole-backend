@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,12 +47,14 @@ def evaluate_eligibility_from_totals(
             )
         else:
             days = (as_of_date - membership.employment_start_date).days
-            required = org_settings.min_service_duration_days or 0
-            if days < required:
+            service_years = Decimal(days) / Decimal("365.25")
+            required_value = org_settings.min_service_duration_years
+            required = Decimal(str(required_value)) if required_value is not None else Decimal("0")
+            if service_years < required:
                 reasons.append(
                     EligibilityReason(
                         code=EligibilityReasonCode.INSUFFICIENT_SERVICE_DURATION,
-                        message=f"Minimum service duration is {required} days",
+                        message=f"Minimum service duration is {required} years",
                     )
                 )
 

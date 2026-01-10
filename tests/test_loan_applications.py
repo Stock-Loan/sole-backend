@@ -148,7 +148,7 @@ def _org_settings() -> OrgSettings:
         audit_log_retention_days=180,
         inactive_user_retention_days=180,
         enforce_service_duration_rule=False,
-        min_service_duration_days=None,
+        min_service_duration_years=None,
         enforce_min_vested_to_exercise=False,
         min_vested_shares_to_exercise=None,
         allowed_repayment_methods=["INTEREST_ONLY"],

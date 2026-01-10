@@ -1,5 +1,6 @@
 import os
 from datetime import date, timedelta
+from decimal import Decimal
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key-boot")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
@@ -24,7 +25,7 @@ def _settings(**overrides) -> OrgSettings:
         audit_log_retention_days=180,
         inactive_user_retention_days=180,
         enforce_service_duration_rule=False,
-        min_service_duration_days=None,
+        min_service_duration_years=None,
         enforce_min_vested_to_exercise=False,
         min_vested_shares_to_exercise=None,
     )
@@ -83,7 +84,7 @@ def test_ineligible_when_employment_inactive():
 
 
 def test_ineligible_when_service_duration_short():
-    settings = _settings(enforce_service_duration_rule=True, min_service_duration_days=365)
+    settings = _settings(enforce_service_duration_rule=True, min_service_duration_years=Decimal("1"))
     membership = _membership(employment_start_date=date.today() - timedelta(days=30))
     totals = _totals(vested=100)
     result = eligibility.evaluate_eligibility_from_totals(

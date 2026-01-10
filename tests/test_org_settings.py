@@ -98,7 +98,7 @@ def test_org_settings_defaults_include_stock_rules():
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["enforce_service_duration_rule"] is False
-    assert data["min_service_duration_days"] is None
+    assert data["min_service_duration_years"] is None
     assert data["enforce_min_vested_to_exercise"] is False
     assert data["min_vested_shares_to_exercise"] is None
     assert data["allowed_repayment_methods"] == ["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"]
@@ -119,11 +119,11 @@ def test_org_settings_validation_rejects_inconsistent_rules():
         "/api/v1/org/settings",
         json={
             "enforce_service_duration_rule": False,
-            "min_service_duration_days": 10,
+            "min_service_duration_years": 1,
         },
     )
     assert resp.status_code == 400
-    assert "min_service_duration_days must be null" in resp.json()["message"]
+    assert "min_service_duration_years must be null" in resp.json()["message"]
 
 
 def test_org_settings_validation_rejects_invalid_loan_term_bounds():
@@ -174,7 +174,7 @@ def test_org_settings_update_persists_stock_rules():
         "/api/v1/org/settings",
         json={
             "enforce_service_duration_rule": True,
-            "min_service_duration_days": 180,
+            "min_service_duration_years": 0.5,
             "enforce_min_vested_to_exercise": True,
             "min_vested_shares_to_exercise": 1000,
         },
@@ -182,14 +182,14 @@ def test_org_settings_update_persists_stock_rules():
     assert update_resp.status_code == 200
     update_data = update_resp.json()["data"]
     assert update_data["enforce_service_duration_rule"] is True
-    assert update_data["min_service_duration_days"] == 180
+    assert update_data["min_service_duration_years"] == "0.5"
     assert update_data["enforce_min_vested_to_exercise"] is True
     assert update_data["min_vested_shares_to_exercise"] == 1000
 
     get_resp = client.get("/api/v1/org/settings")
     assert get_resp.status_code == 200
     get_data = get_resp.json()["data"]
-    assert get_data["min_service_duration_days"] == 180
+    assert get_data["min_service_duration_years"] == "0.5"
     assert get_data["min_vested_shares_to_exercise"] == 1000
 
 

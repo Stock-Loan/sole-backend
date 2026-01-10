@@ -40,7 +40,7 @@ def _settings(**overrides) -> OrgSettings:
         audit_log_retention_days=180,
         inactive_user_retention_days=180,
         enforce_service_duration_rule=False,
-        min_service_duration_days=None,
+        min_service_duration_years=None,
         enforce_min_vested_to_exercise=False,
         min_vested_shares_to_exercise=None,
     )
@@ -116,7 +116,7 @@ def test_summary_partial_vesting():
 
 def test_summary_ineligible_due_to_service_duration():
     membership = _membership(employment_start_date=date.today() - timedelta(days=30))
-    settings = _settings(enforce_service_duration_rule=True, min_service_duration_days=180)
+    settings = _settings(enforce_service_duration_rule=True, min_service_duration_years=0.5)
     grant = _grant(100, date.today())
     grant.vesting_events = [_event(grant, date.today(), 100)]
     summary = stock_summary.build_stock_summary_from_data(

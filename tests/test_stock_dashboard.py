@@ -38,7 +38,7 @@ def _settings(**overrides) -> OrgSettings:
         audit_log_retention_days=180,
         inactive_user_retention_days=180,
         enforce_service_duration_rule=True,
-        min_service_duration_days=180,
+        min_service_duration_years=0.5,
         enforce_min_vested_to_exercise=True,
         min_vested_shares_to_exercise=100,
     )

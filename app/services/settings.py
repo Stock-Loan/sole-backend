@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,24 @@ from app.schemas.settings import (
 DEFAULT_SETTINGS = OrgSettingsBase()
 ALLOWED_REPAYMENT_METHODS = {method.value for method in LoanRepaymentMethod}
 ALLOWED_INTEREST_TYPES = {interest.value for interest in LoanInterestType}
+LOAN_POLICY_FIELDS = {
+    "allowed_repayment_methods",
+    "min_loan_term_months",
+    "max_loan_term_months",
+    "allowed_interest_types",
+    "fixed_interest_rate_annual_percent",
+    "variable_base_rate_annual_percent",
+    "variable_margin_annual_percent",
+    "require_down_payment",
+    "down_payment_percent",
+}
+STOCK_POLICY_FIELDS = {
+    "enforce_service_duration_rule",
+    "min_service_duration_years",
+    "enforce_min_vested_to_exercise",
+    "min_vested_shares_to_exercise",
+}
+POLICY_FIELDS = LOAN_POLICY_FIELDS | STOCK_POLICY_FIELDS
 
 
 def _settings_snapshot(settings: OrgSettings) -> dict:
@@ -28,6 +47,8 @@ def _settings_snapshot(settings: OrgSettings) -> dict:
         value = getattr(settings, name)
         if isinstance(value, datetime):
             value = value.isoformat()
+        if isinstance(value, Decimal):
+            value = str(value)
         data[name] = value
     return data
 
@@ -35,23 +56,23 @@ def _settings_snapshot(settings: OrgSettings) -> dict:
 def _validate_stock_rules(
     *,
     enforce_service_duration_rule: bool,
-    min_service_duration_days: int | None,
+    min_service_duration_years: Decimal | None,
     enforce_min_vested_to_exercise: bool,
     min_vested_shares_to_exercise: int | None,
 ) -> None:
     errors: list[str] = []
 
     if enforce_service_duration_rule:
-        if min_service_duration_days is None:
+        if min_service_duration_years is None:
             errors.append(
-                "min_service_duration_days is required when enforce_service_duration_rule is true"
+                "min_service_duration_years is required when enforce_service_duration_rule is true"
             )
-        elif min_service_duration_days < 0:
-            errors.append("min_service_duration_days must be >= 0")
+        elif min_service_duration_years < 0:
+            errors.append("min_service_duration_years must be >= 0")
     else:
-        if min_service_duration_days is not None:
+        if min_service_duration_years is not None:
             errors.append(
-                "min_service_duration_days must be null when enforce_service_duration_rule is false"
+                "min_service_duration_years must be null when enforce_service_duration_rule is false"
             )
 
     if enforce_min_vested_to_exercise:
@@ -162,7 +183,7 @@ async def get_org_settings(
         audit_log_retention_days=DEFAULT_SETTINGS.audit_log_retention_days,
         inactive_user_retention_days=DEFAULT_SETTINGS.inactive_user_retention_days,
         enforce_service_duration_rule=DEFAULT_SETTINGS.enforce_service_duration_rule,
-        min_service_duration_days=DEFAULT_SETTINGS.min_service_duration_days,
+        min_service_duration_years=DEFAULT_SETTINGS.min_service_duration_years,
         enforce_min_vested_to_exercise=DEFAULT_SETTINGS.enforce_min_vested_to_exercise,
         min_vested_shares_to_exercise=DEFAULT_SETTINGS.min_vested_shares_to_exercise,
         allowed_repayment_methods=_normalize_enum_list(
@@ -199,8 +220,8 @@ async def update_org_settings(
         data["allowed_repayment_methods"] = _normalize_enum_list(data["allowed_repayment_methods"])
     if "allowed_interest_types" in data and data["allowed_interest_types"] is not None:
         data["allowed_interest_types"] = _normalize_enum_list(data["allowed_interest_types"])
-    if data.get("enforce_service_duration_rule") is False and "min_service_duration_days" not in data:
-        data["min_service_duration_days"] = None
+    if data.get("enforce_service_duration_rule") is False and "min_service_duration_years" not in data:
+        data["min_service_duration_years"] = None
     if data.get("enforce_min_vested_to_exercise") is False and "min_vested_shares_to_exercise" not in data:
         data["min_vested_shares_to_exercise"] = None
     if data.get("require_down_payment") is False and "down_payment_percent" not in data:
@@ -209,8 +230,8 @@ async def update_org_settings(
         "enforce_service_duration_rule": data.get(
             "enforce_service_duration_rule", settings.enforce_service_duration_rule
         ),
-        "min_service_duration_days": data.get(
-            "min_service_duration_days", settings.min_service_duration_days
+        "min_service_duration_years": data.get(
+            "min_service_duration_years", settings.min_service_duration_years
         ),
         "enforce_min_vested_to_exercise": data.get(
             "enforce_min_vested_to_exercise", settings.enforce_min_vested_to_exercise
@@ -253,6 +274,13 @@ async def update_org_settings(
     for field, value in data.items():
         setattr(settings, field, value)
     new_snapshot = _settings_snapshot(settings)
+    policy_changed = any(
+        old_snapshot.get(field) != new_snapshot.get(field) for field in POLICY_FIELDS
+    )
+    if policy_changed:
+        current_version = settings.policy_version or 1
+        settings.policy_version = max(int(current_version), 1) + 1
+        new_snapshot = _settings_snapshot(settings)
     audit = AuditLog(
         org_id=ctx.org_id,
         actor_id=actor_id,
@@ -266,4 +294,8 @@ async def update_org_settings(
     db.add(settings)
     await db.commit()
     await db.refresh(settings)
+    from app.services import stock_dashboard, stock_summary
+
+    await stock_summary.invalidate_org_stock_summary_cache(ctx.org_id)
+    await stock_dashboard.invalidate_stock_dashboard_cache(ctx.org_id)
     return settings

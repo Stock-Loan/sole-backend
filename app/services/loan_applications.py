@@ -56,6 +56,25 @@ def _enum_value(value) -> str | None:
     return value.value if hasattr(value, "value") else str(value)
 
 
+def _current_policy_version(org_settings: OrgSettings) -> int:
+    try:
+        return int(org_settings.policy_version or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _policy_version_mismatch(application: LoanApplication, current_version: int) -> bool:
+    try:
+        snapshot = (
+            int(application.policy_version_snapshot)
+            if application.policy_version_snapshot is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        snapshot = None
+    return snapshot != current_version
+
+
 def _application_snapshot(application: LoanApplication) -> dict:
     return {
         "id": str(application.id) if application.id else None,
@@ -74,6 +93,7 @@ def _application_snapshot(application: LoanApplication) -> dict:
         "purchase_price": _serialize_snapshot_value(application.purchase_price),
         "down_payment_amount": _serialize_snapshot_value(application.down_payment_amount),
         "loan_principal": _serialize_snapshot_value(application.loan_principal),
+        "policy_version_snapshot": application.policy_version_snapshot,
         "interest_type": application.interest_type,
         "repayment_method": application.repayment_method,
         "term_months": application.term_months,
@@ -257,8 +277,9 @@ def _apply_quote(
     application.purchase_price = quote.purchase_price
     application.down_payment_amount = quote.down_payment_amount
     application.loan_principal = quote.loan_principal
-    application.interest_type = option.interest_type.value
-    application.repayment_method = option.repayment_method.value
+    application.policy_version_snapshot = _current_policy_version(org_settings)
+    application.interest_type = _enum_value(option.interest_type) or str(option.interest_type)
+    application.repayment_method = _enum_value(option.repayment_method) or str(option.repayment_method)
     application.term_months = option.term_months
     application.nominal_annual_rate_percent = option.nominal_annual_rate
     application.estimated_monthly_payment = option.estimated_monthly_payment
@@ -554,6 +575,17 @@ async def update_draft_application(
         "desired_term_months",
     }
     recalc = any(getattr(payload, field) is not None for field in recalc_fields)
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    current_policy_version = _current_policy_version(org_settings)
+    if not recalc and _policy_version_mismatch(application, current_policy_version):
+        raise loan_quotes.LoanQuoteError(
+            code="policy_out_of_date",
+            message="Loan policy changed. Please refresh your quote before continuing.",
+            details={
+                "policy_version": current_policy_version,
+                "policy_version_snapshot": application.policy_version_snapshot,
+            },
+        )
     if recalc:
         selection_mode = payload.selection_mode or LoanSelectionMode(application.selection_mode)
         selection_value = (
@@ -567,7 +599,6 @@ async def update_draft_application(
             desired_repayment_method=payload.desired_repayment_method or application.repayment_method,
             desired_term_months=payload.desired_term_months or application.term_months,
         )
-        org_settings = await settings_service.get_org_settings(db, ctx)
         quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, quote_request)
         _apply_quote(
             application,
@@ -678,6 +709,16 @@ async def submit_application(
         desired_term_months=application.term_months,
     )
     org_settings = await settings_service.get_org_settings(db, ctx)
+    current_policy_version = _current_policy_version(org_settings)
+    if _policy_version_mismatch(application, current_policy_version):
+        raise loan_quotes.LoanQuoteError(
+            code="policy_out_of_date",
+            message="Loan policy changed. Please refresh your quote before submitting.",
+            details={
+                "policy_version": current_policy_version,
+                "policy_version_snapshot": application.policy_version_snapshot,
+            },
+        )
     quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, quote_request)
     _apply_quote(
         application,

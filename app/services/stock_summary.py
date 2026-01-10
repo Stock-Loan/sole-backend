@@ -58,6 +58,16 @@ async def invalidate_stock_summary_cache(org_id: str, membership_id: UUID) -> No
         return None
 
 
+async def invalidate_org_stock_summary_cache(org_id: str) -> None:
+    pattern = f"stock_summary:{org_id}:*"
+    try:
+        redis = get_redis_client()
+        async for key in redis.scan_iter(match=pattern, count=500):
+            await redis.delete(key)
+    except Exception:
+        return None
+
+
 async def get_membership(
     db: AsyncSession, ctx: deps.TenantContext, membership_id: UUID
 ) -> OrgMembership | None:

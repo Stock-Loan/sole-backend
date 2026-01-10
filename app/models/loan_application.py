@@ -82,6 +82,7 @@ class LoanApplication(Base):
     purchase_price = Column(Numeric(18, 6), nullable=False)
     down_payment_amount = Column(Numeric(18, 6), nullable=False)
     loan_principal = Column(Numeric(18, 6), nullable=False)
+    policy_version_snapshot = Column(Integer, nullable=True)
     interest_type = Column(String(20), nullable=False)
     repayment_method = Column(String(40), nullable=False)
     term_months = Column(Integer, nullable=False)

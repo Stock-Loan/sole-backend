@@ -233,6 +233,7 @@ class LoanApplicationDTO(BaseModel):
     purchase_price: Decimal
     down_payment_amount: Decimal
     loan_principal: Decimal
+    policy_version_snapshot: int | None = None
     interest_type: LoanInterestType
     repayment_method: LoanRepaymentMethod
     term_months: int

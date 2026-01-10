@@ -15,7 +15,7 @@ class OrgSettings(Base):
     audit_log_retention_days = Column(Integer, nullable=False, default=180, server_default="180")
     inactive_user_retention_days = Column(Integer, nullable=False, default=180, server_default="180")
     enforce_service_duration_rule = Column(Boolean, nullable=False, default=False, server_default="false")
-    min_service_duration_days = Column(Integer, nullable=True)
+    min_service_duration_years = Column(Numeric(6, 2), nullable=True)
     enforce_min_vested_to_exercise = Column(Boolean, nullable=False, default=False, server_default="false")
     min_vested_shares_to_exercise = Column(BigInteger, nullable=True)
     allowed_repayment_methods = Column(
@@ -41,6 +41,7 @@ class OrgSettings(Base):
     variable_margin_annual_percent = Column(Numeric(10, 4), nullable=True)
     require_down_payment = Column(Boolean, nullable=False, default=False, server_default="false")
     down_payment_percent = Column(Numeric(5, 2), nullable=True)
+    policy_version = Column(Integer, nullable=False, default=1, server_default="1")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

@@ -25,7 +25,7 @@ class OrgSettingsBase(BaseModel):
     audit_log_retention_days: int = Field(default=180, ge=0)
     inactive_user_retention_days: int = Field(default=180, ge=0)
     enforce_service_duration_rule: bool = Field(default=False)
-    min_service_duration_days: int | None = Field(default=None, ge=0)
+    min_service_duration_years: Decimal | None = Field(default=None, ge=0)
     enforce_min_vested_to_exercise: bool = Field(default=False)
     min_vested_shares_to_exercise: int | None = Field(default=None, ge=0)
     allowed_repayment_methods: list[LoanRepaymentMethod] = Field(
@@ -52,6 +52,7 @@ class OrgSettingsBase(BaseModel):
 
 class OrgSettingsResponse(OrgSettingsBase):
     org_id: str
+    policy_version: int
     created_at: datetime | None = None
     updated_at: datetime | None = None
     model_config = ConfigDict(
@@ -69,11 +70,12 @@ class OrgPolicyResponse(BaseModel):
     )
 
     org_id: str
+    policy_version: int
     allow_user_data_export: bool
     allow_profile_edit: bool
     require_two_factor: bool
     enforce_service_duration_rule: bool
-    min_service_duration_days: int | None = None
+    min_service_duration_years: Decimal | None = None
     enforce_min_vested_to_exercise: bool
     min_vested_shares_to_exercise: int | None = None
     allowed_repayment_methods: list[LoanRepaymentMethod]
@@ -96,7 +98,7 @@ class OrgSettingsUpdate(BaseModel):
     audit_log_retention_days: int | None = Field(default=None, ge=0)
     inactive_user_retention_days: int | None = Field(default=None, ge=0)
     enforce_service_duration_rule: bool | None = None
-    min_service_duration_days: int | None = Field(default=None, ge=0)
+    min_service_duration_years: Decimal | None = Field(default=None, ge=0)
     enforce_min_vested_to_exercise: bool | None = None
     min_vested_shares_to_exercise: int | None = Field(default=None, ge=0)
     allowed_repayment_methods: list[LoanRepaymentMethod] | None = None
