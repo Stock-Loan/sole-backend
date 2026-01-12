@@ -10,6 +10,7 @@ from app.models.user import User
 from app.models.user_role import UserRole
 from app.models.org_settings import OrgSettings
 from app.models.employee_stock_grant import EmployeeStockGrant
+from app.models.stock_grant_reservation import StockGrantReservation
 from app.models.loan_application import LoanApplication
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
@@ -29,6 +30,7 @@ __all__ = [
     "AccessControlList",
     "OrgSettings",
     "EmployeeStockGrant",
+    "StockGrantReservation",
     "LoanApplication",
     "LoanWorkflowStage",
     "LoanDocument",

@@ -21,7 +21,7 @@ from app.schemas.loan import (
     LoanShareAllocation,
 )
 from app.schemas.settings import LoanInterestType, LoanRepaymentMethod
-from app.services import eligibility, settings as settings_service, vesting_engine
+from app.services import eligibility, settings as settings_service, stock_reservations, vesting_engine
 
 
 @dataclass(frozen=True)
@@ -208,7 +208,9 @@ def build_loan_quote_from_data(
     grants: list[EmployeeStockGrant],
     request: LoanQuoteRequest,
     as_of_date: date,
+    reserved_by_grant: dict | None = None,
 ) -> LoanQuoteResponse:
+    reserved_by_grant = reserved_by_grant or {}
     selection_mode = LoanSelectionMode(request.selection_mode)
     desired_interest_type = (
         LoanInterestType(request.desired_interest_type)
@@ -221,10 +223,18 @@ def build_loan_quote_from_data(
         else None
     )
     totals = vesting_engine.aggregate_vesting(grants, as_of_date)
+    total_reserved = sum(reserved_by_grant.values())
+    available_vested = max(totals.total_vested_shares - total_reserved, 0)
+    eligibility_totals = vesting_engine.VestingTotals(
+        total_granted_shares=totals.total_granted_shares,
+        total_vested_shares=totals.total_vested_shares,
+        total_unvested_shares=totals.total_unvested_shares,
+        next_vesting_event=totals.next_vesting_event,
+    )
     eligibility_result = eligibility.evaluate_eligibility_from_totals(
         membership=membership,
         org_settings=org_settings,
-        totals=totals,
+        totals=eligibility_totals,
         as_of_date=as_of_date,
     )
     if not eligibility_result.eligible_to_exercise:
@@ -237,12 +247,26 @@ def build_loan_quote_from_data(
     shares_to_exercise = _resolve_shares_to_exercise(
         selection_mode=selection_mode,
         selection_value=request.selection_value,
-        total_exercisable_shares=eligibility_result.total_vested_shares,
+        total_exercisable_shares=available_vested,
     )
 
     grant_summaries = vesting_engine.build_grant_summaries(grants, as_of_date)
+    adjusted_summaries = []
+    for summary in grant_summaries:
+        reserved = reserved_by_grant.get(summary.grant_id, 0)
+        available = max(summary.vested_shares - reserved, 0)
+        adjusted_summaries.append(
+            vesting_engine.GrantVestingSummary(
+                grant_id=summary.grant_id,
+                grant_date=summary.grant_date,
+                total_shares=summary.total_shares,
+                vested_shares=available,
+                unvested_shares=summary.unvested_shares,
+                exercise_price=summary.exercise_price,
+            )
+        )
     purchase_price, allocation = _allocate_shares_oldest_first(
-        grant_summaries=grant_summaries, shares_to_exercise=shares_to_exercise
+        grant_summaries=adjusted_summaries, shares_to_exercise=shares_to_exercise
     )
 
     down_payment_percent = _as_decimal(org_settings.down_payment_percent or 0)
@@ -331,7 +355,7 @@ def build_loan_quote_from_data(
         as_of_date=as_of_date,
         selection_mode=selection_mode,
         selection_value=request.selection_value,
-        total_exercisable_shares=eligibility_result.total_vested_shares,
+        total_exercisable_shares=available_vested,
         shares_to_exercise=shares_to_exercise,
         purchase_price=purchase_price.quantize(TWOPLACES, rounding=ROUND_HALF_UP),
         down_payment_amount=down_payment_amount,
@@ -374,10 +398,14 @@ async def calculate_loan_quote(
     as_of_date = request.as_of_date or date.today()
     org_settings = await settings_service.get_org_settings(db, ctx)
     grants = await vesting_engine.load_active_grants(db, ctx, membership.id)
+    reserved_by_grant = await stock_reservations.get_active_reservations_by_grant(
+        db, ctx, membership_id=membership.id, grant_ids=[grant.id for grant in grants]
+    )
     return build_loan_quote_from_data(
         membership=membership,
         org_settings=org_settings,
         grants=grants,
         request=request,
         as_of_date=as_of_date,
+        reserved_by_grant=reserved_by_grant,
     )

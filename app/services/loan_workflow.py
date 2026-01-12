@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.loan_application import LoanApplication
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.schemas.loan import LoanApplicationStatus
+from app.services import stock_reservations
 
 
 CORE_STAGE_TYPES = {"HR_REVIEW", "FINANCE_PROCESSING", "LEGAL_EXECUTION"}
@@ -57,6 +58,12 @@ async def try_activate_loan(
     application.election_83b_due_date = (now + timedelta(days=30)).date()
 
     db.add(application)
+    await stock_reservations.set_reservation_status_for_application(
+        db,
+        ctx,
+        application_id=application.id,
+        status=LoanApplicationStatus.ACTIVE.value,
+    )
     db.add(
         AuditLog(
             org_id=ctx.org_id,

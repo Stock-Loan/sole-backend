@@ -9,9 +9,11 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.models.audit_log import AuditLog
+from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.loan_application import LoanApplication
 from app.models.org_membership import OrgMembership
 from app.models.org_settings import OrgSettings
+from app.models.stock_grant_reservation import StockGrantReservation
 from app.models.user import User
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.schemas.common import MaritalStatus, normalize_marital_status
@@ -22,7 +24,7 @@ from app.schemas.loan import (
     LoanQuoteRequest,
     LoanSelectionMode,
 )
-from app.services import loan_quotes, settings as settings_service
+from app.services import loan_quotes, settings as settings_service, stock_reservations, vesting_engine
 
 
 def _snapshot_org_settings(settings: OrgSettings) -> dict:
@@ -215,6 +217,77 @@ CORE_WORKFLOW_STAGES: list[tuple[str, str]] = [
     ("FINANCE_PROCESSING", "FINANCE"),
     ("LEGAL_EXECUTION", "LEGAL"),
 ]
+
+
+async def _reserve_shares_for_application(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    membership: OrgMembership,
+    application: LoanApplication,
+    *,
+    allocation,
+    as_of_date: date,
+) -> None:
+    if not allocation:
+        return
+    grant_ids = [item.grant_id for item in allocation]
+    if not grant_ids:
+        return
+    existing_stmt = select(StockGrantReservation.id).where(
+        StockGrantReservation.org_id == ctx.org_id,
+        StockGrantReservation.loan_application_id == application.id,
+    )
+    existing = (await db.execute(existing_stmt)).scalar_one_or_none()
+    if existing:
+        return
+    grants_stmt = (
+        select(EmployeeStockGrant)
+        .options(selectinload(EmployeeStockGrant.vesting_events))
+        .where(
+            EmployeeStockGrant.org_id == ctx.org_id,
+            EmployeeStockGrant.org_membership_id == membership.id,
+            EmployeeStockGrant.id.in_(grant_ids),
+            EmployeeStockGrant.status == "ACTIVE",
+        )
+        .with_for_update()
+    )
+    grants = (await db.execute(grants_stmt)).scalars().all()
+    grants_by_id = {grant.id: grant for grant in grants}
+    reserved_by_grant = await stock_reservations.get_active_reservations_by_grant(
+        db, ctx, membership_id=membership.id, grant_ids=grant_ids
+    )
+    for item in allocation:
+        grant = grants_by_id.get(item.grant_id)
+        if not grant:
+            raise loan_quotes.LoanQuoteError(
+                code="grant_not_found",
+                message="Grant not found for reservation",
+                details={"grant_id": str(item.grant_id)},
+            )
+        vested, _ = vesting_engine.compute_grant_vesting(grant, as_of_date)
+        reserved = reserved_by_grant.get(grant.id, 0)
+        available = vested - reserved
+        if item.shares > available:
+            raise loan_quotes.LoanQuoteError(
+                code="insufficient_available_shares",
+                message="Not enough available vested shares to reserve",
+                details={
+                    "grant_id": str(item.grant_id),
+                    "available_vested_shares": max(available, 0),
+                    "requested_shares": int(item.shares),
+                },
+            )
+    for item in allocation:
+        db.add(
+            StockGrantReservation(
+                org_id=ctx.org_id,
+                org_membership_id=membership.id,
+                grant_id=item.grant_id,
+                loan_application_id=application.id,
+                shares_reserved=int(item.shares),
+                status=application.status,
+            )
+        )
 
 
 async def _ensure_core_workflow_stages(
@@ -456,6 +529,14 @@ async def update_admin_application(
     if decision_reason is not None:
         application.decision_reason = decision_reason
 
+    if next_value in {LoanApplicationStatus.IN_REVIEW.value, LoanApplicationStatus.REJECTED.value}:
+        await stock_reservations.set_reservation_status_for_application(
+            db,
+            ctx,
+            application_id=application.id,
+            status=next_value,
+        )
+
     _record_audit_log(
         db=db,
         ctx=ctx,
@@ -466,6 +547,11 @@ async def update_admin_application(
     )
     await db.commit()
     await db.refresh(application)
+    if next_value == LoanApplicationStatus.REJECTED.value:
+        from app.services import stock_dashboard, stock_summary
+
+        await stock_summary.invalidate_stock_summary_cache(ctx.org_id, application.org_membership_id)
+        await stock_dashboard.invalidate_stock_dashboard_cache(ctx.org_id)
     return application
 
 
@@ -732,6 +818,14 @@ async def submit_application(
         application.submit_idempotency_key = idempotency_key
 
     db.add(application)
+    await _reserve_shares_for_application(
+        db,
+        ctx,
+        membership,
+        application,
+        allocation=quote.allocation,
+        as_of_date=date.today(),
+    )
     await _ensure_core_workflow_stages(db, ctx, application)
     _record_audit_log(
         db=db,
@@ -742,6 +836,10 @@ async def submit_application(
         old_value=old_snapshot,
     )
     await db.commit()
+    from app.services import stock_dashboard, stock_summary
+
+    await stock_summary.invalidate_stock_summary_cache(ctx.org_id, membership.id)
+    await stock_dashboard.invalidate_stock_dashboard_cache(ctx.org_id)
     await db.refresh(application)
     return application
 

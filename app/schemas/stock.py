@@ -104,6 +104,8 @@ class GrantSummary(BaseModel):
     total_shares: int
     vested_shares: int
     unvested_shares: int
+    reserved_shares: int = 0
+    available_vested_shares: int = 0
     exercise_price: Decimal
 
     model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
@@ -132,6 +134,8 @@ class StockSummaryResponse(BaseModel):
     total_granted_shares: int
     total_vested_shares: int
     total_unvested_shares: int
+    total_reserved_shares: int = 0
+    total_available_vested_shares: int = 0
     next_vesting_event: NextVestingEvent | None = None
     eligibility_result: EligibilityResult
     grants: list[GrantSummary] = Field(default_factory=list)

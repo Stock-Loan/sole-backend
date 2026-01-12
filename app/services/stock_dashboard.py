@@ -11,7 +11,7 @@ from app.api import deps
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.org_membership import OrgMembership
 from app.schemas.stock import EligibilityReasonCode, StockDashboardSummary
-from app.services import eligibility, settings as settings_service, vesting_engine
+from app.services import eligibility, settings as settings_service, stock_reservations, vesting_engine
 from app.utils.redis_client import get_redis_client
 
 
@@ -71,7 +71,9 @@ def build_dashboard_summary_from_data(
     org_settings,
     grants: list[EmployeeStockGrant],
     as_of_date: date,
+    reserved_by_grant: dict[UUID, int] | None = None,
 ) -> StockDashboardSummary:
+    reserved_by_grant = reserved_by_grant or {}
     grants_by_membership: dict[UUID, list[EmployeeStockGrant]] = {}
     for grant in grants:
         grants_by_membership.setdefault(grant.org_membership_id, []).append(grant)
@@ -90,10 +92,16 @@ def build_dashboard_summary_from_data(
         if not membership:
             continue
         member_totals = vesting_engine.aggregate_vesting(member_grants, as_of_date)
+        eligibility_totals = vesting_engine.VestingTotals(
+            total_granted_shares=member_totals.total_granted_shares,
+            total_vested_shares=member_totals.total_vested_shares,
+            total_unvested_shares=member_totals.total_unvested_shares,
+            next_vesting_event=member_totals.next_vesting_event,
+        )
         result = eligibility.evaluate_eligibility_from_totals(
             membership=membership,
             org_settings=org_settings,
-            totals=member_totals,
+            totals=eligibility_totals,
             as_of_date=as_of_date,
         )
         if result.eligible_to_exercise:
@@ -137,6 +145,11 @@ async def build_dashboard_summary(
         .order_by(EmployeeStockGrant.grant_date.desc())
     )
     grants = (await db.execute(grants_stmt)).scalars().all()
+    reserved_by_grant = {}
+    if grants:
+        reserved_by_grant = await stock_reservations.get_active_reservations_by_grant_for_org(
+            db, ctx, grant_ids=[grant.id for grant in grants]
+        )
     membership_ids = {grant.org_membership_id for grant in grants}
     memberships: list[OrgMembership] = []
     if membership_ids:
@@ -151,6 +164,7 @@ async def build_dashboard_summary(
         org_settings=org_settings,
         grants=grants,
         as_of_date=as_of_date,
+        reserved_by_grant=reserved_by_grant,
     )
     await _set_cached_summary(summary, ctx.org_id, as_of_date)
     return summary
