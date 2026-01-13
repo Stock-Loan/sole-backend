@@ -299,3 +299,32 @@ async def remove_roles_from_user(
         extra={"org_id": ctx.org_id, "user_id": str(membership.user_id), "role_ids": [str(rid) for rid in payload.role_ids]},
     )
     return None
+
+
+@router.post(
+    "/org/users/{membership_id}/permissions/invalidate",
+    status_code=204,
+    summary="Invalidate permission cache for a user membership",
+)
+async def invalidate_user_permissions(
+    membership_id: UUID,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
+    __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    membership_stmt = select(OrgMembership).where(
+        OrgMembership.id == membership_id,
+        OrgMembership.org_id == ctx.org_id,
+    )
+    membership_result = await db.execute(membership_stmt)
+    membership = membership_result.scalar_one_or_none()
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+
+    await invalidate_permission_cache(str(membership.user_id), ctx.org_id)
+    logger.info(
+        "Invalidated permission cache",
+        extra={"org_id": ctx.org_id, "user_id": str(membership.user_id)},
+    )
+    return None
