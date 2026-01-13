@@ -193,6 +193,37 @@ class LoanApplicationDraftUpdate(BaseModel):
         return cleaned
 
 
+class LoanApplicantSummaryDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    org_membership_id: UUID
+    user_id: UUID
+    full_name: str
+    email: EmailStr
+    employee_id: str | None = None
+    department_id: UUID | None = None
+    department_name: str | None = None
+
+
+class LoanWorkflowStageSelfDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+    stage_type: LoanWorkflowStageType
+    status: LoanWorkflowStageStatus
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class LoanDocumentSelfDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
+
+    document_type: LoanDocumentType
+    file_name: str
+    storage_path_or_url: str
+    uploaded_at: datetime | None = None
+
+
 class LoanApplicationSummaryDTO(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
@@ -201,11 +232,46 @@ class LoanApplicationSummaryDTO(BaseModel):
     )
 
     id: UUID
+    org_membership_id: UUID
+    applicant: LoanApplicantSummaryDTO
     status: LoanApplicationStatus
     version: int
     as_of_date: date
     shares_to_exercise: int
+    total_exercisable_shares_snapshot: int
+    purchase_price: Decimal
+    down_payment_amount: Decimal
     loan_principal: Decimal
+    estimated_monthly_payment: Decimal
+    total_payable_amount: Decimal
+    interest_type: LoanInterestType
+    repayment_method: LoanRepaymentMethod
+    term_months: int
+    current_stage_type: LoanWorkflowStageType | None = None
+    current_stage_status: LoanWorkflowStageStatus | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class LoanApplicationSelfSummaryDTO(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        use_enum_values=True,
+        json_encoders={Decimal: lambda value: str(value)},
+    )
+
+    id: UUID
+    status: LoanApplicationStatus
+    as_of_date: date
+    shares_to_exercise: int
+    loan_principal: Decimal
+    estimated_monthly_payment: Decimal
+    total_payable_amount: Decimal
+    interest_type: LoanInterestType
+    repayment_method: LoanRepaymentMethod
+    term_months: int
+    current_stage_type: LoanWorkflowStageType | None = None
+    current_stage_status: LoanWorkflowStageStatus | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -259,12 +325,55 @@ class LoanApplicationDTO(BaseModel):
     has_share_certificate: bool | None = None
     has_83b_election: bool | None = None
     days_until_83b_due: int | None = None
+    applicant: LoanApplicantSummaryDTO | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class LoanApplicationSelfDTO(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        use_enum_values=True,
+        json_encoders={Decimal: lambda value: str(value)},
+    )
+
+    id: UUID
+    status: LoanApplicationStatus
+    as_of_date: date
+    selection_mode: LoanSelectionMode
+    selection_value_snapshot: Decimal
+    shares_to_exercise: int
+    total_exercisable_shares_snapshot: int
+    purchase_price: Decimal
+    down_payment_amount: Decimal
+    loan_principal: Decimal
+    estimated_monthly_payment: Decimal
+    total_payable_amount: Decimal
+    total_interest_amount: Decimal
+    interest_type: LoanInterestType
+    repayment_method: LoanRepaymentMethod
+    term_months: int
+    allocation_strategy: str
+    allocation_snapshot: list[dict]
+    eligibility_result_snapshot: dict
+    current_stage_type: LoanWorkflowStageType | None = None
+    current_stage_status: LoanWorkflowStageStatus | None = None
+    workflow_stages: list[LoanWorkflowStageSelfDTO] | None = None
+    documents: list[LoanDocumentSelfDTO] | None = None
+    has_share_certificate: bool | None = None
+    has_83b_election: bool | None = None
+    days_until_83b_due: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
 class LoanApplicationListResponse(BaseModel):
     items: list[LoanApplicationSummaryDTO]
+    total: int
+
+
+class LoanApplicationSelfListResponse(BaseModel):
+    items: list[LoanApplicationSelfSummaryDTO]
     total: int
 
 

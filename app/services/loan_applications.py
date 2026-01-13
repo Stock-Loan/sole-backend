@@ -12,6 +12,8 @@ from app.models.audit_log import AuditLog
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.loan_application import LoanApplication
 from app.models.org_membership import OrgMembership
+from app.models.user import User
+from app.models.department import Department
 from app.models.org_settings import OrgSettings
 from app.models.stock_grant_reservation import StockGrantReservation
 from app.models.user import User
@@ -387,6 +389,28 @@ async def get_membership_by_id(
     return result.scalar_one_or_none()
 
 
+async def get_membership_with_user(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    membership_id,
+) -> tuple[OrgMembership, User, Department | None] | None:
+    stmt = (
+        select(OrgMembership, User, Department)
+        .join(User, User.id == OrgMembership.user_id)
+        .outerjoin(Department, Department.id == OrgMembership.department_id)
+        .where(
+            OrgMembership.org_id == ctx.org_id,
+            OrgMembership.id == membership_id,
+        )
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+    if not row:
+        return None
+    membership, user, department = row
+    return membership, user, department
+
+
 async def get_application_with_related(
     db: AsyncSession,
     ctx: deps.TenantContext,
@@ -421,7 +445,7 @@ async def list_admin_applications(
     stage_type: str | None = None,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
-) -> tuple[list[LoanApplication], int]:
+) -> tuple[list[tuple], int]:
     if statuses:
         statuses = _normalize_status_values(statuses)
     stage_type = _normalize_stage_type(stage_type)
@@ -432,6 +456,21 @@ async def list_admin_applications(
         conditions.append(LoanApplication.created_at >= created_from)
     if created_to is not None:
         conditions.append(LoanApplication.created_at <= created_to)
+
+    stage_subq = (
+        select(
+            LoanWorkflowStage.loan_application_id.label("loan_id"),
+            LoanWorkflowStage.stage_type.label("stage_type"),
+            LoanWorkflowStage.status.label("stage_status"),
+        )
+        .where(
+            LoanWorkflowStage.org_id == ctx.org_id,
+            LoanWorkflowStage.status != "COMPLETED",
+        )
+        .order_by(LoanWorkflowStage.loan_application_id, LoanWorkflowStage.created_at)
+        .distinct(LoanWorkflowStage.loan_application_id)
+        .subquery()
+    )
 
     if stage_type:
         conditions.extend(
@@ -451,8 +490,19 @@ async def list_admin_applications(
         total = int(count_result.scalar_one() or 0)
 
         stmt = (
-            select(LoanApplication)
+            select(
+                LoanApplication,
+                OrgMembership,
+                User,
+                Department,
+                stage_subq.c.stage_type,
+                stage_subq.c.stage_status,
+            )
             .join(LoanWorkflowStage, LoanWorkflowStage.loan_application_id == LoanApplication.id)
+            .join(OrgMembership, OrgMembership.id == LoanApplication.org_membership_id)
+            .join(User, User.id == OrgMembership.user_id)
+            .outerjoin(Department, Department.id == OrgMembership.department_id)
+            .outerjoin(stage_subq, stage_subq.c.loan_id == LoanApplication.id)
             .where(*conditions)
             .order_by(LoanApplication.created_at.desc())
             .limit(limit)
@@ -464,7 +514,18 @@ async def list_admin_applications(
         total = int(count_result.scalar_one() or 0)
 
         stmt = (
-            select(LoanApplication)
+            select(
+                LoanApplication,
+                OrgMembership,
+                User,
+                Department,
+                stage_subq.c.stage_type,
+                stage_subq.c.stage_status,
+            )
+            .join(OrgMembership, OrgMembership.id == LoanApplication.org_membership_id)
+            .join(User, User.id == OrgMembership.user_id)
+            .outerjoin(Department, Department.id == OrgMembership.department_id)
+            .outerjoin(stage_subq, stage_subq.c.loan_id == LoanApplication.id)
             .where(*conditions)
             .order_by(LoanApplication.created_at.desc())
             .limit(limit)
@@ -472,8 +533,8 @@ async def list_admin_applications(
         )
 
     result = await db.execute(stmt)
-    applications = result.scalars().all()
-    return applications, total
+    rows = result.all()
+    return rows, total
 
 
 def _normalize_status_values(statuses: list[LoanApplicationStatus] | list[str]) -> list[str]:

@@ -10,15 +10,17 @@ from sqlalchemy.orm.exc import StaleDataError
 from app.api import deps
 from app.core.permissions import PermissionCode
 from app.db.session import get_db
+from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.loan_application import LoanApplication
 from app.models.user import User
 from app.schemas.loan import (
-    LoanApplicationDTO,
     LoanApplicationDraftCreate,
     LoanApplicationDraftUpdate,
-    LoanApplicationListResponse,
-    LoanApplicationSummaryDTO,
+    LoanApplicationSelfDTO,
+    LoanApplicationSelfListResponse,
+    LoanApplicationSelfSummaryDTO,
     LoanApplicationStatus,
+    LoanWorkflowStageStatus,
 )
 from app.services import loan_applications, loan_quotes
 
@@ -34,7 +36,49 @@ async def _get_membership_or_404(
     return membership
 
 
-@router.get("", response_model=LoanApplicationListResponse, summary="List loan applications for the current user")
+def _current_stage_from_workflow(stages):
+    if not stages:
+        return None, None
+    for stage in stages:
+        if str(stage.status) != LoanWorkflowStageStatus.COMPLETED.value:
+            return stage.stage_type, stage.status
+    return None, None
+
+
+def _build_self_payload(application: LoanApplication) -> LoanApplicationSelfDTO:
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    current_stage_type, current_stage_status = _current_stage_from_workflow(application.workflow_stages or [])
+    return LoanApplicationSelfDTO.model_validate(application).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+            "current_stage_type": current_stage_type,
+            "current_stage_status": current_stage_status,
+            "workflow_stages": [
+                {
+                    "stage_type": stage.stage_type,
+                    "status": stage.status,
+                    "created_at": stage.created_at,
+                    "updated_at": stage.updated_at,
+                    "completed_at": stage.completed_at,
+                }
+                for stage in (application.workflow_stages or [])
+            ],
+            "documents": [
+                {
+                    "document_type": doc.document_type,
+                    "file_name": doc.file_name,
+                    "storage_path_or_url": doc.storage_path_or_url,
+                    "uploaded_at": doc.uploaded_at,
+                }
+                for doc in (application.documents or [])
+            ],
+        }
+    )
+
+
+@router.get("", response_model=LoanApplicationSelfListResponse, summary="List loan applications for the current user")
 async def list_loan_applications(
     current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_VIEW_OWN)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -44,7 +88,7 @@ async def list_loan_applications(
     offset: int = Query(default=0, ge=0),
     created_from: datetime | None = Query(default=None),
     created_to: datetime | None = Query(default=None),
-) -> LoanApplicationListResponse:
+) -> LoanApplicationSelfListResponse:
     membership = await _get_membership_or_404(db, ctx, current_user.id)
     conditions = [
         LoanApplication.org_id == ctx.org_id,
@@ -58,22 +102,58 @@ async def list_loan_applications(
     if created_to:
         conditions.append(LoanApplication.created_at <= created_to)
 
+    stage_subq = (
+        select(
+            LoanWorkflowStage.loan_application_id.label("loan_id"),
+            LoanWorkflowStage.stage_type.label("stage_type"),
+            LoanWorkflowStage.status.label("stage_status"),
+        )
+        .where(
+            LoanWorkflowStage.org_id == ctx.org_id,
+            LoanWorkflowStage.status != "COMPLETED",
+        )
+        .order_by(LoanWorkflowStage.loan_application_id, LoanWorkflowStage.created_at)
+        .distinct(LoanWorkflowStage.loan_application_id)
+        .subquery()
+    )
+
     count_stmt = select(func.count()).select_from(LoanApplication).where(*conditions)
     count_result = await db.execute(count_stmt)
     total = int(count_result.scalar_one())
 
     stmt = (
-        select(LoanApplication)
+        select(
+            LoanApplication,
+            stage_subq.c.stage_type,
+            stage_subq.c.stage_status,
+        )
+        .outerjoin(stage_subq, stage_subq.c.loan_id == LoanApplication.id)
         .where(*conditions)
         .order_by(LoanApplication.created_at.desc())
         .limit(limit)
         .offset(offset)
     )
     result = await db.execute(stmt)
-    apps = result.scalars().all()
-    return LoanApplicationListResponse(
+    rows = result.all()
+    return LoanApplicationSelfListResponse(
         items=[
-            LoanApplicationSummaryDTO.model_validate(app) for app in apps
+            LoanApplicationSelfSummaryDTO(
+                id=app.id,
+                status=app.status,
+                as_of_date=app.as_of_date,
+                shares_to_exercise=app.shares_to_exercise,
+                loan_principal=app.loan_principal,
+                estimated_monthly_payment=app.estimated_monthly_payment,
+                total_payable_amount=app.total_payable_amount,
+                interest_type=app.interest_type,
+                repayment_method=app.repayment_method,
+                term_months=app.term_months,
+                current_stage_type=stage_type,
+                current_stage_status=stage_status,
+                created_at=app.created_at,
+                updated_at=app.updated_at,
+            )
+            for app, stage_type, stage_status in rows
         ],
         total=total,
     )
@@ -81,7 +161,7 @@ async def list_loan_applications(
 
 @router.get(
     "/{application_id}",
-    response_model=LoanApplicationDTO,
+    response_model=LoanApplicationSelfDTO,
     summary="Get a loan application by id",
 )
 async def get_loan_application(
@@ -89,7 +169,7 @@ async def get_loan_application(
     current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_VIEW_OWN)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
-) -> LoanApplicationDTO:
+) -> LoanApplicationSelfDTO:
     membership = await _get_membership_or_404(db, ctx, current_user.id)
     application = await loan_applications.get_application_with_related(
         db, ctx, application_id, membership_id=membership.id
@@ -97,19 +177,13 @@ async def get_loan_application(
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
-    payload = LoanApplicationDTO.model_validate(application).model_copy(
-        update={
-            "has_share_certificate": has_share_certificate,
-            "has_83b_election": has_83b_election,
-            "days_until_83b_due": days_until,
-        }
-    )
-    return payload
+    current_stage_type, current_stage_status = _current_stage_from_workflow(application.workflow_stages or [])
+    return _build_self_payload(application)
 
 
 @router.post(
     "",
-    response_model=LoanApplicationDTO,
+    response_model=LoanApplicationSelfDTO,
     status_code=201,
     summary="Create a draft loan application",
 )
@@ -119,7 +193,7 @@ async def create_loan_application(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> LoanApplicationDTO:
+) -> LoanApplicationSelfDTO:
     membership = await _get_membership_or_404(db, ctx, current_user.id)
     try:
         application = await loan_applications.create_draft_application(
@@ -139,19 +213,12 @@ async def create_loan_application(
         db, ctx, application.id, membership_id=membership.id
     )
     target = hydrated or application
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
-    return LoanApplicationDTO.model_validate(target).model_copy(
-        update={
-            "has_share_certificate": has_share_certificate,
-            "has_83b_election": has_83b_election,
-            "days_until_83b_due": days_until,
-        }
-    )
+    return _build_self_payload(target)
 
 
 @router.patch(
     "/{application_id}",
-    response_model=LoanApplicationDTO,
+    response_model=LoanApplicationSelfDTO,
     summary="Update a draft loan application",
 )
 async def update_loan_application(
@@ -160,7 +227,7 @@ async def update_loan_application(
     current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_APPLY)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
-) -> LoanApplicationDTO:
+) -> LoanApplicationSelfDTO:
     membership = await _get_membership_or_404(db, ctx, current_user.id)
     stmt = select(LoanApplication).where(
         LoanApplication.id == application_id,
@@ -198,19 +265,12 @@ async def update_loan_application(
         db, ctx, updated.id, membership_id=membership.id
     )
     target = hydrated or updated
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
-    return LoanApplicationDTO.model_validate(target).model_copy(
-        update={
-            "has_share_certificate": has_share_certificate,
-            "has_83b_election": has_83b_election,
-            "days_until_83b_due": days_until,
-        }
-    )
+    return _build_self_payload(target)
 
 
 @router.post(
     "/{application_id}/submit",
-    response_model=LoanApplicationDTO,
+    response_model=LoanApplicationSelfDTO,
     summary="Submit a draft loan application",
 )
 async def submit_loan_application(
@@ -219,7 +279,7 @@ async def submit_loan_application(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> LoanApplicationDTO:
+) -> LoanApplicationSelfDTO:
     membership = await _get_membership_or_404(db, ctx, current_user.id)
     stmt = select(LoanApplication).where(
         LoanApplication.id == application_id,
@@ -258,19 +318,12 @@ async def submit_loan_application(
         db, ctx, submitted.id, membership_id=membership.id
     )
     target = hydrated or submitted
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
-    return LoanApplicationDTO.model_validate(target).model_copy(
-        update={
-            "has_share_certificate": has_share_certificate,
-            "has_83b_election": has_83b_election,
-            "days_until_83b_due": days_until,
-        }
-    )
+    return _build_self_payload(target)
 
 
 @router.post(
     "/{application_id}/cancel",
-    response_model=LoanApplicationDTO,
+    response_model=LoanApplicationSelfDTO,
     summary="Cancel a draft loan application",
 )
 async def cancel_loan_application(
@@ -278,7 +331,7 @@ async def cancel_loan_application(
     current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_APPLY)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
-) -> LoanApplicationDTO:
+) -> LoanApplicationSelfDTO:
     membership = await _get_membership_or_404(db, ctx, current_user.id)
     stmt = select(LoanApplication).where(
         LoanApplication.id == application_id,
@@ -311,11 +364,4 @@ async def cancel_loan_application(
         db, ctx, cancelled.id, membership_id=membership.id
     )
     target = hydrated or cancelled
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(target)
-    return LoanApplicationDTO.model_validate(target).model_copy(
-        update={
-            "has_share_certificate": has_share_certificate,
-            "has_83b_election": has_83b_election,
-            "days_until_83b_due": days_until,
-        }
-    )
+    return _build_self_payload(target)

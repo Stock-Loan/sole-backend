@@ -18,6 +18,7 @@ from app.schemas.loan import (
     LoanApplicationDTO,
     LoanApplicationListResponse,
     LoanApplicationSummaryDTO,
+    LoanApplicantSummaryDTO,
     LoanApplicationStatus,
     LoanDocumentCreateRequest,
     LoanDocumentGroup,
@@ -39,6 +40,55 @@ from app.services import loan_applications, loan_exports, loan_queue, loan_quote
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
+
+
+def _build_applicant_summary(membership, user, department) -> LoanApplicantSummaryDTO:
+    return LoanApplicantSummaryDTO(
+        org_membership_id=membership.id,
+        user_id=user.id,
+        full_name=user.full_name,
+        email=user.email,
+        employee_id=membership.employee_id,
+        department_id=membership.department_id,
+        department_name=department.name if department else None,
+    )
+
+
+def _build_admin_summary(row) -> LoanApplicationSummaryDTO:
+    application, membership, user, department, stage_type, stage_status = row
+    applicant = _build_applicant_summary(membership, user, department)
+    return LoanApplicationSummaryDTO(
+        id=application.id,
+        org_membership_id=membership.id,
+        applicant=applicant,
+        status=application.status,
+        version=application.version,
+        as_of_date=application.as_of_date,
+        shares_to_exercise=application.shares_to_exercise,
+        total_exercisable_shares_snapshot=application.total_exercisable_shares_snapshot,
+        purchase_price=application.purchase_price,
+        down_payment_amount=application.down_payment_amount,
+        loan_principal=application.loan_principal,
+        estimated_monthly_payment=application.estimated_monthly_payment,
+        total_payable_amount=application.total_payable_amount,
+        interest_type=application.interest_type,
+        repayment_method=application.repayment_method,
+        term_months=application.term_months,
+        current_stage_type=stage_type,
+        current_stage_status=stage_status,
+        created_at=application.created_at,
+        updated_at=application.updated_at,
+    )
+
+
+async def _fetch_applicant_summary(db: AsyncSession, ctx: deps.TenantContext, application) -> LoanApplicantSummaryDTO | None:
+    membership_bundle = await loan_applications.get_membership_with_user(
+        db, ctx, application.org_membership_id
+    )
+    if not membership_bundle:
+        return None
+    membership, user, department = membership_bundle
+    return _build_applicant_summary(membership, user, department)
 
 
 @router.get(
@@ -78,7 +128,7 @@ async def list_loans(
         created_to=created_to,
     )
     return LoanApplicationListResponse(
-        items=[LoanApplicationSummaryDTO.model_validate(app) for app in applications],
+        items=[_build_admin_summary(row) for row in applications],
         total=total,
     )
 
@@ -139,11 +189,13 @@ async def get_loan(
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    applicant = await _fetch_applicant_summary(db, ctx, application)
     return LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
+            "applicant": applicant,
         }
     )
 
@@ -320,11 +372,13 @@ async def update_loan(
         ) from exc
 
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(updated)
+    applicant = await _fetch_applicant_summary(db, ctx, updated)
     return LoanApplicationDTO.model_validate(updated).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
+            "applicant": applicant,
         }
     )
 
@@ -345,7 +399,7 @@ async def list_hr_queue(
         db, ctx, stage_type="HR_REVIEW", limit=limit, offset=offset
     )
     return LoanApplicationListResponse(
-        items=[LoanApplicationSummaryDTO.model_validate(app) for app in applications],
+        items=[_build_admin_summary(row) for row in applications],
         total=total,
     )
 
@@ -366,7 +420,7 @@ async def list_finance_queue(
         db, ctx, stage_type="FINANCE_PROCESSING", limit=limit, offset=offset
     )
     return LoanApplicationListResponse(
-        items=[LoanApplicationSummaryDTO.model_validate(app) for app in applications],
+        items=[_build_admin_summary(row) for row in applications],
         total=total,
     )
 
@@ -387,7 +441,7 @@ async def list_legal_queue(
         db, ctx, stage_type="LEGAL_EXECUTION", limit=limit, offset=offset
     )
     return LoanApplicationListResponse(
-        items=[LoanApplicationSummaryDTO.model_validate(app) for app in applications],
+        items=[_build_admin_summary(row) for row in applications],
         total=total,
     )
 
@@ -478,11 +532,13 @@ async def get_hr_review(
             hr_stage = stage
             break
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    applicant = await _fetch_applicant_summary(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
+            "applicant": applicant,
         }
     )
     return LoanHRReviewResponse(
@@ -606,11 +662,13 @@ async def get_finance_review(
             finance_stage = stage
             break
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    applicant = await _fetch_applicant_summary(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
+            "applicant": applicant,
         }
     )
     return LoanFinanceReviewResponse(
@@ -736,11 +794,13 @@ async def get_legal_review(
             legal_stage = stage
             break
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    applicant = await _fetch_applicant_summary(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
+            "applicant": applicant,
         }
     )
     return LoanLegalReviewResponse(
