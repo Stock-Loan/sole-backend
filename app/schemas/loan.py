@@ -21,6 +21,7 @@ class LoanApplicationStatus(str, Enum):
     CANCELLED = "CANCELLED"
     IN_REVIEW = "IN_REVIEW"
     ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
     REJECTED = "REJECTED"
 
 
@@ -399,6 +400,8 @@ class LoanActivationMaintenanceResponse(BaseModel):
 
 
 class LoanDashboardSummary(BaseModel):
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
     org_id: str
     as_of: date
     total_loans: int
@@ -406,6 +409,23 @@ class LoanDashboardSummary(BaseModel):
     open_stage_counts: dict[str, int]
     created_last_30_days: int
     activated_last_30_days: int
+    total_applications: int
+    approved_count: int
+    draft_count: int
+    active_loan_principal_sum: Decimal
+    sum_amount_paid: Decimal
+    sum_amount_owed: Decimal
+    interest_earned_total: Decimal
+    active_loan_total_shares: int
+    completed_loan_total_shares: int
+    pending_hr: int
+    pending_finance: int
+    pending_legal: int
+    active_fixed_count: int
+    active_variable_count: int
+    active_interest_only_count: int
+    active_balloon_count: int
+    active_principal_and_interest_count: int
 
 
 class LoanScheduleEntry(BaseModel):
@@ -433,6 +453,16 @@ class LoanScheduleResponse(BaseModel):
     annual_rate_percent: Decimal
     estimated_monthly_payment: Decimal
     entries: list[LoanScheduleEntry]
+
+
+class LoanScheduleWhatIfRequest(BaseModel):
+    model_config = ConfigDict(use_enum_values=True, json_encoders={Decimal: lambda value: str(value)})
+
+    as_of_date: date | None = None
+    repayment_method: LoanRepaymentMethod | None = None
+    term_months: int | None = Field(default=None, ge=1)
+    annual_rate_percent: Decimal | None = Field(default=None, ge=0)
+    principal: Decimal | None = Field(default=None, ge=0)
 
 
 class LoanWorkflowStageDTO(BaseModel):
@@ -467,6 +497,35 @@ class LoanDocumentDTO(BaseModel):
     uploaded_by_user_id: UUID | None = None
     uploaded_at: datetime | None = None
     created_at: datetime | None = None
+
+
+class LoanRepaymentCreateRequest(BaseModel):
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
+    amount: Decimal = Field(gt=0)
+    principal_amount: Decimal = Field(ge=0)
+    interest_amount: Decimal = Field(ge=0)
+    payment_date: date
+
+
+class LoanRepaymentDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True, json_encoders={Decimal: lambda value: str(value)})
+
+    id: UUID
+    org_id: str
+    loan_application_id: UUID
+    amount: Decimal
+    principal_amount: Decimal
+    interest_amount: Decimal
+    payment_date: date
+    recorded_by_user_id: UUID | None = None
+    created_at: datetime | None = None
+
+
+class LoanRepaymentListResponse(BaseModel):
+    loan_id: UUID
+    total: int
+    items: list[LoanRepaymentDTO]
 
 
 LoanApplicationDTO.model_rebuild()

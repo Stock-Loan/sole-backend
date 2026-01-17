@@ -40,7 +40,7 @@ class LoanApplication(Base):
         CheckConstraint("total_interest_amount >= 0", name="ck_loan_app_total_interest_nonneg"),
         CheckConstraint("version >= 1", name="ck_loan_app_version_positive"),
         CheckConstraint(
-            "status IN ('DRAFT', 'SUBMITTED', 'CANCELLED', 'IN_REVIEW', 'ACTIVE', 'REJECTED')",
+            "status IN ('DRAFT', 'SUBMITTED', 'CANCELLED', 'IN_REVIEW', 'ACTIVE', 'COMPLETED', 'REJECTED')",
             name="ck_loan_app_status",
         ),
         CheckConstraint(
@@ -122,6 +122,11 @@ class LoanApplication(Base):
     )
     documents = relationship(
         "LoanDocument",
+        back_populates="loan_application",
+        cascade="all, delete-orphan",
+    )
+    repayments = relationship(
+        "LoanRepayment",
         back_populates="loan_application",
         cascade="all, delete-orphan",
     )

@@ -24,6 +24,7 @@ from app.schemas.loan import (
     LoanDocumentType,
     LoanQuoteResponse,
     LoanScheduleResponse,
+    LoanScheduleWhatIfRequest,
     LoanWhatIfRequest,
     LoanWorkflowStageType,
 )
@@ -206,6 +207,31 @@ async def get_borrower_schedule(
     application = await _get_application_or_404(db, ctx, loan_id, membership.id)
     try:
         return loan_schedules.build_schedule(application)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_schedule", "message": str(exc), "details": {}},
+        ) from exc
+
+
+@router.post(
+    "/{loan_id}/schedule/what-if",
+    response_model=LoanScheduleResponse,
+    summary="Run borrower loan schedule what-if simulation",
+)
+async def get_borrower_schedule_what_if(
+    loan_id: UUID,
+    payload: LoanScheduleWhatIfRequest,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WHAT_IF_SELF_SIMULATE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanScheduleResponse:
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    application = await _get_application_or_404(db, ctx, loan_id, membership.id)
+    try:
+        return loan_schedules.build_schedule_what_if(application, payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

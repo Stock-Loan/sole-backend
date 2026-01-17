@@ -31,11 +31,15 @@ from app.schemas.loan import (
     LoanDocumentListResponse,
     LoanDocumentDTO,
     LoanDocumentType,
+    LoanRepaymentCreateRequest,
+    LoanRepaymentDTO,
+    LoanRepaymentListResponse,
     LoanFinanceReviewResponse,
     LoanHRReviewResponse,
     LoanLegalReviewResponse,
     LoanQuoteResponse,
     LoanScheduleResponse,
+    LoanScheduleWhatIfRequest,
     LoanWhatIfRequest,
     LoanWorkflowStageType,
     LoanWorkflowStageDTO,
@@ -43,7 +47,7 @@ from app.schemas.loan import (
     LoanWorkflowStageStatus,
     LoanWorkflowStageUpdateRequest,
 )
-from app.services import authz, loan_applications, loan_exports, loan_queue, loan_quotes, loan_schedules, loan_workflow, stock_summary
+from app.services import authz, loan_applications, loan_exports, loan_queue, loan_quotes, loan_repayments, loan_schedules, loan_workflow, stock_summary
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.local_uploads import resolve_local_path, save_upload
 
@@ -346,6 +350,58 @@ async def list_loan_documents(
 
 
 @router.get(
+    "/{loan_id}/repayments",
+    response_model=LoanRepaymentListResponse,
+    summary="List loan repayments",
+)
+async def list_loan_repayments(
+    loan_id: UUID,
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_PAYMENT_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanRepaymentListResponse:
+    await _get_application_or_404(db, ctx, loan_id)
+    repayments = await loan_repayments.list_repayments(db, ctx, loan_id)
+    return LoanRepaymentListResponse(
+        loan_id=loan_id,
+        total=len(repayments),
+        items=[LoanRepaymentDTO.model_validate(item) for item in repayments],
+    )
+
+
+@router.post(
+    "/{loan_id}/repayments",
+    response_model=LoanRepaymentDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record a loan repayment",
+)
+async def record_loan_repayment(
+    loan_id: UUID,
+    payload: LoanRepaymentCreateRequest,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_PAYMENT_RECORD)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanRepaymentDTO:
+    application = await _get_application_or_404(db, ctx, loan_id)
+    try:
+        repayment = await loan_repayments.record_repayment(
+            db,
+            ctx,
+            application,
+            payload,
+            actor_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_repayment", "message": str(exc), "details": {}},
+        ) from exc
+    await db.commit()
+    await db.refresh(repayment)
+    return LoanRepaymentDTO.model_validate(repayment)
+
+
+@router.get(
     "/documents/{document_id}/download",
     response_class=FileResponse,
     summary="Download loan document file",
@@ -409,6 +465,28 @@ async def get_loan_schedule(
     application = await _get_application_or_404(db, ctx, loan_id)
     try:
         return loan_schedules.build_schedule(application)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_schedule", "message": str(exc), "details": {}},
+        ) from exc
+
+
+@router.post(
+    "/{loan_id}/schedule/what-if",
+    response_model=LoanScheduleResponse,
+    summary="Run loan schedule what-if simulation",
+)
+async def get_loan_schedule_what_if(
+    loan_id: UUID,
+    payload: LoanScheduleWhatIfRequest,
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_WHAT_IF_SIMULATE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanScheduleResponse:
+    application = await _get_application_or_404(db, ctx, loan_id)
+    try:
+        return loan_schedules.build_schedule_what_if(application, payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 from app.models.loan_application import LoanApplication
-from app.schemas.loan import LoanScheduleEntry, LoanScheduleResponse
+from app.schemas.loan import LoanScheduleEntry, LoanScheduleResponse, LoanScheduleWhatIfRequest
 from app.schemas.settings import LoanRepaymentMethod
 
 
@@ -45,15 +45,75 @@ def build_schedule(application: LoanApplication) -> LoanScheduleResponse:
     principal = _as_decimal(application.loan_principal)
     annual_rate = _as_decimal(application.nominal_annual_rate_percent)
     term_months = int(application.term_months or 0)
-    if term_months <= 0:
-        raise ValueError("term_months must be >= 1")
-
     repayment_method = LoanRepaymentMethod(application.repayment_method)
     start_date = (
         application.activation_date.date()
         if application.activation_date is not None
         else application.as_of_date
     )
+    return _build_schedule_from_terms(
+        loan_id=application.id,
+        principal=principal,
+        annual_rate=annual_rate,
+        term_months=term_months,
+        repayment_method=repayment_method,
+        start_date=start_date,
+    )
+
+
+def build_schedule_what_if(
+    application: LoanApplication,
+    payload: LoanScheduleWhatIfRequest,
+) -> LoanScheduleResponse:
+    principal = _as_decimal(payload.principal if payload.principal is not None else application.loan_principal)
+    annual_rate = _as_decimal(
+        payload.annual_rate_percent
+        if payload.annual_rate_percent is not None
+        else application.nominal_annual_rate_percent
+    )
+    term_months = int(payload.term_months if payload.term_months is not None else application.term_months or 0)
+    repayment_method = LoanRepaymentMethod(
+        payload.repayment_method if payload.repayment_method is not None else application.repayment_method
+    )
+    start_date = (
+        payload.as_of_date
+        if payload.as_of_date is not None
+        else (
+            application.activation_date.date()
+            if application.activation_date is not None
+            else application.as_of_date
+        )
+    )
+    return _build_schedule_from_terms(
+        loan_id=application.id,
+        principal=principal,
+        annual_rate=annual_rate,
+        term_months=term_months,
+        repayment_method=repayment_method,
+        start_date=start_date,
+    )
+
+
+def _estimate_monthly_payment(
+    principal: Decimal, annual_rate: Decimal, term_months: int, repayment_method: LoanRepaymentMethod
+) -> Decimal:
+    if repayment_method == LoanRepaymentMethod.PRINCIPAL_AND_INTEREST:
+        return _payment_principal_and_interest(principal, annual_rate, term_months)
+    monthly_interest = (principal * _monthly_rate(annual_rate)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+    return monthly_interest
+
+
+def _build_schedule_from_terms(
+    *,
+    loan_id,
+    principal: Decimal,
+    annual_rate: Decimal,
+    term_months: int,
+    repayment_method: LoanRepaymentMethod,
+    start_date: date,
+) -> LoanScheduleResponse:
+    if term_months <= 0:
+        raise ValueError("term_months must be >= 1")
 
     balance = principal
     entries: list[LoanScheduleEntry] = []
@@ -98,12 +158,14 @@ def build_schedule(application: LoanApplication) -> LoanScheduleResponse:
             )
 
     return LoanScheduleResponse(
-        loan_id=application.id,
+        loan_id=loan_id,
         as_of_date=start_date,
         repayment_method=repayment_method,
         term_months=term_months,
         principal=principal,
         annual_rate_percent=annual_rate,
-        estimated_monthly_payment=_as_decimal(application.estimated_monthly_payment),
+        estimated_monthly_payment=_estimate_monthly_payment(
+            principal, annual_rate, term_months, repayment_method
+        ),
         entries=entries,
     )
