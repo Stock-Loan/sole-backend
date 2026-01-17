@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, aliased
 
 from app.api import deps
 from app.models.audit_log import AuditLog
@@ -457,11 +457,14 @@ async def list_admin_applications(
     if created_to is not None:
         conditions.append(LoanApplication.created_at <= created_to)
 
+    assigned_user = aliased(User)
     stage_subq = (
         select(
             LoanWorkflowStage.loan_application_id.label("loan_id"),
             LoanWorkflowStage.stage_type.label("stage_type"),
             LoanWorkflowStage.status.label("stage_status"),
+            LoanWorkflowStage.assigned_to_user_id.label("assigned_to_user_id"),
+            LoanWorkflowStage.assigned_at.label("assigned_at"),
         )
         .where(
             LoanWorkflowStage.org_id == ctx.org_id,
@@ -497,12 +500,15 @@ async def list_admin_applications(
                 Department,
                 stage_subq.c.stage_type,
                 stage_subq.c.stage_status,
+                assigned_user,
+                stage_subq.c.assigned_at,
             )
             .join(LoanWorkflowStage, LoanWorkflowStage.loan_application_id == LoanApplication.id)
             .join(OrgMembership, OrgMembership.id == LoanApplication.org_membership_id)
             .join(User, User.id == OrgMembership.user_id)
             .outerjoin(Department, Department.id == OrgMembership.department_id)
             .outerjoin(stage_subq, stage_subq.c.loan_id == LoanApplication.id)
+            .outerjoin(assigned_user, assigned_user.id == stage_subq.c.assigned_to_user_id)
             .where(*conditions)
             .order_by(LoanApplication.created_at.desc())
             .limit(limit)
@@ -521,11 +527,14 @@ async def list_admin_applications(
                 Department,
                 stage_subq.c.stage_type,
                 stage_subq.c.stage_status,
+                assigned_user,
+                stage_subq.c.assigned_at,
             )
             .join(OrgMembership, OrgMembership.id == LoanApplication.org_membership_id)
             .join(User, User.id == OrgMembership.user_id)
             .outerjoin(Department, Department.id == OrgMembership.department_id)
             .outerjoin(stage_subq, stage_subq.c.loan_id == LoanApplication.id)
+            .outerjoin(assigned_user, assigned_user.id == stage_subq.c.assigned_to_user_id)
             .where(*conditions)
             .order_by(LoanApplication.created_at.desc())
             .limit(limit)

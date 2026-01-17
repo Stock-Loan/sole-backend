@@ -56,6 +56,7 @@ class PermissionCode(str, Enum):
     LOAN_WORKFLOW_FINANCE_MANAGE = "loan.workflow.finance.manage"
     LOAN_QUEUE_LEGAL_VIEW = "loan.queue.legal.view"
     LOAN_WORKFLOW_LEGAL_MANAGE = "loan.workflow.legal.manage"
+    LOAN_WORKFLOW_ASSIGN_ANY = "loan.workflow.assign.any"
     LOAN_WORKFLOW_POST_ISSUANCE_MANAGE = "loan.workflow.post_issuance.manage"
     LOAN_WORKFLOW_83B_MANAGE = "loan.workflow.83b.manage"
 

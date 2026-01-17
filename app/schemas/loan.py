@@ -205,6 +205,14 @@ class LoanApplicantSummaryDTO(BaseModel):
     department_name: str | None = None
 
 
+class LoanStageAssigneeSummaryDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: UUID
+    full_name: str
+    email: EmailStr
+
+
 class LoanWorkflowStageSelfDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
@@ -249,6 +257,8 @@ class LoanApplicationSummaryDTO(BaseModel):
     term_months: int
     current_stage_type: LoanWorkflowStageType | None = None
     current_stage_status: LoanWorkflowStageStatus | None = None
+    current_stage_assignee: LoanStageAssigneeSummaryDTO | None = None
+    current_stage_assigned_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -425,6 +435,9 @@ class LoanWorkflowStageDTO(BaseModel):
     assigned_role_hint: str | None = None
     completed_by_user_id: UUID | None = None
     completed_at: datetime | None = None
+    assigned_to_user_id: UUID | None = None
+    assigned_by_user_id: UUID | None = None
+    assigned_at: datetime | None = None
     notes: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -464,6 +477,10 @@ class LoanDocumentListResponse(BaseModel):
 class LoanWorkflowStageUpdateRequest(BaseModel):
     status: LoanWorkflowStageStatus
     notes: str | None = None
+
+
+class LoanWorkflowStageAssignRequest(BaseModel):
+    assignee_user_id: UUID | None = None
 
 
 class LoanDocumentCreateRequest(BaseModel):

@@ -13,12 +13,15 @@ from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
+from app.models.org_membership import OrgMembership
+from app.models.user import User
 from app.schemas.loan import (
     LoanAdminUpdateRequest,
     LoanApplicationDTO,
     LoanApplicationListResponse,
     LoanApplicationSummaryDTO,
     LoanApplicantSummaryDTO,
+    LoanStageAssigneeSummaryDTO,
     LoanApplicationStatus,
     LoanDocumentCreateRequest,
     LoanDocumentGroup,
@@ -33,13 +36,31 @@ from app.schemas.loan import (
     LoanWhatIfRequest,
     LoanWorkflowStageType,
     LoanWorkflowStageDTO,
+    LoanWorkflowStageAssignRequest,
     LoanWorkflowStageStatus,
     LoanWorkflowStageUpdateRequest,
 )
-from app.services import loan_applications, loan_exports, loan_queue, loan_quotes, loan_schedules, loan_workflow, stock_summary
+from app.services import authz, loan_applications, loan_exports, loan_queue, loan_quotes, loan_schedules, loan_workflow, stock_summary
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
+
+
+CORE_QUEUE_STAGE_TYPES = {
+    LoanWorkflowStageType.HR_REVIEW,
+    LoanWorkflowStageType.FINANCE_PROCESSING,
+    LoanWorkflowStageType.LEGAL_EXECUTION,
+}
+
+
+def _stage_manage_permission(stage_type: LoanWorkflowStageType) -> PermissionCode:
+    if stage_type == LoanWorkflowStageType.HR_REVIEW:
+        return PermissionCode.LOAN_WORKFLOW_HR_MANAGE
+    if stage_type == LoanWorkflowStageType.FINANCE_PROCESSING:
+        return PermissionCode.LOAN_WORKFLOW_FINANCE_MANAGE
+    if stage_type == LoanWorkflowStageType.LEGAL_EXECUTION:
+        return PermissionCode.LOAN_WORKFLOW_LEGAL_MANAGE
+    raise ValueError(f"Unsupported stage type: {stage_type}")
 
 
 def _build_applicant_summary(membership, user, department) -> LoanApplicantSummaryDTO:
@@ -55,8 +76,15 @@ def _build_applicant_summary(membership, user, department) -> LoanApplicantSumma
 
 
 def _build_admin_summary(row) -> LoanApplicationSummaryDTO:
-    application, membership, user, department, stage_type, stage_status = row
+    application, membership, user, department, stage_type, stage_status, assigned_user, assigned_at = row
     applicant = _build_applicant_summary(membership, user, department)
+    assignee = None
+    if assigned_user is not None:
+        assignee = LoanStageAssigneeSummaryDTO(
+            user_id=assigned_user.id,
+            full_name=assigned_user.full_name,
+            email=assigned_user.email,
+        )
     return LoanApplicationSummaryDTO(
         id=application.id,
         org_membership_id=membership.id,
@@ -76,6 +104,8 @@ def _build_admin_summary(row) -> LoanApplicationSummaryDTO:
         term_months=application.term_months,
         current_stage_type=stage_type,
         current_stage_status=stage_status,
+        current_stage_assignee=assignee,
+        current_stage_assigned_at=assigned_at,
         created_at=application.created_at,
         updated_at=application.updated_at,
     )
@@ -444,6 +474,186 @@ async def list_legal_queue(
         items=[_build_admin_summary(row) for row in applications],
         total=total,
     )
+
+
+@router.get(
+    "/queue/me/hr",
+    response_model=LoanApplicationListResponse,
+    summary="List loan applications assigned to the current user for HR review",
+)
+async def list_my_hr_queue(
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_QUEUE_HR_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> LoanApplicationListResponse:
+    applications, total = await loan_queue.list_queue(
+        db,
+        ctx,
+        stage_type="HR_REVIEW",
+        limit=limit,
+        offset=offset,
+        assigned_to_user_id=current_user.id,
+    )
+    return LoanApplicationListResponse(
+        items=[_build_admin_summary(row) for row in applications],
+        total=total,
+    )
+
+
+@router.get(
+    "/queue/me/finance",
+    response_model=LoanApplicationListResponse,
+    summary="List loan applications assigned to the current user for Finance processing",
+)
+async def list_my_finance_queue(
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_QUEUE_FINANCE_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> LoanApplicationListResponse:
+    applications, total = await loan_queue.list_queue(
+        db,
+        ctx,
+        stage_type="FINANCE_PROCESSING",
+        limit=limit,
+        offset=offset,
+        assigned_to_user_id=current_user.id,
+    )
+    return LoanApplicationListResponse(
+        items=[_build_admin_summary(row) for row in applications],
+        total=total,
+    )
+
+
+@router.get(
+    "/queue/me/legal",
+    response_model=LoanApplicationListResponse,
+    summary="List loan applications assigned to the current user for Legal execution",
+)
+async def list_my_legal_queue(
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_QUEUE_LEGAL_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> LoanApplicationListResponse:
+    applications, total = await loan_queue.list_queue(
+        db,
+        ctx,
+        stage_type="LEGAL_EXECUTION",
+        limit=limit,
+        offset=offset,
+        assigned_to_user_id=current_user.id,
+    )
+    return LoanApplicationListResponse(
+        items=[_build_admin_summary(row) for row in applications],
+        total=total,
+    )
+
+
+@router.post(
+    "/{loan_id}/workflow/{stage_type}/assign",
+    response_model=LoanWorkflowStageDTO,
+    summary="Assign a loan workflow stage",
+)
+async def assign_workflow_stage(
+    loan_id: UUID,
+    stage_type: LoanWorkflowStageType,
+    payload: LoanWorkflowStageAssignRequest,
+    current_user=Depends(deps.require_authenticated_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanWorkflowStageDTO:
+    if stage_type not in CORE_QUEUE_STAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "unsupported_stage_type",
+                "message": "Assignment is only supported for HR, Finance, and Legal stages",
+                "details": {"stage_type": stage_type.value},
+            },
+        )
+
+    required_permission = _stage_manage_permission(stage_type)
+    assignee_id = payload.assignee_user_id or current_user.id
+
+    if assignee_id != current_user.id:
+        allowed = await authz.check_permission(
+            current_user, ctx, PermissionCode.LOAN_WORKFLOW_ASSIGN_ANY, db
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: {PermissionCode.LOAN_WORKFLOW_ASSIGN_ANY.value}",
+            )
+    else:
+        allowed = await authz.check_permission(current_user, ctx, required_permission, db)
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: {required_permission.value}",
+            )
+
+    user_stmt = select(User).where(User.id == assignee_id, User.org_id == ctx.org_id)
+    user_result = await db.execute(user_stmt)
+    assignee = user_result.scalar_one_or_none()
+    if not assignee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee user not found")
+
+    membership_stmt = select(OrgMembership.id).where(
+        OrgMembership.org_id == ctx.org_id,
+        OrgMembership.user_id == assignee_id,
+    )
+    membership_result = await db.execute(membership_stmt)
+    if membership_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee membership not found")
+
+    assignee_allowed = await authz.check_permission(assignee, ctx, required_permission, db)
+    if not assignee_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "assignee_missing_permission",
+                "message": "Assignee does not have required workflow permission",
+                "details": {"permission": required_permission.value},
+            },
+        )
+
+    async with db.begin():
+        stage_stmt = (
+            select(LoanWorkflowStage)
+            .where(
+                LoanWorkflowStage.org_id == ctx.org_id,
+                LoanWorkflowStage.loan_application_id == loan_id,
+                LoanWorkflowStage.stage_type == stage_type.value,
+            )
+            .with_for_update()
+        )
+        stage_result = await db.execute(stage_stmt)
+        stage = stage_result.scalar_one_or_none()
+        if not stage:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow stage not found")
+        if stage.status == LoanWorkflowStageStatus.COMPLETED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "stage_completed",
+                    "message": "Completed workflow stages cannot be reassigned",
+                    "details": {"stage_type": stage.stage_type},
+                },
+            )
+
+        stage.assigned_to_user_id = assignee_id
+        stage.assigned_by_user_id = current_user.id
+        stage.assigned_at = datetime.now(timezone.utc)
+        stage.status = LoanWorkflowStageStatus.IN_PROGRESS.value
+        db.add(stage)
+
+    await db.refresh(stage)
+    return LoanWorkflowStageDTO.model_validate(stage)
 
 
 async def _get_application_or_404(
