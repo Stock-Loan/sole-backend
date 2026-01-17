@@ -214,6 +214,7 @@ async def list_loans(
     summary="Activate backlog loans with completed core stages",
 )
 async def activate_loan_backlog(
+    loan_id: UUID | None = Query(default=None),
     limit: int | None = Query(default=None, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
     current_user=Depends(deps.require_permission(PermissionCode.LOAN_VIEW_ALL)),
@@ -223,10 +224,13 @@ async def activate_loan_backlog(
     checked, activated, activated_ids, post_issuance_completed_ids = await loan_workflow.activate_backlog(
         db,
         ctx,
+        loan_id=str(loan_id) if loan_id else None,
         limit=limit,
         offset=offset,
         actor_id=current_user.id,
     )
+    if loan_id and checked == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
     return LoanActivationMaintenanceResponse(
         checked=checked,
         activated=activated,

@@ -120,21 +120,26 @@ async def activate_backlog(
     db: AsyncSession,
     ctx: deps.TenantContext,
     *,
+    loan_id: str | None = None,
     limit: int | None = None,
     offset: int = 0,
     actor_id=None,
-) -> tuple[int, int, list[str]]:
-    stmt = select(LoanApplication).where(
-        LoanApplication.org_id == ctx.org_id,
-        LoanApplication.status.in_(
-            [
-                LoanApplicationStatus.SUBMITTED.value,
-                LoanApplicationStatus.IN_REVIEW.value,
-                "PENDING",
-                LoanApplicationStatus.ACTIVE.value,
-            ]
-        ),
-    ).order_by(LoanApplication.created_at.asc())
+) -> tuple[int, int, list[str], list[str]]:
+    conditions = [LoanApplication.org_id == ctx.org_id]
+    if loan_id:
+        conditions.append(LoanApplication.id == loan_id)
+    else:
+        conditions.append(
+            LoanApplication.status.in_(
+                [
+                    LoanApplicationStatus.SUBMITTED.value,
+                    LoanApplicationStatus.IN_REVIEW.value,
+                    "PENDING",
+                    LoanApplicationStatus.ACTIVE.value,
+                ]
+            )
+        )
+    stmt = select(LoanApplication).where(*conditions).order_by(LoanApplication.created_at.asc())
     if limit is not None:
         stmt = stmt.limit(limit)
     if offset:
