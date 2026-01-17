@@ -27,3 +27,5 @@ secrets/
 # Alembic
 migrations/versions/__pycache__/
 backend-card.json
+
+local_uploads/

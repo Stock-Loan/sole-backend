@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     seed_admin_email: str = Field(alias="SEED_ADMIN_EMAIL")
     seed_admin_password: str = Field(alias="SEED_ADMIN_PASSWORD")
     seed_admin_full_name: str = Field(default="Admin User", alias="SEED_ADMIN_FULL_NAME")
+    local_upload_dir: str = Field(default="local_uploads", alias="LOCAL_UPLOAD_DIR")
 
 
 @lru_cache(maxsize=1)

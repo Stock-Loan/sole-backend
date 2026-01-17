@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import PermissionCode
+from app.core.settings import settings
 from app.db.session import get_db
 from app.models.loan_application import LoanApplication
 from app.models.loan_document import LoanDocument
@@ -27,6 +29,7 @@ from app.schemas.loan import (
 )
 from app.services import loan_applications, loan_exports, loan_quotes, loan_schedules
 from app.services.audit import model_snapshot, record_audit_log
+from app.services.local_uploads import resolve_local_path
 
 
 router = APIRouter(prefix="/me/loans", tags=["loan-borrower"])
@@ -126,6 +129,64 @@ async def list_borrower_documents(
         total=len(documents),
         groups=groups,
     )
+
+
+@router.get(
+    "/documents/{document_id}/download",
+    response_class=FileResponse,
+    summary="Download borrower loan document file",
+)
+async def download_borrower_document(
+    document_id: UUID,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_SELF_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    stmt = (
+        select(LoanDocument)
+        .join(LoanApplication, LoanApplication.id == LoanDocument.loan_application_id)
+        .where(
+            LoanDocument.org_id == ctx.org_id,
+            LoanDocument.id == document_id,
+            LoanApplication.org_membership_id == membership.id,
+        )
+    )
+    document = (await db.execute(stmt)).scalar_one_or_none()
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan document not found")
+    if document.storage_path_or_url.startswith("http"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "document_not_local",
+                "message": "Document is stored externally",
+                "details": {"storage_path_or_url": document.storage_path_or_url},
+            },
+        )
+    try:
+        file_path = resolve_local_path(Path(settings.local_upload_dir), document.storage_path_or_url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_path",
+                "message": "Document path is invalid",
+                "details": {},
+            },
+        ) from exc
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "document_missing",
+                "message": "Document file does not exist",
+                "details": {"storage_path_or_url": document.storage_path_or_url},
+            },
+        )
+    return FileResponse(file_path, filename=document.file_name, media_type="application/octet-stream")
 
 
 @router.get(

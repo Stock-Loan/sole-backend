@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import PermissionCode
+from app.core.settings import settings
 from app.db.session import get_db
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
@@ -42,6 +44,7 @@ from app.schemas.loan import (
 )
 from app.services import authz, loan_applications, loan_exports, loan_queue, loan_quotes, loan_schedules, loan_workflow, stock_summary
 from app.services.audit import model_snapshot, record_audit_log
+from app.services.local_uploads import resolve_local_path, save_upload
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
@@ -52,6 +55,46 @@ CORE_QUEUE_STAGE_TYPES = {
     LoanWorkflowStageType.FINANCE_PROCESSING,
     LoanWorkflowStageType.LEGAL_EXECUTION,
 }
+
+
+async def _save_local_document(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    loan_id: UUID,
+    document_type: LoanDocumentType,
+    stage_type: str,
+    file: UploadFile,
+    actor_id: UUID,
+) -> LoanDocument:
+    base_dir = Path(settings.local_upload_dir)
+    relative_path, original_name = await save_upload(
+        file,
+        base_dir=base_dir,
+        subdir=Path("loan-documents") / ctx.org_id / str(loan_id),
+    )
+    document = LoanDocument(
+        org_id=ctx.org_id,
+        loan_application_id=loan_id,
+        stage_type=stage_type,
+        document_type=document_type.value,
+        file_name=original_name,
+        storage_path_or_url=relative_path,
+        uploaded_by_user_id=actor_id,
+    )
+    db.add(document)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=actor_id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
+    await db.commit()
+    await db.refresh(document)
+    return document
 
 
 def _stage_manage_permission(stage_type: LoanWorkflowStageType) -> PermissionCode:
@@ -262,6 +305,56 @@ async def list_loan_documents(
         total=len(documents),
         groups=groups,
     )
+
+
+@router.get(
+    "/documents/{document_id}/download",
+    response_class=FileResponse,
+    summary="Download loan document file",
+)
+async def download_loan_document(
+    document_id: UUID,
+    _: object = Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    stmt = select(LoanDocument).where(
+        LoanDocument.org_id == ctx.org_id,
+        LoanDocument.id == document_id,
+    )
+    document = (await db.execute(stmt)).scalar_one_or_none()
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan document not found")
+    if document.storage_path_or_url.startswith("http"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "document_not_local",
+                "message": "Document is stored externally",
+                "details": {"storage_path_or_url": document.storage_path_or_url},
+            },
+        )
+    try:
+        file_path = resolve_local_path(Path(settings.local_upload_dir), document.storage_path_or_url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_path",
+                "message": "Document path is invalid",
+                "details": {},
+            },
+        ) from exc
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "document_missing",
+                "message": "Document file does not exist",
+                "details": {"storage_path_or_url": document.storage_path_or_url},
+            },
+        )
+    return FileResponse(file_path, filename=document.file_name, media_type="application/octet-stream")
 
 
 @router.get(
@@ -794,21 +887,26 @@ async def update_hr_stage(
             },
         )
     if payload.status == LoanWorkflowStageStatus.COMPLETED:
-        doc_stmt = select(LoanDocument).where(
+        required_types = {
+            LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT.value,
+            LoanDocumentType.SPOUSE_PARTNER_CONSENT.value,
+        }
+        doc_stmt = select(LoanDocument.document_type).where(
             LoanDocument.org_id == ctx.org_id,
             LoanDocument.loan_application_id == loan_id,
             LoanDocument.stage_type == "HR_REVIEW",
-            LoanDocument.document_type == LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT.value,
+            LoanDocument.document_type.in_(required_types),
         )
         doc_result = await db.execute(doc_stmt)
-        required_doc = doc_result.scalar_one_or_none()
-        if not required_doc:
+        present = {row[0] for row in doc_result.all()}
+        missing = sorted(required_types - present)
+        if missing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "code": "document_required",
-                    "message": "Notice of Stock Option Grant document is required before completing HR review",
-                    "details": {"document_type": LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT.value},
+                    "message": "All required HR documents must be uploaded before completing HR review",
+                    "details": {"missing_document_types": missing},
                 },
             )
 
@@ -852,12 +950,16 @@ async def upload_hr_document(
     db: AsyncSession = Depends(get_db),
 ) -> LoanDocumentDTO:
     await _get_application_or_404(db, ctx, loan_id)
-    if payload.document_type != LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT:
+    allowed_types = {
+        LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT,
+        LoanDocumentType.SPOUSE_PARTNER_CONSENT,
+    }
+    if payload.document_type not in allowed_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "invalid_document_type",
-                "message": "HR documents must be Notice of Stock Option Grant",
+                "message": "HR documents must be Notice of Stock Option Grant or Spouse/Partner Consent",
                 "details": {"document_type": payload.document_type},
             },
         )
@@ -883,6 +985,46 @@ async def upload_hr_document(
     )
     await db.commit()
     await db.refresh(document)
+    return LoanDocumentDTO.model_validate(document)
+
+
+@router.post(
+    "/{loan_id}/documents/hr/upload",
+    response_model=LoanDocumentDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload HR loan document (file)",
+)
+async def upload_hr_document_file(
+    loan_id: UUID,
+    document_type: LoanDocumentType = Form(...),
+    file: UploadFile = File(...),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_MANAGE_HR)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentDTO:
+    await _get_application_or_404(db, ctx, loan_id)
+    allowed_types = {
+        LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT,
+        LoanDocumentType.SPOUSE_PARTNER_CONSENT,
+    }
+    if document_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_type",
+                "message": "HR documents must be Notice of Stock Option Grant or Spouse/Partner Consent",
+                "details": {"document_type": document_type},
+            },
+        )
+    document = await _save_local_document(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=document_type,
+        stage_type="HR_REVIEW",
+        file=file,
+        actor_id=current_user.id,
+    )
     return LoanDocumentDTO.model_validate(document)
 
 
@@ -1039,6 +1181,46 @@ async def upload_finance_document(
     return LoanDocumentDTO.model_validate(document)
 
 
+@router.post(
+    "/{loan_id}/documents/finance/upload",
+    response_model=LoanDocumentDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload Finance loan document (file)",
+)
+async def upload_finance_document_file(
+    loan_id: UUID,
+    document_type: LoanDocumentType = Form(...),
+    file: UploadFile = File(...),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_MANAGE_FINANCE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentDTO:
+    await _get_application_or_404(db, ctx, loan_id)
+    allowed_types = {
+        LoanDocumentType.PAYMENT_INSTRUCTIONS,
+        LoanDocumentType.PAYMENT_CONFIRMATION,
+    }
+    if document_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_type",
+                "message": "Finance documents must be Payment Instructions or Payment Confirmation",
+                "details": {"document_type": document_type},
+            },
+        )
+    document = await _save_local_document(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=document_type,
+        stage_type="FINANCE_PROCESSING",
+        file=file,
+        actor_id=current_user.id,
+    )
+    return LoanDocumentDTO.model_validate(document)
+
+
 @router.get(
     "/{loan_id}/legal",
     response_model=LoanLegalReviewResponse,
@@ -1101,7 +1283,6 @@ async def update_legal_stage(
         required_types = {
             LoanDocumentType.STOCK_OPTION_EXERCISE_AND_LOAN_AGREEMENT.value,
             LoanDocumentType.SECURED_PROMISSORY_NOTE.value,
-            LoanDocumentType.SPOUSE_PARTNER_CONSENT.value,
             LoanDocumentType.STOCK_POWER_AND_ASSIGNMENT.value,
             LoanDocumentType.INVESTMENT_REPRESENTATION_STATEMENT.value,
         }
@@ -1167,7 +1348,6 @@ async def upload_legal_document(
     allowed_types = {
         LoanDocumentType.STOCK_OPTION_EXERCISE_AND_LOAN_AGREEMENT,
         LoanDocumentType.SECURED_PROMISSORY_NOTE,
-        LoanDocumentType.SPOUSE_PARTNER_CONSENT,
         LoanDocumentType.STOCK_POWER_AND_ASSIGNMENT,
         LoanDocumentType.INVESTMENT_REPRESENTATION_STATEMENT,
     }
@@ -1202,6 +1382,48 @@ async def upload_legal_document(
     )
     await db.commit()
     await db.refresh(document)
+    return LoanDocumentDTO.model_validate(document)
+
+
+@router.post(
+    "/{loan_id}/documents/legal/upload",
+    response_model=LoanDocumentDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload Legal loan document (file)",
+)
+async def upload_legal_document_file(
+    loan_id: UUID,
+    document_type: LoanDocumentType = Form(...),
+    file: UploadFile = File(...),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_MANAGE_LEGAL)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentDTO:
+    await _get_application_or_404(db, ctx, loan_id)
+    allowed_types = {
+        LoanDocumentType.STOCK_OPTION_EXERCISE_AND_LOAN_AGREEMENT,
+        LoanDocumentType.SECURED_PROMISSORY_NOTE,
+        LoanDocumentType.STOCK_POWER_AND_ASSIGNMENT,
+        LoanDocumentType.INVESTMENT_REPRESENTATION_STATEMENT,
+    }
+    if document_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_type",
+                "message": "Legal documents must be execution documents for the loan",
+                "details": {"document_type": document_type},
+            },
+        )
+    document = await _save_local_document(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=document_type,
+        stage_type="LEGAL_EXECUTION",
+        file=file,
+        actor_id=current_user.id,
+    )
     return LoanDocumentDTO.model_validate(document)
 
 
@@ -1292,4 +1514,40 @@ async def upload_legal_issuance_document(
     )
     await db.commit()
     await db.refresh(document)
+    return LoanDocumentDTO.model_validate(document)
+
+
+@router.post(
+    "/{loan_id}/documents/legal-issuance/upload",
+    response_model=LoanDocumentDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload Legal post-issuance document (file)",
+)
+async def upload_legal_issuance_document_file(
+    loan_id: UUID,
+    document_type: LoanDocumentType = Form(...),
+    file: UploadFile = File(...),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_MANAGE_LEGAL)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentDTO:
+    await _get_application_or_404(db, ctx, loan_id)
+    if document_type != LoanDocumentType.SHARE_CERTIFICATE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_type",
+                "message": "Legal post-issuance documents must be SHARE_CERTIFICATE",
+                "details": {"document_type": document_type},
+            },
+        )
+    document = await _save_local_document(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=document_type,
+        stage_type="LEGAL_POST_ISSUANCE",
+        file=file,
+        actor_id=current_user.id,
+    )
     return LoanDocumentDTO.model_validate(document)
