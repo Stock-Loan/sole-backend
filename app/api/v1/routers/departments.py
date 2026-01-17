@@ -18,6 +18,7 @@ from app.schemas.departments import (
 )
 from app.models.user import User
 from app.schemas.users import UserListResponse
+from app.services.audit import model_snapshot, record_audit_log
 from app.models.user import User as UserModel
 from app.models.user_role import UserRole
 from app.models.role import Role
@@ -67,7 +68,7 @@ async def list_departments(
 async def create_department(
     payload: DepartmentCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> DepartmentOut:
     dept = Department(
@@ -83,6 +84,17 @@ async def create_department(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Department name/code already exists") from exc
     await db.refresh(dept)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="department.created",
+        resource_type="department",
+        resource_id=str(dept.id),
+        old_value=None,
+        new_value=model_snapshot(dept),
+    )
+    await db.commit()
     return dept
 
 
@@ -91,7 +103,7 @@ async def update_department(
     department_id: str,
     payload: DepartmentUpdate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> DepartmentOut:
     stmt = select(Department).where(Department.id == department_id, Department.org_id == ctx.org_id)
@@ -100,6 +112,7 @@ async def update_department(
     if not dept:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
 
+    old_snapshot = model_snapshot(dept)
     updates = payload.model_dump(exclude_unset=True)
     if "name" in updates and updates["name"]:
         dept.name = updates["name"]
@@ -114,6 +127,17 @@ async def update_department(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Department name/code already exists") from exc
     await db.refresh(dept)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="department.updated",
+        resource_type="department",
+        resource_id=str(dept.id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(dept),
+    )
+    await db.commit()
     return dept
 
 
@@ -121,7 +145,7 @@ async def update_department(
 async def delete_department(
     department_id: str,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     stmt = select(Department).where(Department.id == department_id, Department.org_id == ctx.org_id)
@@ -129,7 +153,18 @@ async def delete_department(
     dept = result.scalar_one_or_none()
     if not dept:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
+    old_snapshot = model_snapshot(dept)
     await db.delete(dept)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="department.deleted",
+        resource_type="department",
+        resource_id=str(dept.id),
+        old_value=old_snapshot,
+        new_value=None,
+    )
     await db.commit()
     return None
 
@@ -185,7 +220,7 @@ async def assign_members(
     department_id: str,
     payload: DepartmentAssignRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
     __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> DepartmentAssignResponse:
@@ -214,9 +249,20 @@ async def assign_members(
         if membership.employment_status and membership.employment_status.upper() != "ACTIVE":
             skipped_inactive.append(membership_id)
             continue
+        old_snapshot = model_snapshot(membership)
         membership.department_id = dept.id
         db.add(membership)
         assigned.append(membership_id)
+        record_audit_log(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            action="department.member_assigned",
+            resource_type="org_membership",
+            resource_id=str(membership.id),
+            old_value=old_snapshot,
+            new_value=model_snapshot(membership),
+        )
     await db.commit()
     await db.refresh(dept)
     return DepartmentAssignResponse(
@@ -231,7 +277,7 @@ async def assign_members(
 async def unassign_members(
     payload: DepartmentAssignRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_MANAGE)),
     __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -243,7 +289,18 @@ async def unassign_members(
         membership = mem_result.scalar_one_or_none()
         if not membership:
             continue
+        old_snapshot = model_snapshot(membership)
         membership.department_id = None
         db.add(membership)
+        record_audit_log(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            action="department.member_unassigned",
+            resource_type="org_membership",
+            resource_id=str(membership.id),
+            old_value=old_snapshot,
+            new_value=model_snapshot(membership),
+        )
     await db.commit()
     return None

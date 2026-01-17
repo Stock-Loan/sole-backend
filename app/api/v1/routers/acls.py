@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.access_control_list import AccessControlList
 from app.models.user import User
 from app.schemas.acl import ACLCreate, ACLListResponse, ACLOut
+from app.services.audit import model_snapshot, record_audit_log
 
 router = APIRouter(prefix="/acls", tags=["acls"])
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ async def list_acls(
 async def create_acl(
     payload: ACLCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> ACLOut:
     acl = AccessControlList(
@@ -62,6 +63,17 @@ async def create_acl(
             "resource_id": payload.resource_id,
         },
     )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="acl.created",
+        resource_type="acl",
+        resource_id=str(acl.id),
+        old_value=None,
+        new_value=model_snapshot(acl),
+    )
+    await db.commit()
     return acl
 
 
@@ -69,7 +81,7 @@ async def create_acl(
 async def delete_acl(
     acl_id: UUID,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     stmt = select(AccessControlList).where(AccessControlList.id == acl_id, AccessControlList.org_id == ctx.org_id)
@@ -77,7 +89,18 @@ async def delete_acl(
     acl = result.scalar_one_or_none()
     if not acl:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ACL not found")
+    old_snapshot = model_snapshot(acl)
     await db.delete(acl)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="acl.deleted",
+        resource_type="acl",
+        resource_id=str(acl.id),
+        old_value=old_snapshot,
+        new_value=None,
+    )
     await db.commit()
     logger.info(
         "ACL deleted",

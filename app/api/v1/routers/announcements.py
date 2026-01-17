@@ -17,6 +17,7 @@ from app.schemas.announcements import (
     AnnouncementUpdate,
 )
 from app.services import announcements as announcement_service
+from app.services.audit import model_snapshot, record_audit_log
 from app.services import authz
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
@@ -169,7 +170,7 @@ async def get_announcement(
 async def create_announcement(
     payload: AnnouncementCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementOut:
     announcement = await announcement_service.create_announcement(db, ctx, payload)
@@ -179,6 +180,17 @@ async def create_announcement(
         "Announcement created",
         extra={"org_id": ctx.org_id, "announcement_id": str(announcement.id), "status": announcement.status},
     )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="announcement.created",
+        resource_type="announcement",
+        resource_id=str(announcement.id),
+        old_value=None,
+        new_value=model_snapshot(announcement),
+    )
+    await db.commit()
     return announcement
 
 
@@ -187,15 +199,27 @@ async def update_announcement(
     announcement_id: UUID,
     payload: AnnouncementUpdate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementOut:
     announcement = await _get_announcement_or_404(db, ctx, announcement_id)
+    old_snapshot = model_snapshot(announcement)
     announcement = await announcement_service.update_announcement(db, announcement, payload)
     read_counts = await announcement_service.get_read_counts(db, ctx, [announcement.id])
     target_count = await announcement_service.get_recipient_count(db, ctx)
     announcement.read_count = read_counts.get(str(announcement.id), 0)
     announcement.target_count = target_count
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="announcement.updated",
+        resource_type="announcement",
+        resource_id=str(announcement.id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(announcement),
+    )
+    await db.commit()
     return announcement
 
 

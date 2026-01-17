@@ -24,6 +24,7 @@ from app.models.user_role import UserRole
 from app.models.role import Role
 from app.models.department import Department
 from app.services import onboarding
+from app.services.audit import model_snapshot, record_audit_log
 from app.services import settings as settings_service
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/org/users", tags=["users"])
 async def onboard_user(
     payload: OnboardingUserCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
     db: AsyncSession = Depends(get_db),
 ) -> OnboardingResponse:
     try:
@@ -46,6 +47,20 @@ async def onboard_user(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user.onboarded",
+        resource_type="org_membership",
+        resource_id=str(membership.id),
+        old_value=None,
+        new_value={
+            "user": model_snapshot(user, exclude={"hashed_password"}),
+            "membership": model_snapshot(membership),
+        },
+    )
+    await db.commit()
     return OnboardingResponse(user=user, membership=membership, temporary_password=temp_password)
 
 
@@ -71,7 +86,7 @@ async def download_template() -> StreamingResponse:
 async def bulk_onboard(
     file: UploadFile,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
     db: AsyncSession = Depends(get_db),
 ) -> BulkOnboardingResult:
     MAX_BYTES = 5 * 1024 * 1024  # 5 MB guardrail
@@ -84,6 +99,22 @@ async def bulk_onboard(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid encoding; expected UTF-8") from exc
     try:
         result = await onboarding.bulk_onboard_users(db, ctx, content)
+        for success in result.successes:
+            record_audit_log(
+                db,
+                ctx,
+                actor_id=current_user.id,
+                action="user.onboarded",
+                resource_type="org_membership",
+                resource_id=str(success.membership.id),
+                old_value=None,
+                new_value={
+                    "user": model_snapshot(success.user, exclude={"hashed_password"}),
+                    "membership": model_snapshot(success.membership),
+                },
+            )
+        if result.successes:
+            await db.commit()
         return result
     except onboarding.BulkOnboardCSVError as exc:
         return JSONResponse(
@@ -176,7 +207,7 @@ async def get_user(
 async def delete_user(
     membership_id: str,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     stmt = (
@@ -190,7 +221,19 @@ async def delete_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user = row
 
+    membership_snapshot = model_snapshot(membership)
+    user_snapshot = model_snapshot(user, exclude={"hashed_password"})
     await db.delete(membership)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user.membership.deleted",
+        resource_type="org_membership",
+        resource_id=str(membership.id),
+        old_value={"membership": membership_snapshot, "user": user_snapshot},
+        new_value=None,
+    )
     await db.commit()
 
     # If user has no other memberships, delete user record
@@ -198,6 +241,16 @@ async def delete_user(
     other_result = await db.execute(other_stmt)
     if not other_result.first():
         await db.delete(user)
+        record_audit_log(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            action="user.deleted",
+            resource_type="user",
+            resource_id=str(user.id),
+            old_value=user_snapshot,
+            new_value=None,
+        )
         await db.commit()
     return None
 
@@ -206,7 +259,7 @@ async def delete_user(
 async def bulk_delete_users(
     payload: BulkDeleteRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     deleted = 0
@@ -223,12 +276,34 @@ async def bulk_delete_users(
             not_found.append(membership_id)
             continue
         membership, user = row
+        membership_snapshot = model_snapshot(membership)
+        user_snapshot = model_snapshot(user, exclude={"hashed_password"})
         await db.delete(membership)
+        record_audit_log(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            action="user.membership.deleted",
+            resource_type="org_membership",
+            resource_id=str(membership.id),
+            old_value={"membership": membership_snapshot, "user": user_snapshot},
+            new_value=None,
+        )
         await db.commit()
         other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
         other_result = await db.execute(other_stmt)
         if not other_result.first():
             await db.delete(user)
+            record_audit_log(
+                db,
+                ctx,
+                actor_id=current_user.id,
+                action="user.deleted",
+                resource_type="user",
+                resource_id=str(user.id),
+                old_value=user_snapshot,
+                new_value=None,
+            )
             await db.commit()
         deleted += 1
     return {"deleted": deleted, "not_found": not_found}
@@ -239,7 +314,7 @@ async def update_membership(
     membership_id: str,
     payload: UpdateMembershipRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
@@ -256,6 +331,7 @@ async def update_membership(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user = row
 
+    old_membership = model_snapshot(membership)
     if payload.employment_status:
         membership.employment_status = payload.employment_status
     if payload.platform_status:
@@ -268,12 +344,26 @@ async def update_membership(
         (membership.platform_status and membership.platform_status.upper() != "ACTIVE")
         or (membership.employment_status and membership.employment_status.upper() != "ACTIVE")
     ):
+        roles_to_remove = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
         await db.execute(
             delete(UserRole).where(UserRole.org_id == ctx.org_id, UserRole.user_id == membership.user_id)
         )
         user.token_version += 1
         db.add(user)
         await db.commit()
+        for role in roles_to_remove:
+            record_audit_log(
+                db,
+                ctx,
+                actor_id=current_user.id,
+                action="role.removed",
+                resource_type="user_role",
+                resource_id=f"{user.id}:{role.id}",
+                old_value={"user_id": str(user.id), "role_id": str(role.id)},
+                new_value=None,
+            )
+        if roles_to_remove:
+            await db.commit()
         logger.info(
             "Auto-removed roles due to inactive status",
             extra={
@@ -290,6 +380,17 @@ async def update_membership(
     # No, we modified DB. We should expire the relationship or reload.
     await db.refresh(user, attribute_names=["roles"])
     user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user.membership.updated",
+        resource_type="org_membership",
+        resource_id=str(membership.id),
+        old_value=old_membership,
+        new_value=model_snapshot(membership),
+    )
+    await db.commit()
     return UserDetailResponse(user=user, membership=membership, roles=user_roles)
 
 
@@ -298,7 +399,7 @@ async def update_user_profile(
     membership_id: str,
     payload: UpdateUserProfileRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     org_settings = await settings_service.get_org_settings(db, ctx)
@@ -321,6 +422,7 @@ async def update_user_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user = row
 
+    old_user = model_snapshot(user, exclude={"hashed_password"})
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
     # maintain full_name if first/last change
@@ -334,4 +436,15 @@ async def update_user_profile(
     await db.refresh(user)
     await db.refresh(membership)
     user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user.profile.updated",
+        resource_type="user",
+        resource_id=str(user.id),
+        old_value=old_user,
+        new_value=model_snapshot(user, exclude={"hashed_password"}),
+    )
+    await db.commit()
     return UserDetailResponse(user=user, membership=membership, roles=user_roles)

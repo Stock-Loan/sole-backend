@@ -17,6 +17,7 @@ from app.schemas.roles import RoleAssignmentRequest, RoleCreate, RoleListRespons
 from app.schemas.users import UserListResponse
 from app.models.department import Department
 from app.services.authz import invalidate_permission_cache
+from app.services.audit import model_snapshot, record_audit_log
 
 router = APIRouter(prefix="/roles", tags=["roles"])
 logger = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ async def list_role_members(
 async def create_role(
     payload: RoleCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> RoleOut:
     # Validate permission codes
@@ -126,6 +127,17 @@ async def create_role(
         "Role created",
         extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name, "system": role.is_system_role},
     )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="role.created",
+        resource_type="role",
+        resource_id=str(role.id),
+        old_value=None,
+        new_value=model_snapshot(role),
+    )
+    await db.commit()
     return role
 
 
@@ -134,7 +146,7 @@ async def update_role(
     role_id: UUID,
     payload: RoleUpdate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> RoleOut:
     stmt = select(Role).where(Role.id == role_id, Role.org_id == ctx.org_id)
@@ -145,6 +157,7 @@ async def update_role(
     if role.is_system_role:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System roles cannot be edited")
 
+    old_snapshot = model_snapshot(role)
     updates = payload.model_dump(exclude_unset=True)
     if "permissions" in updates and updates["permissions"] is not None:
         # Validate permission codes
@@ -180,6 +193,17 @@ async def update_role(
         "Role updated",
         extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name, "system": role.is_system_role},
     )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="role.updated",
+        resource_type="role",
+        resource_id=str(role.id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(role),
+    )
+    await db.commit()
     return role
 
 
@@ -187,7 +211,7 @@ async def update_role(
 async def delete_role(
     role_id: UUID,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     stmt = select(Role).where(Role.id == role_id, Role.org_id == ctx.org_id)
@@ -203,7 +227,18 @@ async def delete_role(
     user_role_result = await db.execute(user_role_stmt)
     users_to_invalidate = user_role_result.scalars().all()
 
+    old_snapshot = model_snapshot(role)
     await db.delete(role)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="role.deleted",
+        resource_type="role",
+        resource_id=str(role.id),
+        old_value=old_snapshot,
+        new_value=None,
+    )
     await db.commit()
     
     for user_id in users_to_invalidate:
@@ -226,7 +261,7 @@ async def assign_roles_to_user(
     membership_id: UUID,
     payload: RoleAssignmentRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
     __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> list[RoleOut]:
@@ -299,6 +334,17 @@ async def assign_roles_to_user(
 
     if to_add:
         db.add_all([UserRole(org_id=ctx.org_id, user_id=membership.user_id, role_id=rid) for rid in to_add])
+        for role_id in to_add:
+            record_audit_log(
+                db,
+                ctx,
+                actor_id=current_user.id,
+                action="role.assigned",
+                resource_type="user_role",
+                resource_id=f"{membership.user_id}:{role_id}",
+                old_value=None,
+                new_value={"user_id": str(membership.user_id), "role_id": str(role_id)},
+            )
         await db.commit()
         
         # Invalidate permission cache for this user
@@ -321,7 +367,7 @@ async def remove_roles_from_user(
     membership_id: UUID,
     payload: RoleAssignmentRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
     __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -337,12 +383,31 @@ async def remove_roles_from_user(
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
 
+    existing_stmt = select(UserRole.role_id).where(
+        UserRole.org_id == ctx.org_id,
+        UserRole.user_id == membership.user_id,
+        UserRole.role_id.in_(payload.role_ids),
+    )
+    existing_result = await db.execute(existing_stmt)
+    existing_role_ids = list(existing_result.scalars().all())
+
     stmt = delete(UserRole).where(
         UserRole.org_id == ctx.org_id,
         UserRole.user_id == membership.user_id,
         UserRole.role_id.in_(payload.role_ids),
     )
     await db.execute(stmt)
+    for role_id in existing_role_ids:
+        record_audit_log(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            action="role.removed",
+            resource_type="user_role",
+            resource_id=f"{membership.user_id}:{role_id}",
+            old_value={"user_id": str(membership.user_id), "role_id": str(role_id)},
+            new_value=None,
+        )
     await db.commit()
     
     # Invalidate permission cache for this user

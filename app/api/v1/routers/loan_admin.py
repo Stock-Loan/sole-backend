@@ -41,6 +41,7 @@ from app.schemas.loan import (
     LoanWorkflowStageUpdateRequest,
 )
 from app.services import authz, loan_applications, loan_exports, loan_queue, loan_quotes, loan_schedules, loan_workflow, stock_summary
+from app.services.audit import model_snapshot, record_audit_log
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
@@ -645,11 +646,22 @@ async def assign_workflow_stage(
             },
         )
 
+    old_snapshot = model_snapshot(stage)
     stage.assigned_to_user_id = assignee_id
     stage.assigned_by_user_id = current_user.id
     stage.assigned_at = datetime.now(timezone.utc)
     stage.status = LoanWorkflowStageStatus.IN_PROGRESS.value
     db.add(stage)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_workflow_stage.assigned",
+        resource_type="loan_workflow_stage",
+        resource_id=str(stage.id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(stage),
+    )
     await db.commit()
     await db.refresh(stage)
     return LoanWorkflowStageDTO.model_validate(stage)
@@ -771,6 +783,7 @@ async def update_hr_stage(
 ) -> LoanWorkflowStageDTO:
     stage = await _get_hr_stage_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
+    old_snapshot = model_snapshot(stage)
     if payload.status not in {LoanWorkflowStageStatus.IN_PROGRESS, LoanWorkflowStageStatus.COMPLETED}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -810,6 +823,16 @@ async def update_hr_stage(
 
     db.add(stage)
     await loan_workflow.try_activate_loan(db, ctx, stage.loan_application, actor_id=current_user.id)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_workflow_stage.updated",
+        resource_type="loan_workflow_stage",
+        resource_id=str(stage.id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(stage),
+    )
     await db.commit()
     await db.refresh(stage)
     return LoanWorkflowStageDTO.model_validate(stage)
@@ -848,6 +871,16 @@ async def upload_hr_document(
         uploaded_by_user_id=current_user.id,
     )
     db.add(document)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
     await db.commit()
     await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)
@@ -900,6 +933,7 @@ async def update_finance_stage(
 ) -> LoanWorkflowStageDTO:
     stage = await _get_finance_stage_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
+    old_snapshot = model_snapshot(stage)
     if payload.status not in {LoanWorkflowStageStatus.IN_PROGRESS, LoanWorkflowStageStatus.COMPLETED}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -939,6 +973,16 @@ async def update_finance_stage(
 
     db.add(stage)
     await loan_workflow.try_activate_loan(db, ctx, stage.loan_application, actor_id=current_user.id)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_workflow_stage.updated",
+        resource_type="loan_workflow_stage",
+        resource_id=str(stage.id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(stage),
+    )
     await db.commit()
     await db.refresh(stage)
     return LoanWorkflowStageDTO.model_validate(stage)
@@ -980,6 +1024,16 @@ async def upload_finance_document(
         uploaded_by_user_id=current_user.id,
     )
     db.add(document)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
     await db.commit()
     await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)
@@ -1033,6 +1087,7 @@ async def update_legal_stage(
     stage = await _get_legal_stage_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
+    old_snapshot = model_snapshot(stage)
     if payload.status not in {LoanWorkflowStageStatus.IN_PROGRESS, LoanWorkflowStageStatus.COMPLETED}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1080,6 +1135,16 @@ async def update_legal_stage(
 
     db.add(stage)
     await loan_workflow.try_activate_loan(db, ctx, stage.loan_application, actor_id=current_user.id)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_workflow_stage.updated",
+        resource_type="loan_workflow_stage",
+        resource_id=str(stage.id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(stage),
+    )
     await db.commit()
     await db.refresh(stage)
     return LoanWorkflowStageDTO.model_validate(stage)
@@ -1125,6 +1190,16 @@ async def upload_legal_document(
         uploaded_by_user_id=current_user.id,
     )
     db.add(document)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
     await db.commit()
     await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)
@@ -1180,6 +1255,7 @@ async def upload_legal_issuance_document(
         )
         db.add(stage)
 
+    old_stage = model_snapshot(stage)
     document = LoanDocument(
         org_id=ctx.org_id,
         loan_application_id=loan_id,
@@ -1194,6 +1270,26 @@ async def upload_legal_issuance_document(
     stage.completed_at = datetime.now(timezone.utc)
     stage.completed_by_user_id = current_user.id
 
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_workflow_stage.updated",
+        resource_type="loan_workflow_stage",
+        resource_id=str(stage.id),
+        old_value=old_stage,
+        new_value=model_snapshot(stage),
+    )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
     await db.commit()
     await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)

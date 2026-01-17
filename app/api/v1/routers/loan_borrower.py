@@ -26,6 +26,7 @@ from app.schemas.loan import (
     LoanWorkflowStageType,
 )
 from app.services import loan_applications, loan_exports, loan_quotes, loan_schedules
+from app.services.audit import model_snapshot, record_audit_log
 
 
 router = APIRouter(prefix="/me/loans", tags=["loan-borrower"])
@@ -235,6 +236,7 @@ async def upload_83b_document(
         )
         db.add(stage)
 
+    old_stage = model_snapshot(stage)
     document = LoanDocument(
         org_id=ctx.org_id,
         loan_application_id=loan_id,
@@ -248,6 +250,27 @@ async def upload_83b_document(
     stage.status = "COMPLETED"
     stage.completed_at = datetime.now(timezone.utc)
     stage.completed_by_user_id = current_user.id
+
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_workflow_stage.updated",
+        resource_type="loan_workflow_stage",
+        resource_id=str(stage.id),
+        old_value=old_stage,
+        new_value=model_snapshot(stage),
+    )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
 
     await db.commit()
     await db.refresh(document)
