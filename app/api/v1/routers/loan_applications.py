@@ -22,7 +22,7 @@ from app.schemas.loan import (
     LoanApplicationStatus,
     LoanWorkflowStageStatus,
 )
-from app.services import loan_applications, loan_quotes
+from app.services import loan_applications, loan_quotes, loan_workflow
 
 router = APIRouter(prefix="/me/loan-applications", tags=["loan-applications"])
 
@@ -176,6 +176,10 @@ async def get_loan_application(
     )
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+    activated = await loan_workflow.try_activate_loan(db, ctx, application)
+    if activated:
+        await db.commit()
+        await db.refresh(application)
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
     current_stage_type, current_stage_status = _current_stage_from_workflow(application.workflow_stages or [])
     return _build_self_payload(application)

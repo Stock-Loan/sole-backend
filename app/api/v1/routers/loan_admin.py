@@ -22,6 +22,7 @@ from app.schemas.loan import (
     LoanApplicationDTO,
     LoanApplicationListResponse,
     LoanApplicationSummaryDTO,
+    LoanActivationMaintenanceResponse,
     LoanApplicantSummaryDTO,
     LoanStageAssigneeSummaryDTO,
     LoanApplicationStatus,
@@ -208,6 +209,35 @@ async def list_loans(
 
 
 @router.post(
+    "/maintenance/activate-backlog",
+    response_model=LoanActivationMaintenanceResponse,
+    summary="Activate backlog loans with completed core stages",
+)
+async def activate_loan_backlog(
+    limit: int | None = Query(default=None, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_VIEW_ALL)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanActivationMaintenanceResponse:
+    checked, activated, activated_ids, post_issuance_completed_ids = await loan_workflow.activate_backlog(
+        db,
+        ctx,
+        limit=limit,
+        offset=offset,
+        actor_id=current_user.id,
+    )
+    return LoanActivationMaintenanceResponse(
+        checked=checked,
+        activated=activated,
+        skipped=checked - activated,
+        activated_ids=[UUID(value) for value in activated_ids],
+        post_issuance_completed=len(post_issuance_completed_ids),
+        post_issuance_completed_ids=[UUID(value) for value in post_issuance_completed_ids],
+    )
+
+
+@router.post(
     "/what-if",
     response_model=LoanQuoteResponse,
     summary="Run org-level loan what-if simulation",
@@ -262,6 +292,10 @@ async def get_loan(
     application = await loan_applications.get_application_with_related(db, ctx, loan_id)
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+    activated = await loan_workflow.try_activate_loan(db, ctx, application)
+    if activated:
+        await db.commit()
+        await db.refresh(application)
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
     applicant = await _fetch_applicant_summary(db, ctx, application)
     return LoanApplicationDTO.model_validate(application).model_copy(
@@ -1531,7 +1565,16 @@ async def upload_legal_issuance_document_file(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanDocumentDTO:
-    await _get_application_or_404(db, ctx, loan_id)
+    application = await _get_application_or_404(db, ctx, loan_id)
+    if application.status != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_status",
+                "message": "Loan must be ACTIVE before uploading share certificates",
+                "details": {"status": application.status},
+            },
+        )
     if document_type != LoanDocumentType.SHARE_CERTIFICATE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1541,13 +1584,65 @@ async def upload_legal_issuance_document_file(
                 "details": {"document_type": document_type},
             },
         )
-    document = await _save_local_document(
-        db=db,
-        ctx=ctx,
-        loan_id=loan_id,
-        document_type=document_type,
-        stage_type="LEGAL_POST_ISSUANCE",
-        file=file,
-        actor_id=current_user.id,
+    stage_stmt = select(LoanWorkflowStage).where(
+        LoanWorkflowStage.org_id == ctx.org_id,
+        LoanWorkflowStage.loan_application_id == loan_id,
+        LoanWorkflowStage.stage_type == "LEGAL_POST_ISSUANCE",
     )
+    stage_result = await db.execute(stage_stmt)
+    stage = stage_result.scalar_one_or_none()
+    if not stage:
+        stage = LoanWorkflowStage(
+            org_id=ctx.org_id,
+            loan_application_id=loan_id,
+            stage_type=LoanWorkflowStageType.LEGAL_POST_ISSUANCE.value,
+            status="PENDING",
+            assigned_role_hint="LEGAL",
+        )
+        db.add(stage)
+
+    base_dir = Path(settings.local_upload_dir)
+    relative_path, original_name = await save_upload(
+        file,
+        base_dir=base_dir,
+        subdir=Path("loan-documents") / ctx.org_id / str(loan_id),
+    )
+
+    old_stage = model_snapshot(stage)
+    document = LoanDocument(
+        org_id=ctx.org_id,
+        loan_application_id=loan_id,
+        stage_type="LEGAL_POST_ISSUANCE",
+        document_type=document_type.value,
+        file_name=original_name,
+        storage_path_or_url=relative_path,
+        uploaded_by_user_id=current_user.id,
+    )
+    db.add(document)
+    stage.status = "COMPLETED"
+    stage.completed_at = datetime.now(timezone.utc)
+    stage.completed_by_user_id = current_user.id
+
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_workflow_stage.updated",
+        resource_type="loan_workflow_stage",
+        resource_id=str(stage.id),
+        old_value=old_stage,
+        new_value=model_snapshot(stage),
+    )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
+    await db.commit()
+    await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)

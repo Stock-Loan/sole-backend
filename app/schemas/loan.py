@@ -387,6 +387,17 @@ class LoanApplicationSelfListResponse(BaseModel):
     total: int
 
 
+class LoanActivationMaintenanceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    checked: int
+    activated: int
+    skipped: int
+    activated_ids: list[UUID] = Field(default_factory=list)
+    post_issuance_completed: int = 0
+    post_issuance_completed_ids: list[UUID] = Field(default_factory=list)
+
+
 class LoanDashboardSummary(BaseModel):
     org_id: str
     as_of: date
