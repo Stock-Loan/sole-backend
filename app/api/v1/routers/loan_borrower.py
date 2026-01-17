@@ -22,13 +22,13 @@ from app.schemas.loan import (
     LoanDocumentGroup,
     LoanDocumentListResponse,
     LoanDocumentType,
-    LoanQuoteResponse,
+    LoanRepaymentDTO,
+    LoanRepaymentListResponse,
     LoanScheduleResponse,
     LoanScheduleWhatIfRequest,
-    LoanWhatIfRequest,
     LoanWorkflowStageType,
 )
-from app.services import loan_applications, loan_exports, loan_quotes, loan_schedules
+from app.services import loan_applications, loan_exports, loan_repayments, loan_schedules
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.local_uploads import resolve_local_path
 
@@ -52,47 +52,6 @@ async def _get_application_or_404(
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
     return application
-
-
-@router.post(
-    "/what-if",
-    response_model=LoanQuoteResponse,
-    summary="Run self-service loan what-if simulation",
-)
-async def simulate_self_loan(
-    payload: LoanWhatIfRequest,
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WHAT_IF_SELF_SIMULATE)),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    db: AsyncSession = Depends(get_db),
-) -> LoanQuoteResponse:
-    if payload.org_membership_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "membership_not_allowed",
-                "message": "org_membership_id is not allowed for self-service simulations",
-                "details": {"field": "org_membership_id"},
-            },
-        )
-    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
-    if not membership:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    try:
-        quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, payload)
-        await loan_quotes.record_quote_audit(
-            db,
-            ctx,
-            actor_id=current_user.id,
-            membership=membership,
-            request=payload,
-            quote=quote,
-        )
-        return quote
-    except loan_quotes.LoanQuoteError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": exc.code, "message": exc.message, "details": exc.details},
-        ) from exc
 
 
 @router.get(
@@ -188,6 +147,29 @@ async def download_borrower_document(
             },
         )
     return FileResponse(file_path, filename=document.file_name, media_type="application/octet-stream")
+
+
+@router.get(
+    "/{loan_id}/repayments",
+    response_model=LoanRepaymentListResponse,
+    summary="List borrower loan repayments",
+)
+async def list_borrower_repayments(
+    loan_id: UUID,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_PAYMENT_SELF_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanRepaymentListResponse:
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    await _get_application_or_404(db, ctx, loan_id, membership.id)
+    repayments = await loan_repayments.list_repayments(db, ctx, loan_id)
+    return LoanRepaymentListResponse(
+        loan_id=loan_id,
+        total=len(repayments),
+        items=[LoanRepaymentDTO.model_validate(item) for item in repayments],
+    )
 
 
 @router.get(

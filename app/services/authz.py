@@ -141,6 +141,7 @@ EMPLOYEE_DEFAULT_PERMISSIONS = PermissionCode.normalize(
         PermissionCode.LOAN_DOCUMENT_SELF_VIEW,
         PermissionCode.LOAN_DOCUMENT_SELF_UPLOAD_83B,
         PermissionCode.LOAN_SCHEDULE_SELF_VIEW,
+        PermissionCode.LOAN_PAYMENT_SELF_VIEW,
         PermissionCode.LOAN_WHAT_IF_SELF_SIMULATE,
         PermissionCode.LOAN_EXPORT_SELF,
     ]
@@ -198,7 +199,6 @@ SYSTEM_ROLE_DEFINITIONS = {
                 PermissionCode.LOAN_PAYMENT_RECORD,
                 PermissionCode.LOAN_PAYMENT_REFUND,
                 PermissionCode.LOAN_EXPORT_SCHEDULE,
-                PermissionCode.LOAN_EXPORT_WHAT_IF,
                 PermissionCode.LOAN_DASHBOARD_VIEW,
             ]
         ),

@@ -5,7 +5,7 @@ from io import StringIO
 from decimal import Decimal
 
 from app.models.loan_application import LoanApplication
-from app.schemas.loan import LoanQuoteResponse, LoanScheduleResponse, LoanWhatIfRequest
+from app.schemas.loan import LoanScheduleResponse
 
 
 def _stringify(value) -> str:
@@ -44,50 +44,6 @@ def schedule_to_csv(schedule: LoanScheduleResponse) -> str:
                 _stringify(entry.principal),
                 _stringify(entry.interest),
                 _stringify(entry.remaining_balance),
-            ]
-        )
-    return _write_csv(headers, rows)
-
-
-def what_if_to_csv(request: LoanWhatIfRequest, quote: LoanQuoteResponse) -> str:
-    headers = [
-        "org_membership_id",
-        "selection_mode",
-        "selection_value",
-        "as_of_date",
-        "total_exercisable_shares",
-        "shares_to_exercise",
-        "purchase_price",
-        "down_payment_amount",
-        "loan_principal",
-        "interest_type",
-        "repayment_method",
-        "term_months",
-        "nominal_annual_rate",
-        "estimated_monthly_payment",
-        "total_payable",
-        "total_interest",
-    ]
-    rows: list[list[str]] = []
-    for option in quote.options:
-        rows.append(
-            [
-                _stringify(request.org_membership_id),
-                _stringify(quote.selection_mode),
-                _stringify(quote.selection_value),
-                quote.as_of_date.isoformat() if quote.as_of_date else "",
-                str(quote.total_exercisable_shares),
-                str(quote.shares_to_exercise),
-                _stringify(quote.purchase_price),
-                _stringify(quote.down_payment_amount),
-                _stringify(quote.loan_principal),
-                _stringify(option.interest_type),
-                _stringify(option.repayment_method),
-                str(option.term_months),
-                _stringify(option.nominal_annual_rate),
-                _stringify(option.estimated_monthly_payment),
-                _stringify(option.total_payable),
-                _stringify(option.total_interest),
             ]
         )
     return _write_csv(headers, rows)

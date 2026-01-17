@@ -37,17 +37,15 @@ from app.schemas.loan import (
     LoanFinanceReviewResponse,
     LoanHRReviewResponse,
     LoanLegalReviewResponse,
-    LoanQuoteResponse,
     LoanScheduleResponse,
     LoanScheduleWhatIfRequest,
-    LoanWhatIfRequest,
     LoanWorkflowStageType,
     LoanWorkflowStageDTO,
     LoanWorkflowStageAssignRequest,
     LoanWorkflowStageStatus,
     LoanWorkflowStageUpdateRequest,
 )
-from app.services import authz, loan_applications, loan_exports, loan_queue, loan_quotes, loan_repayments, loan_schedules, loan_workflow, stock_summary
+from app.services import authz, loan_applications, loan_exports, loan_queue, loan_repayments, loan_schedules, loan_workflow, stock_summary
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.local_uploads import resolve_local_path, save_upload
 
@@ -243,47 +241,6 @@ async def activate_loan_backlog(
         post_issuance_completed=len(post_issuance_completed_ids),
         post_issuance_completed_ids=[UUID(value) for value in post_issuance_completed_ids],
     )
-
-
-@router.post(
-    "/what-if",
-    response_model=LoanQuoteResponse,
-    summary="Run org-level loan what-if simulation",
-)
-async def simulate_loan(
-    payload: LoanWhatIfRequest,
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WHAT_IF_SIMULATE)),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    db: AsyncSession = Depends(get_db),
-) -> LoanQuoteResponse:
-    if payload.org_membership_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "membership_required",
-                "message": "org_membership_id is required for org-level simulations",
-                "details": {"field": "org_membership_id"},
-            },
-        )
-    membership = await loan_applications.get_membership_by_id(db, ctx, payload.org_membership_id)
-    if not membership:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    try:
-        quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, payload)
-        await loan_quotes.record_quote_audit(
-            db,
-            ctx,
-            actor_id=current_user.id,
-            membership=membership,
-            request=payload,
-            quote=quote,
-        )
-        return quote
-    except loan_quotes.LoanQuoteError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": exc.code, "message": exc.message, "details": exc.details},
-        ) from exc
 
 
 @router.get(
@@ -515,45 +472,6 @@ async def export_loan_schedule(
         ) from exc
     content = loan_exports.schedule_to_csv(schedule)
     filename = f"loan_schedule_{loan_id}.csv"
-    return StreamingResponse(
-        iter([content]),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@router.get(
-    "/what-if/export",
-    response_class=StreamingResponse,
-    summary="Export org loan what-if results as CSV",
-)
-async def export_loan_what_if(
-    payload: LoanWhatIfRequest = Depends(),
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_WHAT_IF)),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    db: AsyncSession = Depends(get_db),
-) -> StreamingResponse:
-    if payload.org_membership_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "membership_required",
-                "message": "org_membership_id is required for org-level exports",
-                "details": {"field": "org_membership_id"},
-            },
-        )
-    membership = await loan_applications.get_membership_by_id(db, ctx, payload.org_membership_id)
-    if not membership:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    try:
-        quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, payload)
-    except loan_quotes.LoanQuoteError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": exc.code, "message": exc.message, "details": exc.details},
-        ) from exc
-    content = loan_exports.what_if_to_csv(payload, quote)
-    filename = "loan_what_if_export.csv"
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",

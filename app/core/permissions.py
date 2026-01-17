@@ -72,6 +72,7 @@ class PermissionCode(str, Enum):
     LOAN_SCHEDULE_VIEW = "loan.schedule.view"
     LOAN_SCHEDULE_SELF_VIEW = "loan.schedule.self.view"
     LOAN_PAYMENT_VIEW = "loan.payment.view"
+    LOAN_PAYMENT_SELF_VIEW = "loan.payment.self.view"
     LOAN_PAYMENT_RECORD = "loan.payment.record"
     LOAN_PAYMENT_REFUND = "loan.payment.refund"
 
@@ -79,7 +80,6 @@ class PermissionCode(str, Enum):
     LOAN_WHAT_IF_SELF_SIMULATE = "loan.what_if.self.simulate"
 
     LOAN_EXPORT_SCHEDULE = "loan.export.schedule"
-    LOAN_EXPORT_WHAT_IF = "loan.export.what_if"
     LOAN_EXPORT_SELF = "loan.export.self"
 
     # Reporting / exports (org)

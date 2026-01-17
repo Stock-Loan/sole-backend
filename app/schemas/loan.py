@@ -63,10 +63,6 @@ class LoanQuoteRequest(BaseModel):
     desired_term_months: int | None = Field(default=None, ge=1)
 
 
-class LoanWhatIfRequest(LoanQuoteRequest):
-    org_membership_id: UUID | None = None
-
-
 class LoanQuoteOption(BaseModel):
     model_config = ConfigDict(use_enum_values=True, json_encoders={Decimal: lambda value: str(value)})
 
