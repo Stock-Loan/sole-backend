@@ -622,36 +622,35 @@ async def assign_workflow_stage(
             },
         )
 
-    async with db.begin():
-        stage_stmt = (
-            select(LoanWorkflowStage)
-            .where(
-                LoanWorkflowStage.org_id == ctx.org_id,
-                LoanWorkflowStage.loan_application_id == loan_id,
-                LoanWorkflowStage.stage_type == stage_type.value,
-            )
-            .with_for_update()
+    stage_stmt = (
+        select(LoanWorkflowStage)
+        .where(
+            LoanWorkflowStage.org_id == ctx.org_id,
+            LoanWorkflowStage.loan_application_id == loan_id,
+            LoanWorkflowStage.stage_type == stage_type.value,
         )
-        stage_result = await db.execute(stage_stmt)
-        stage = stage_result.scalar_one_or_none()
-        if not stage:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow stage not found")
-        if stage.status == LoanWorkflowStageStatus.COMPLETED.value:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": "stage_completed",
-                    "message": "Completed workflow stages cannot be reassigned",
-                    "details": {"stage_type": stage.stage_type},
-                },
-            )
+        .with_for_update()
+    )
+    stage_result = await db.execute(stage_stmt)
+    stage = stage_result.scalar_one_or_none()
+    if not stage:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow stage not found")
+    if stage.status == LoanWorkflowStageStatus.COMPLETED.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "stage_completed",
+                "message": "Completed workflow stages cannot be reassigned",
+                "details": {"stage_type": stage.stage_type},
+            },
+        )
 
-        stage.assigned_to_user_id = assignee_id
-        stage.assigned_by_user_id = current_user.id
-        stage.assigned_at = datetime.now(timezone.utc)
-        stage.status = LoanWorkflowStageStatus.IN_PROGRESS.value
-        db.add(stage)
-
+    stage.assigned_to_user_id = assignee_id
+    stage.assigned_by_user_id = current_user.id
+    stage.assigned_at = datetime.now(timezone.utc)
+    stage.status = LoanWorkflowStageStatus.IN_PROGRESS.value
+    db.add(stage)
+    await db.commit()
     await db.refresh(stage)
     return LoanWorkflowStageDTO.model_validate(stage)
 

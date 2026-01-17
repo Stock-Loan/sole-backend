@@ -14,6 +14,8 @@ from app.models.role import Role
 from app.models.user_role import UserRole
 from app.models.user import User
 from app.schemas.roles import RoleAssignmentRequest, RoleCreate, RoleListResponse, RoleOut, RoleUpdate
+from app.schemas.users import UserListResponse
+from app.models.department import Department
 from app.services.authz import invalidate_permission_cache
 
 router = APIRouter(prefix="/roles", tags=["roles"])
@@ -35,6 +37,58 @@ async def list_roles(
     result = await db.execute(stmt.offset(offset).limit(page_size))
     roles = result.scalars().all()
     return RoleListResponse(items=roles, total=total)
+
+
+@router.get("/{role_id}/members", response_model=UserListResponse, summary="List members assigned to a role")
+async def list_role_members(
+    role_id: UUID,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.ROLE_VIEW)),
+    __: User = Depends(deps.require_permission(PermissionCode.USER_VIEW)),
+    db: AsyncSession = Depends(get_db),
+) -> UserListResponse:
+    role_stmt = select(Role).where(Role.id == role_id, Role.org_id == ctx.org_id)
+    role_result = await db.execute(role_stmt)
+    role = role_result.scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+    offset = (page - 1) * page_size
+    base_stmt = (
+        select(OrgMembership, User, Department)
+        .join(User, OrgMembership.user_id == User.id)
+        .join(UserRole, UserRole.user_id == User.id)
+        .join(Department, OrgMembership.department_id == Department.id, isouter=True)
+        .where(
+            OrgMembership.org_id == ctx.org_id,
+            UserRole.org_id == ctx.org_id,
+            UserRole.role_id == role_id,
+        )
+        .order_by(User.created_at)
+    )
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    rows = (await db.execute(base_stmt.offset(offset).limit(page_size))).all()
+    user_ids = [row[1].id for row in rows]
+    roles_map: dict[str, list[Role]] = {}
+    if user_ids:
+        roles_stmt = (
+            select(UserRole, Role)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.org_id == ctx.org_id, UserRole.user_id.in_(user_ids))
+        )
+        roles_result = await db.execute(roles_stmt)
+        for user_role, role in roles_result.all():
+            roles_map.setdefault(str(user_role.user_id), []).append(role)
+
+    items = []
+    for membership, user, dept in rows:
+        membership.department_name = dept.name if dept else None
+        items.append({"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])})
+    return UserListResponse(items=items, total=total)
 
 
 @router.post("", response_model=RoleOut, status_code=201, summary="Create a custom role")
