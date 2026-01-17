@@ -12,7 +12,7 @@ from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
 from app.models.user import User
-from app.schemas.audit import AuditLogEntry, AuditLogListResponse
+from app.schemas.audit import AuditActorSummary, AuditLogEntry, AuditLogListResponse
 
 
 router = APIRouter(prefix="/org/audit-logs", tags=["audit-logs"])
@@ -56,11 +56,24 @@ async def list_audit_logs(
     total = int((await db.execute(count_stmt)).scalar_one() or 0)
 
     stmt = (
-        select(AuditLog)
+        select(AuditLog, User)
+        .outerjoin(User, (User.id == AuditLog.actor_id) & (User.org_id == ctx.org_id))
         .where(*conditions)
         .order_by(AuditLog.created_at.desc())
         .offset(offset)
         .limit(page_size)
     )
-    rows = (await db.execute(stmt)).scalars().all()
-    return AuditLogListResponse(items=[AuditLogEntry.model_validate(row) for row in rows], total=total)
+    rows = (await db.execute(stmt)).all()
+    items: list[AuditLogEntry] = []
+    for audit_log, user in rows:
+        actor = None
+        if user is not None:
+            actor = AuditActorSummary(
+                user_id=user.id,
+                full_name=user.full_name,
+                email=user.email,
+            )
+        items.append(
+            AuditLogEntry.model_validate(audit_log).model_copy(update={"actor": actor})
+        )
+    return AuditLogListResponse(items=items, total=total)

@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
+
+
+class AuditActorSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: UUID
+    full_name: str
+    email: EmailStr
 
 
 class AuditLogEntry(BaseModel):
@@ -13,6 +21,7 @@ class AuditLogEntry(BaseModel):
     id: UUID
     org_id: str
     actor_id: UUID | None = None
+    actor: AuditActorSummary | None = None
     action: str
     resource_type: str
     resource_id: str
