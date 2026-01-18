@@ -81,6 +81,22 @@ async def get_active_reservations_by_grant_for_org(
     return {row[0]: int(row[1]) for row in result.all()}
 
 
+async def sum_reserved_by_status_for_org(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+) -> dict[str, int]:
+    stmt = (
+        select(
+            StockGrantReservation.status,
+            func.coalesce(func.sum(StockGrantReservation.shares_reserved), 0),
+        )
+        .where(StockGrantReservation.org_id == ctx.org_id)
+        .group_by(StockGrantReservation.status)
+    )
+    result = await db.execute(stmt)
+    return {row[0]: int(row[1]) for row in result.all() if row[0] is not None}
+
+
 async def set_reservation_status_for_application(
     db: AsyncSession,
     ctx: deps.TenantContext,

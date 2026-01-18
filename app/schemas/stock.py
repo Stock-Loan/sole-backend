@@ -177,14 +177,60 @@ class StockSummaryResponse(BaseModel):
     model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
 
 
-class StockDashboardSummary(BaseModel):
-    org_id: str
-    total_program_employees: int
+class StockDashboardTotals(BaseModel):
+    program_employees: int
+    grant_count: int
     total_granted_shares: int
     total_vested_shares: int
     total_unvested_shares: int
+    total_reserved_shares: int
+    total_available_vested_shares: int
+
+
+class StockDashboardEligibility(BaseModel):
     eligible_to_exercise_count: int
     not_eligible_due_to_service_count: int
     not_eligible_due_to_min_vested_count: int
     not_eligible_due_to_other_count: int
-    next_global_vesting_date: date | None = None
+
+
+class StockDashboardVestingTimeline(BaseModel):
+    next_vesting_date: date | None = None
+    next_vesting_shares: int | None = None
+    upcoming_events: list[NextVestingEvent] = Field(default_factory=list)
+
+
+class StockDashboardGrantMix(BaseModel):
+    by_status: dict[str, int]
+    by_vesting_strategy: dict[str, int]
+
+
+class StockDashboardExercisePriceRange(BaseModel):
+    min: Decimal | None = None
+    max: Decimal | None = None
+
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
+
+class StockDashboardReservationPressure(BaseModel):
+    reserved_share_percent_of_vested: Decimal
+    reserved_by_status: dict[str, int]
+
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
+
+class StockDashboardMembershipSnapshot(BaseModel):
+    by_platform_status: dict[str, int]
+    by_employment_status: dict[str, int]
+
+
+class StockDashboardSummary(BaseModel):
+    org_id: str
+    as_of: date
+    totals: StockDashboardTotals
+    eligibility: StockDashboardEligibility
+    vesting_timeline: StockDashboardVestingTimeline
+    grant_mix: StockDashboardGrantMix
+    exercise_price_range: StockDashboardExercisePriceRange
+    reservation_pressure: StockDashboardReservationPressure
+    membership_snapshot: StockDashboardMembershipSnapshot
