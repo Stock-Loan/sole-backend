@@ -15,6 +15,8 @@ from app.models.loan_application import LoanApplication
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.vesting_event import VestingEvent
+from app.models.org_document_folder import OrgDocumentFolder
+from app.models.org_document_template import OrgDocumentTemplate
 
 __all__ = [
     "AuditLog",
@@ -35,4 +37,6 @@ __all__ = [
     "LoanWorkflowStage",
     "LoanDocument",
     "VestingEvent",
+    "OrgDocumentFolder",
+    "OrgDocumentTemplate",
 ]

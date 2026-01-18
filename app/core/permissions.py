@@ -25,6 +25,9 @@ class PermissionCode(str, Enum):
     PERMISSION_CATALOG_VIEW = "permission_catalog.view"
     ACL_MANAGE = "acl.manage"
 
+    ORG_DOCUMENT_VIEW = "org.document.view"
+    ORG_DOCUMENT_MANAGE = "org.document.manage"
+
     # Announcements
     ANNOUNCEMENT_VIEW = "announcement.view"
     ANNOUNCEMENT_MANAGE = "announcement.manage"

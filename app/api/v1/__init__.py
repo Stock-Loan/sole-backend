@@ -21,6 +21,7 @@ from app.api.v1.routers import (
     loan_admin,
     loan_borrower,
     user_dashboard,
+    org_documents,
     audit_logs,
 )
 
@@ -45,6 +46,7 @@ api_router.include_router(loan_applications.router)
 api_router.include_router(loan_admin.router)
 api_router.include_router(loan_borrower.router)
 api_router.include_router(user_dashboard.router)
+api_router.include_router(org_documents.router)
 api_router.include_router(audit_logs.router)
 
 __all__ = ["api_router"]
