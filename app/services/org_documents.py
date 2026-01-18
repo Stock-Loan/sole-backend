@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.models.org_document_folder import OrgDocumentFolder
@@ -129,7 +130,11 @@ async def list_templates(
     *,
     folder_id: UUID | None = None,
 ) -> list[OrgDocumentTemplate]:
-    stmt = select(OrgDocumentTemplate).where(OrgDocumentTemplate.org_id == ctx.org_id)
+    stmt = (
+        select(OrgDocumentTemplate)
+        .options(selectinload(OrgDocumentTemplate.uploaded_by_user))
+        .where(OrgDocumentTemplate.org_id == ctx.org_id)
+    )
     if folder_id:
         stmt = stmt.where(OrgDocumentTemplate.folder_id == folder_id)
     stmt = stmt.order_by(OrgDocumentTemplate.created_at.desc())
@@ -141,9 +146,13 @@ async def get_template(
     ctx: deps.TenantContext,
     template_id: UUID,
 ) -> OrgDocumentTemplate | None:
-    stmt = select(OrgDocumentTemplate).where(
+    stmt = (
+        select(OrgDocumentTemplate)
+        .options(selectinload(OrgDocumentTemplate.uploaded_by_user))
+        .where(
         OrgDocumentTemplate.org_id == ctx.org_id,
         OrgDocumentTemplate.id == template_id,
+        )
     )
     return (await db.execute(stmt)).scalar_one_or_none()
 

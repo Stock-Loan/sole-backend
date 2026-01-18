@@ -70,3 +70,9 @@ class LoanDocument(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     loan_application = relationship("LoanApplication", back_populates="documents")
+    uploaded_by_user = relationship("User", foreign_keys=[uploaded_by_user_id])
+
+    @property
+    def uploaded_by_name(self) -> str | None:
+        user = getattr(self, "uploaded_by_user", None)
+        return user.full_name if user else None

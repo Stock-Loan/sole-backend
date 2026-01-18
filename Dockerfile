@@ -30,6 +30,9 @@ RUN addgroup --system --gid ${APP_GID} appuser && adduser --system --uid ${APP_U
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Ensure upload dir exists with write permissions for appuser (volume initialization copies this)
+RUN mkdir -p /data/uploads && chmod 0777 /data/uploads
+
 COPY --from=builder /install /usr/local
 COPY . .
 

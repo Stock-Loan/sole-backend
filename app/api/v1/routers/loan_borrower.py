@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -70,7 +71,7 @@ async def list_borrower_documents(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     await _get_application_or_404(db, ctx, loan_id, membership.id)
 
-    stmt = select(LoanDocument).where(
+    stmt = select(LoanDocument).options(selectinload(LoanDocument.uploaded_by_user)).where(
         LoanDocument.org_id == ctx.org_id,
         LoanDocument.loan_application_id == loan_id,
     ).order_by(LoanDocument.uploaded_at.desc())

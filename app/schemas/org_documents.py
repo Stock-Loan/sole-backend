@@ -34,7 +34,7 @@ class OrgDocumentTemplateDTO(BaseModel):
     description: str | None = None
     file_name: str
     storage_path_or_url: str
-    uploaded_by_user_id: UUID | None = None
+    uploaded_by_name: str | None = None
     created_at: datetime | None = None
 
 

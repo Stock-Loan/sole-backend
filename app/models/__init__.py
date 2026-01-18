@@ -12,6 +12,7 @@ from app.models.org_settings import OrgSettings
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.stock_grant_reservation import StockGrantReservation
 from app.models.loan_application import LoanApplication
+from app.models.loan_repayment import LoanRepayment
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.vesting_event import VestingEvent
@@ -34,6 +35,7 @@ __all__ = [
     "EmployeeStockGrant",
     "StockGrantReservation",
     "LoanApplication",
+    "LoanRepayment",
     "LoanWorkflowStage",
     "LoanDocument",
     "VestingEvent",

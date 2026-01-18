@@ -11,6 +11,7 @@ from app.api import deps
 from app.models.audit_log import AuditLog
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.loan_application import LoanApplication
+from app.models.loan_document import LoanDocument
 from app.models.org_membership import OrgMembership
 from app.models.user import User
 from app.models.department import Department
@@ -422,7 +423,7 @@ async def get_application_with_related(
         select(LoanApplication)
         .options(
             selectinload(LoanApplication.workflow_stages),
-            selectinload(LoanApplication.documents),
+            selectinload(LoanApplication.documents).selectinload(LoanDocument.uploaded_by_user),
         )
         .where(
             LoanApplication.org_id == ctx.org_id,

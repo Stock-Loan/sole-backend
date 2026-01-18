@@ -2,6 +2,7 @@ import uuid
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 
 from app.db.base import Base
 
@@ -29,3 +30,10 @@ class OrgDocumentTemplate(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+    uploaded_by_user = relationship("User", foreign_keys=[uploaded_by_user_id])
+
+    @property
+    def uploaded_by_name(self) -> str | None:
+        user = getattr(self, "uploaded_by_user", None)
+        return user.full_name if user else None

@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 
 from app.core.security import get_password_hash
 from app.core.settings import settings
@@ -17,9 +18,14 @@ async def init_db() -> None:
     async with AsyncSessionLocal() as session:
         print("Seeding database...")
         # Ensure default org exists
-        org_stmt = select(Org).where(Org.id == settings.default_org_id)
-        org_result = await session.execute(org_stmt)
-        org = org_result.scalar_one_or_none()
+        try:
+            org_stmt = select(Org).where(Org.id == settings.default_org_id)
+            org_result = await session.execute(org_stmt)
+            org = org_result.scalar_one_or_none()
+        except ProgrammingError as exc:
+            # Database not migrated yet (tables missing)
+            print(f"Skipping seed: database not migrated ({exc})")
+            return
         if not org:
             print("Creating default org...")
             org = Org(

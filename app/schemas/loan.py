@@ -490,7 +490,7 @@ class LoanDocumentDTO(BaseModel):
     document_type: LoanDocumentType
     file_name: str
     storage_path_or_url: str
-    uploaded_by_user_id: UUID | None = None
+    uploaded_by_name: str | None = None
     uploaded_at: datetime | None = None
     created_at: datetime | None = None
 
