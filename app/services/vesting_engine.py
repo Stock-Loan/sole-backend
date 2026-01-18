@@ -77,6 +77,28 @@ def next_vesting_event(grants: Iterable[EmployeeStockGrant], as_of: date) -> Nex
     return NextVestingEvent(vest_date=next_date, shares=int(upcoming[next_date]))
 
 
+def upcoming_vesting_events(
+    grants: Iterable[EmployeeStockGrant], as_of: date, limit: int = 3
+) -> list[NextVestingEvent]:
+    upcoming: dict[date, int] = {}
+    for grant in grants:
+        strategy = _normalize_strategy(grant.vesting_strategy)
+        if strategy == "IMMEDIATE":
+            if grant.grant_date > as_of:
+                upcoming[grant.grant_date] = upcoming.get(grant.grant_date, 0) + _grant_total_shares(grant)
+            continue
+        for event in grant.vesting_events:
+            if event.vest_date > as_of:
+                upcoming[event.vest_date] = upcoming.get(event.vest_date, 0) + int(event.shares)
+    if not upcoming:
+        return []
+    events = [
+        NextVestingEvent(vest_date=vest_date, shares=int(shares))
+        for vest_date, shares in sorted(upcoming.items(), key=lambda item: item[0])
+    ]
+    return events[: max(limit, 0)]
+
+
 def build_grant_summaries(grants: Iterable[EmployeeStockGrant], as_of: date) -> list[GrantVestingSummary]:
     summaries: list[GrantVestingSummary] = []
     for grant in grants:

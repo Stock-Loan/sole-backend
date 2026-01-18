@@ -38,6 +38,25 @@ async def get_active_reservations_by_grant(
     return {row[0]: int(row[1]) for row in result.all()}
 
 
+async def list_active_reservations(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    *,
+    membership_id: UUID,
+) -> list[StockGrantReservation]:
+    stmt = (
+        select(StockGrantReservation)
+        .where(
+            StockGrantReservation.org_id == ctx.org_id,
+            StockGrantReservation.org_membership_id == membership_id,
+            StockGrantReservation.status.in_(ACTIVE_RESERVATION_STATUSES),
+        )
+        .order_by(StockGrantReservation.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
 async def get_active_reservations_by_grant_for_org(
     db: AsyncSession,
     ctx: deps.TenantContext,

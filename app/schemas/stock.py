@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from uuid import UUID
@@ -107,6 +107,8 @@ class GrantSummary(BaseModel):
     reserved_shares: int = 0
     available_vested_shares: int = 0
     exercise_price: Decimal
+    vesting_strategy: VestingStrategy | None = None
+    status: StockGrantStatus | None = None
 
     model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
 
@@ -114,6 +116,30 @@ class GrantSummary(BaseModel):
 class NextVestingEvent(BaseModel):
     vest_date: date
     shares: int
+
+
+class StockReservationSummary(BaseModel):
+    reservation_id: UUID
+    loan_application_id: UUID
+    grant_id: UUID
+    shares_reserved: int
+    status: str
+    created_at: datetime | None = None
+
+
+class StockPolicySnapshot(BaseModel):
+    min_vested_shares_to_exercise: int | None = None
+    enforce_min_vested_to_exercise: bool
+    min_service_duration_years: Decimal | None = None
+    enforce_service_duration_rule: bool
+
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
+
+class StockMembershipSnapshot(BaseModel):
+    employment_status: str | None = None
+    platform_status: str | None = None
+    employment_start_date: date | None = None
 
 
 class StockGrantPreviewResponse(BaseModel):
@@ -130,15 +156,25 @@ class StockGrantPreviewResponse(BaseModel):
 
 
 class StockSummaryResponse(BaseModel):
+    as_of_date: date
     org_membership_id: UUID
+    grant_count: int
     total_granted_shares: int
     total_vested_shares: int
     total_unvested_shares: int
     total_reserved_shares: int = 0
     total_available_vested_shares: int = 0
     next_vesting_event: NextVestingEvent | None = None
+    next_vesting_events: list[NextVestingEvent] = Field(default_factory=list)
     eligibility_result: EligibilityResult
+    policy_snapshot: StockPolicySnapshot
+    membership_snapshot: StockMembershipSnapshot
+    exercise_price_min: Decimal | None = None
+    exercise_price_max: Decimal | None = None
+    active_reservations: list[StockReservationSummary] = Field(default_factory=list)
     grants: list[GrantSummary] = Field(default_factory=list)
+
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
 
 
 class StockDashboardSummary(BaseModel):
