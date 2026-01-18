@@ -72,6 +72,18 @@ async def invalidate_permission_cache(
         logger.error(f"Redis error invalidating permissions: {e}")
 
 
+async def invalidate_permission_cache_for_org(org_id: str) -> int:
+    redis = get_redis_client()
+    pattern = f"permissions:{org_id}:*"
+    deleted = 0
+    try:
+        async for key in redis.scan_iter(match=pattern, count=500):
+            deleted += await redis.delete(key)
+    except Exception as e:
+        logger.error(f"Redis error invalidating org permissions: {e}")
+    return deleted
+
+
 async def _load_acl_permissions(
     db: AsyncSession, user_id, org_id: str, resource_type: str, resource_id: str
 ) -> Set[str]:

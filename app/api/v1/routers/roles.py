@@ -16,7 +16,7 @@ from app.models.user import User
 from app.schemas.roles import RoleAssignmentRequest, RoleCreate, RoleListResponse, RoleOut, RoleUpdate
 from app.schemas.users import UserListResponse
 from app.models.department import Department
-from app.services.authz import invalidate_permission_cache
+from app.services.authz import invalidate_permission_cache, invalidate_permission_cache_for_org
 from app.services.audit import model_snapshot, record_audit_log
 
 router = APIRouter(prefix="/roles", tags=["roles"])
@@ -447,3 +447,20 @@ async def invalidate_user_permissions(
         extra={"org_id": ctx.org_id, "user_id": str(membership.user_id)},
     )
     return None
+
+
+@router.post(
+    "/org/permissions/invalidate",
+    summary="Invalidate permission cache for the org",
+)
+async def invalidate_org_permissions(
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
+    __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
+) -> dict[str, int]:
+    cleared = await invalidate_permission_cache_for_org(ctx.org_id)
+    logger.info(
+        "Invalidated org permission cache",
+        extra={"org_id": ctx.org_id, "cleared": cleared},
+    )
+    return {"cleared": cleared}

@@ -108,3 +108,39 @@ class UpdateUserProfileRequest(BaseModel):
 
 class BulkDeleteRequest(BaseModel):
     membership_ids: list[str]
+
+
+class UserDepartmentCount(BaseModel):
+    department_id: UUID
+    department_name: str
+    count: int
+
+
+class UserRoleCount(BaseModel):
+    role_id: UUID
+    role_name: str
+    count: int
+
+
+class UserDashboardSummary(BaseModel):
+    org_id: str
+    total_users: int
+    platform_status_counts: dict[str, int]
+    invitation_status_counts: dict[str, int]
+    employment_status_counts: dict[str, int]
+    active_users: int
+    suspended_users: int
+    invited_pending: int
+    accepted_invites: int
+    mfa_enabled: int
+    mfa_disabled: int
+    never_logged_in: int
+    active_last_7_days: int
+    active_last_30_days: int
+    stale_30_plus_days: int
+    users_with_temp_password: int
+    users_without_department: int
+    missing_profile_fields: int
+    department_counts: list[UserDepartmentCount]
+    role_counts: list[UserRoleCount]
+    roles_with_zero_members: list[str]
