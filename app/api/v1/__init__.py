@@ -15,6 +15,7 @@ from app.api.v1.routers import (
     stock_summary,
     stock_dashboard,
     stock_self,
+    self_dashboard,
     loan_dashboard,
     loan_quotes,
     loan_applications,
@@ -40,6 +41,7 @@ api_router.include_router(stock_grants.router)
 api_router.include_router(stock_summary.router)
 api_router.include_router(stock_dashboard.router)
 api_router.include_router(stock_self.router)
+api_router.include_router(self_dashboard.router)
 api_router.include_router(loan_dashboard.router)
 api_router.include_router(loan_quotes.router)
 api_router.include_router(loan_applications.router)
