@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -52,6 +52,14 @@ from app.services.local_uploads import resolve_local_path, save_upload
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
+
+ALLOWED_REPAYMENT_EVIDENCE_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+}
 
 
 CORE_QUEUE_STAGE_TYPES = {
@@ -348,6 +356,74 @@ async def record_loan_repayment(
             application,
             payload,
             actor_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_repayment", "message": str(exc), "details": {}},
+        ) from exc
+    await db.commit()
+    await db.refresh(repayment)
+    return LoanRepaymentDTO.model_validate(repayment)
+
+
+@router.post(
+    "/{loan_id}/repayments/with-evidence",
+    response_model=LoanRepaymentDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record a loan repayment with optional evidence",
+)
+async def record_loan_repayment_with_evidence(
+    loan_id: UUID,
+    amount: str = Form(...),
+    principal_amount: str = Form(...),
+    interest_amount: str = Form(...),
+    payment_date: date = Form(...),
+    evidence_file: UploadFile | None = File(default=None),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_PAYMENT_RECORD)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanRepaymentDTO:
+    application = await _get_application_or_404(db, ctx, loan_id)
+    payload = LoanRepaymentCreateRequest(
+        amount=amount,
+        principal_amount=principal_amount,
+        interest_amount=interest_amount,
+        payment_date=payment_date,
+    )
+
+    evidence_file_name = None
+    evidence_storage_path = None
+    evidence_content_type = None
+    if evidence_file:
+        if evidence_file.content_type not in ALLOWED_REPAYMENT_EVIDENCE_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "invalid_evidence_type",
+                    "message": "Evidence must be a PDF or image",
+                    "details": {"content_type": evidence_file.content_type},
+                },
+            )
+        relative_path, original_name = await save_upload(
+            evidence_file,
+            base_dir=Path(settings.local_upload_dir),
+            subdir=Path("loan-repayments") / ctx.org_id / str(loan_id),
+        )
+        evidence_file_name = original_name
+        evidence_storage_path = relative_path
+        evidence_content_type = evidence_file.content_type
+
+    try:
+        repayment = await loan_repayments.record_repayment(
+            db,
+            ctx,
+            application,
+            payload,
+            actor_id=current_user.id,
+            evidence_file_name=evidence_file_name,
+            evidence_storage_path_or_url=evidence_storage_path,
+            evidence_content_type=evidence_content_type,
         )
     except ValueError as exc:
         raise HTTPException(

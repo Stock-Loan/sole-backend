@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.db.session import get_db
@@ -346,7 +347,9 @@ async def update_membership(
     ):
         roles_to_remove = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
         await db.execute(
-            delete(UserRole).where(UserRole.org_id == ctx.org_id, UserRole.user_id == membership.user_id)
+            delete(UserRole)
+            .where(UserRole.org_id == ctx.org_id, UserRole.user_id == membership.user_id)
+            .execution_options(synchronize_session=False)
         )
         user.token_version += 1
         db.add(user)
@@ -432,7 +435,14 @@ async def update_user_profile(
         user.full_name = f"{first} {last}".strip()
 
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "duplicate_email", "message": "Email already exists for this organization", "details": {}},
+        ) from exc
     await db.refresh(user)
     await db.refresh(membership)
     user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]

@@ -87,6 +87,7 @@ class UpdateMembershipRequest(BaseModel):
 class UpdateUserProfileRequest(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
+    email: EmailStr | None = None
     first_name: str | None = None
     middle_name: str | None = None
     last_name: str | None = None

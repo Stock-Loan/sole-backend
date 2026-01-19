@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -28,6 +29,9 @@ async def record_repayment(
     payload: LoanRepaymentCreateRequest,
     *,
     actor_id,
+    evidence_file_name: str | None = None,
+    evidence_storage_path_or_url: str | None = None,
+    evidence_content_type: str | None = None,
 ) -> LoanRepayment:
     if application.status not in {
         LoanApplicationStatus.ACTIVE.value,
@@ -50,6 +54,9 @@ async def record_repayment(
         interest_amount=interest,
         payment_date=payload.payment_date,
         recorded_by_user_id=actor_id,
+        evidence_file_name=evidence_file_name,
+        evidence_storage_path_or_url=evidence_storage_path_or_url,
+        evidence_content_type=evidence_content_type,
     )
     db.add(repayment)
     await db.flush()
@@ -96,6 +103,7 @@ async def list_repayments(
 ) -> list[LoanRepayment]:
     stmt = (
         select(LoanRepayment)
+        .options(selectinload(LoanRepayment.recorded_by_user))
         .where(
             LoanRepayment.org_id == ctx.org_id,
             LoanRepayment.loan_application_id == loan_id,

@@ -514,7 +514,10 @@ class LoanRepaymentDTO(BaseModel):
     principal_amount: Decimal
     interest_amount: Decimal
     payment_date: date
-    recorded_by_user_id: UUID | None = None
+    recorded_by_name: str | None = None
+    evidence_file_name: str | None = None
+    evidence_storage_path_or_url: str | None = None
+    evidence_content_type: str | None = None
     created_at: datetime | None = None
 
 

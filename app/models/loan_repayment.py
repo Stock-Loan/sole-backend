@@ -41,6 +41,15 @@ class LoanRepayment(Base):
     interest_amount = Column(Numeric(18, 6), nullable=False, default=0)
     payment_date = Column(Date, nullable=False)
     recorded_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    evidence_file_name = Column(String(255), nullable=True)
+    evidence_storage_path_or_url = Column(String(1024), nullable=True)
+    evidence_content_type = Column(String(100), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     loan_application = relationship("LoanApplication", back_populates="repayments")
+    recorded_by_user = relationship("User", foreign_keys=[recorded_by_user_id])
+
+    @property
+    def recorded_by_name(self) -> str | None:
+        user = getattr(self, "recorded_by_user", None)
+        return user.full_name if user else None
