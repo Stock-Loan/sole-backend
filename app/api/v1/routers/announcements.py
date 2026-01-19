@@ -42,7 +42,7 @@ async def list_announcements(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    _: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    _: User = Depends(deps.require_authenticated_user),
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementListResponse:
     filters = [Announcement.org_id == ctx.org_id]
@@ -93,7 +93,7 @@ async def list_unread_announcements(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    current_user: User = Depends(deps.require_authenticated_user),
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementListResponse:
     offset = (page - 1) * page_size
@@ -126,7 +126,7 @@ async def list_unread_announcements(
 @router.get("/unread/count", summary="Get unread announcement count for current user")
 async def unread_count(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    current_user: User = Depends(deps.require_authenticated_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     unread_filter = ~exists().where(
@@ -151,7 +151,7 @@ async def unread_count(
 async def get_announcement(
     announcement_id: UUID,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    current_user: User = Depends(deps.require_authenticated_user),
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementOut:
     announcement = await _get_announcement_or_404(db, ctx, announcement_id)
@@ -230,7 +230,7 @@ async def update_announcement(
 async def mark_read(
     announcement_id: UUID,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    current_user: User = Depends(deps.require_permission(PermissionCode.ANNOUNCEMENT_VIEW)),
+    current_user: User = Depends(deps.require_authenticated_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     announcement = await _get_announcement_or_404(db, ctx, announcement_id)

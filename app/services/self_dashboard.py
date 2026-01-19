@@ -29,12 +29,21 @@ from app.schemas.self_dashboard import (
     VestedByMonth,
 )
 from app.schemas.stock import (
+    EligibilityResult,
+    NextVestingEvent,
     StockGrantStatus,
     StockPolicySnapshot,
     StockReservationSummary,
     VestingStrategy,
 )
-from app.services import eligibility, loan_applications, settings as settings_service, stock_reservations, vesting_engine
+from app.services import (
+    eligibility,
+    loan_applications,
+    loan_schedules,
+    settings as settings_service,
+    stock_reservations,
+    vesting_engine,
+)
 
 
 TWOPLACES = Decimal("0.01")
@@ -137,10 +146,51 @@ async def build_self_dashboard_summary(
     as_of_date: date,
 ) -> SelfDashboardSummary:
     membership = await loan_applications.get_membership_for_user(db, ctx, user_id)
-    if not membership:
-        raise ValueError("Membership not found")
-
     org_settings = await settings_service.get_org_settings(db, ctx)
+    if not membership:
+        unread_count = await _unread_announcements_count(db, ctx, user_id)
+        pending_total, pending_actions = await _pending_actions(db, ctx, user_id)
+        return SelfDashboardSummary(
+            as_of_date=as_of_date,
+            attention=SelfDashboardAttention(
+                unread_announcements_count=unread_count,
+                pending_actions_count=pending_total,
+                pending_actions=pending_actions,
+            ),
+            stock_totals=SelfStockTotals(
+                grant_count=0,
+                total_granted_shares=0,
+                total_vested_shares=0,
+                total_unvested_shares=0,
+                total_reserved_shares=0,
+                total_available_vested_shares=0,
+            ),
+            stock_eligibility=EligibilityResult(
+                eligible_to_exercise=False,
+                total_granted_shares=0,
+                total_vested_shares=0,
+                total_unvested_shares=0,
+                reasons=[],
+            ),
+            vesting_timeline=SelfVestingTimeline(),
+            grant_mix=SelfGrantMix(),
+            reservations=SelfStockReservations(),
+            grants=[],
+            grants_total=0,
+            policy_snapshot=StockPolicySnapshot(
+                min_vested_shares_to_exercise=org_settings.min_vested_shares_to_exercise,
+                enforce_min_vested_to_exercise=org_settings.enforce_min_vested_to_exercise,
+                min_service_duration_years=org_settings.min_service_duration_years,
+                enforce_service_duration_rule=org_settings.enforce_service_duration_rule,
+            ),
+            loan_summary=SelfLoanSummary(
+                total_loan_applications=0,
+                active_loans_count=0,
+                completed_loans_count=0,
+                pending_loans_count=0,
+            ),
+            repayment_activity=SelfLoanRepaymentActivity(),
+        )
     grants = await vesting_engine.load_active_grants(db, ctx, membership.id)
 
     reserved_by_grant = {}
@@ -271,6 +321,8 @@ async def build_self_dashboard_summary(
     total_paid = None
     total_interest_paid = None
     remaining_balance = None
+    next_payment_date = None
+    next_payment_amount = None
     current_stage_type = None
     current_stage_status = None
     has_share_certificate = None
@@ -297,6 +349,19 @@ async def build_self_dashboard_summary(
             total_interest_paid = _as_decimal(rep_row[1])
         if total_payable is not None and total_paid is not None:
             remaining_balance = max(total_payable - total_paid, Decimal("0"))
+
+        try:
+            schedule = loan_schedules.build_schedule(active_application)
+            next_entry = next(
+                (entry for entry in schedule.entries if entry.due_date >= as_of_date),
+                None,
+            )
+            if next_entry:
+                next_payment_date = next_entry.due_date
+                next_payment_amount = _as_decimal(next_entry.payment)
+        except ValueError:
+            next_payment_date = None
+            next_payment_amount = None
 
         stages = sorted(
             [stage for stage in active_application.workflow_stages if stage.status != "COMPLETED"],
@@ -348,7 +413,10 @@ async def build_self_dashboard_summary(
         vesting_timeline=SelfVestingTimeline(
             next_vesting_date=totals.next_vesting_event.vest_date if totals.next_vesting_event else None,
             next_vesting_shares=totals.next_vesting_event.shares if totals.next_vesting_event else None,
-            upcoming_events=vesting_engine.upcoming_vesting_events(grants, as_of_date, limit=6),
+            upcoming_events=[
+                NextVestingEvent(vest_date=event.vest_date, shares=event.shares)
+                for event in vesting_engine.upcoming_vesting_events(grants, as_of_date, limit=6)
+            ],
             vested_by_month=_build_vested_by_month(grants, as_of_date, months=6),
         ),
         grant_mix=SelfGrantMix(
@@ -391,6 +459,8 @@ async def build_self_dashboard_summary(
             total_paid=total_paid,
             total_interest_paid=total_interest_paid,
             remaining_balance=remaining_balance,
+            next_payment_date=next_payment_date,
+            next_payment_amount=next_payment_amount,
             current_stage_type=current_stage_type,
             current_stage_status=current_stage_status,
             has_share_certificate=has_share_certificate,

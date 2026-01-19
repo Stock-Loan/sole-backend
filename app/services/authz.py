@@ -146,7 +146,6 @@ async def check_permission(
 EMPLOYEE_DEFAULT_PERMISSIONS = PermissionCode.normalize(
     [
         PermissionCode.ORG_DASHBOARD_VIEW,
-        PermissionCode.ANNOUNCEMENT_VIEW,
         PermissionCode.STOCK_SELF_VIEW,
         PermissionCode.LOAN_APPLY,
         PermissionCode.LOAN_VIEW_OWN,
