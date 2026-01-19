@@ -217,6 +217,7 @@ SYSTEM_ROLE_DEFINITIONS = {
                 PermissionCode.LOAN_WORKFLOW_83B_MANAGE,
                 PermissionCode.LOAN_DOCUMENT_VIEW,
                 PermissionCode.LOAN_DOCUMENT_MANAGE_LEGAL,
+                PermissionCode.LOAN_DASHBOARD_VIEW,
             ]
         ),
     },
