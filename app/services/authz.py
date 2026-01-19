@@ -201,6 +201,8 @@ SYSTEM_ROLE_DEFINITIONS = {
                 PermissionCode.LOAN_PAYMENT_VIEW,
                 PermissionCode.LOAN_PAYMENT_RECORD,
                 PermissionCode.LOAN_PAYMENT_REFUND,
+                PermissionCode.LOAN_SCHEDULE_VIEW,
+                PermissionCode.LOAN_WHAT_IF_SIMULATE,
                 PermissionCode.LOAN_EXPORT_SCHEDULE,
                 PermissionCode.LOAN_DASHBOARD_VIEW,
             ]
