@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,10 +9,39 @@ from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.org_membership import OrgMembership
 from app.models.user import User
-from app.schemas.stock import StockGrantListResponse
-from app.services import stock_grants
+from app.schemas.stock import StockGrantListResponse, StockSummaryResponse
+from app.services import stock_grants, stock_summary
 
 router = APIRouter(prefix="/me", tags=["stock-self"])
+
+
+@router.get(
+    "/stock/summary",
+    response_model=StockSummaryResponse,
+    summary="Get stock summary and eligibility for the current user",
+)
+async def get_my_stock_summary(
+    as_of: date | None = Query(default=None, description="Compute summary as of this date"),
+    current_user: User = Depends(deps.require_permission(PermissionCode.STOCK_SELF_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> StockSummaryResponse:
+    stmt = select(OrgMembership).where(
+        OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == current_user.id
+    )
+    result = await db.execute(stmt)
+    membership = result.scalar_one_or_none()
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    try:
+        return await stock_summary.build_stock_summary(
+            db,
+            ctx,
+            membership.id,
+            as_of or date.today(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get(
