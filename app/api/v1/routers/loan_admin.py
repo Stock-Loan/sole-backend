@@ -593,13 +593,27 @@ async def download_loan_document(
 )
 async def get_loan_schedule(
     loan_id: UUID,
+    as_of: date | None = Query(default=None, description="As-of date for remaining schedule"),
+    include_paid: bool = Query(default=False, description="Include fully paid schedule entries"),
     _: object = Depends(deps.require_permission(PermissionCode.LOAN_SCHEDULE_VIEW)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanScheduleResponse:
     application = await _get_application_or_404(db, ctx, loan_id)
     try:
-        return loan_schedules.build_schedule(application)
+        as_of_date = as_of or date.today()
+        repayments = await loan_repayments.list_repayments_up_to(
+            db,
+            ctx,
+            loan_id,
+            as_of_date=as_of_date,
+        )
+        return loan_schedules.build_schedule_remaining(
+            application,
+            repayments,
+            as_of_date=as_of_date,
+            include_paid=include_paid,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -621,7 +635,14 @@ async def get_loan_schedule_what_if(
 ) -> LoanScheduleResponse:
     application = await _get_application_or_404(db, ctx, loan_id)
     try:
-        return loan_schedules.build_schedule_what_if(application, payload)
+        as_of_date = payload.as_of_date or date.today()
+        repayments = await loan_repayments.list_repayments_up_to(
+            db,
+            ctx,
+            loan_id,
+            as_of_date=as_of_date,
+        )
+        return loan_schedules.build_schedule_what_if(application, payload, repayments=repayments)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -636,13 +657,27 @@ async def get_loan_schedule_what_if(
 )
 async def export_loan_schedule(
     loan_id: UUID,
+    as_of: date | None = Query(default=None, description="As-of date for remaining schedule export"),
+    include_paid: bool = Query(default=False, description="Include fully paid schedule entries"),
     _: object = Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_SCHEDULE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     application = await _get_application_or_404(db, ctx, loan_id)
     try:
-        schedule = loan_schedules.build_schedule(application)
+        as_of_date = as_of or date.today()
+        repayments = await loan_repayments.list_repayments_up_to(
+            db,
+            ctx,
+            loan_id,
+            as_of_date=as_of_date,
+        )
+        schedule = loan_schedules.build_schedule_remaining(
+            application,
+            repayments,
+            as_of_date=as_of_date,
+            include_paid=include_paid,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

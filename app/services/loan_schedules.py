@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 from app.models.loan_application import LoanApplication
+from app.models.loan_repayment import LoanRepayment
 from app.schemas.loan import LoanScheduleEntry, LoanScheduleResponse, LoanScheduleWhatIfRequest
 from app.schemas.settings import LoanRepaymentMethod
 
@@ -61,11 +62,75 @@ def build_schedule(application: LoanApplication) -> LoanScheduleResponse:
     )
 
 
+def build_schedule_remaining(
+    application: LoanApplication,
+    repayments: list[LoanRepayment],
+    *,
+    as_of_date: date,
+    include_paid: bool = False,
+) -> LoanScheduleResponse:
+    base_schedule = build_schedule(application)
+    remaining_principal, remaining_interest = _apply_repayments(
+        base_schedule.entries,
+        repayments,
+    )
+    remaining_principal_total = sum(remaining_principal, Decimal("0"))
+
+    entries: list[LoanScheduleEntry] = []
+    balance = remaining_principal_total
+    remaining_entry_count = 0
+    for entry, principal_due, interest_due in zip(
+        base_schedule.entries,
+        remaining_principal,
+        remaining_interest,
+    ):
+        total_due = (principal_due + interest_due).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+        if total_due <= 0 and not include_paid:
+            continue
+        principal_due = principal_due.quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+        interest_due = interest_due.quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+        balance = (balance - principal_due).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+        entries.append(
+            LoanScheduleEntry(
+                period=entry.period,
+                due_date=entry.due_date,
+                payment=total_due,
+                principal=principal_due,
+                interest=interest_due,
+                remaining_balance=balance,
+            )
+        )
+        remaining_entry_count += 1
+
+    term_months = base_schedule.term_months if include_paid else remaining_entry_count
+
+    return LoanScheduleResponse(
+        loan_id=base_schedule.loan_id,
+        as_of_date=as_of_date,
+        repayment_method=base_schedule.repayment_method,
+        term_months=term_months,
+        principal=remaining_principal_total.quantize(TWOPLACES, rounding=ROUND_HALF_UP),
+        annual_rate_percent=base_schedule.annual_rate_percent,
+        estimated_monthly_payment=_estimate_monthly_payment(
+            remaining_principal_total,
+            base_schedule.annual_rate_percent,
+            term_months,
+            base_schedule.repayment_method,
+        ),
+        entries=entries,
+    )
+
+
 def build_schedule_what_if(
     application: LoanApplication,
     payload: LoanScheduleWhatIfRequest,
+    repayments: list[LoanRepayment] | None = None,
 ) -> LoanScheduleResponse:
-    principal = _as_decimal(payload.principal if payload.principal is not None else application.loan_principal)
+    if payload.principal is None and repayments is not None:
+        remaining_principal, _ = _apply_repayments(build_schedule(application).entries, repayments)
+        principal = sum(remaining_principal, Decimal("0"))
+    else:
+        principal = _as_decimal(payload.principal if payload.principal is not None else application.loan_principal)
     annual_rate = _as_decimal(
         payload.annual_rate_percent
         if payload.annual_rate_percent is not None
@@ -101,6 +166,42 @@ def _estimate_monthly_payment(
         return _payment_principal_and_interest(principal, annual_rate, term_months)
     monthly_interest = (principal * _monthly_rate(annual_rate)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
     return monthly_interest
+
+
+def _apply_repayments(
+    entries: list[LoanScheduleEntry],
+    repayments: list[LoanRepayment],
+) -> tuple[list[Decimal], list[Decimal]]:
+    remaining_principal = [_as_decimal(entry.principal) for entry in entries]
+    remaining_interest = [_as_decimal(entry.interest) for entry in entries]
+
+    repayments_sorted = sorted(
+        repayments,
+        key=lambda item: (item.payment_date, item.created_at),
+    )
+
+    for repayment in repayments_sorted:
+        principal_payment = _as_decimal(repayment.principal_amount)
+        for idx, remaining in enumerate(remaining_principal):
+            if principal_payment <= 0:
+                break
+            if remaining <= 0:
+                continue
+            applied = min(principal_payment, remaining)
+            remaining_principal[idx] = remaining - applied
+            principal_payment -= applied
+
+        interest_payment = _as_decimal(repayment.interest_amount)
+        for idx, remaining in enumerate(remaining_interest):
+            if interest_payment <= 0:
+                break
+            if remaining <= 0:
+                continue
+            applied = min(interest_payment, remaining)
+            remaining_interest[idx] = remaining - applied
+            interest_payment -= applied
+
+    return remaining_principal, remaining_interest
 
 
 def _build_schedule_from_terms(

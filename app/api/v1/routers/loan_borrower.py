@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -180,6 +180,8 @@ async def list_borrower_repayments(
 )
 async def get_borrower_schedule(
     loan_id: UUID,
+    as_of: date | None = Query(default=None, description="As-of date for remaining schedule"),
+    include_paid: bool = Query(default=False, description="Include fully paid schedule entries"),
     current_user=Depends(deps.require_permission(PermissionCode.LOAN_SCHEDULE_SELF_VIEW)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
@@ -189,7 +191,19 @@ async def get_borrower_schedule(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     application = await _get_application_or_404(db, ctx, loan_id, membership.id)
     try:
-        return loan_schedules.build_schedule(application)
+        as_of_date = as_of or date.today()
+        repayments = await loan_repayments.list_repayments_up_to(
+            db,
+            ctx,
+            loan_id,
+            as_of_date=as_of_date,
+        )
+        return loan_schedules.build_schedule_remaining(
+            application,
+            repayments,
+            as_of_date=as_of_date,
+            include_paid=include_paid,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -214,7 +228,14 @@ async def get_borrower_schedule_what_if(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     application = await _get_application_or_404(db, ctx, loan_id, membership.id)
     try:
-        return loan_schedules.build_schedule_what_if(application, payload)
+        as_of_date = payload.as_of_date or date.today()
+        repayments = await loan_repayments.list_repayments_up_to(
+            db,
+            ctx,
+            loan_id,
+            as_of_date=as_of_date,
+        )
+        return loan_schedules.build_schedule_what_if(application, payload, repayments=repayments)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -229,6 +250,8 @@ async def get_borrower_schedule_what_if(
 )
 async def export_borrower_loan(
     loan_id: UUID,
+    as_of: date | None = Query(default=None, description="As-of date for remaining schedule export"),
+    include_paid: bool = Query(default=False, description="Include fully paid schedule entries"),
     current_user=Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_SELF)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
@@ -238,7 +261,19 @@ async def export_borrower_loan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     application = await _get_application_or_404(db, ctx, loan_id, membership.id)
     try:
-        schedule = loan_schedules.build_schedule(application)
+        as_of_date = as_of or date.today()
+        repayments = await loan_repayments.list_repayments_up_to(
+            db,
+            ctx,
+            loan_id,
+            as_of_date=as_of_date,
+        )
+        schedule = loan_schedules.build_schedule_remaining(
+            application,
+            repayments,
+            as_of_date=as_of_date,
+            include_paid=include_paid,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
