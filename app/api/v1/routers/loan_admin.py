@@ -50,7 +50,12 @@ from app.schemas.loan import (
 )
 from app.services import authz, loan_applications, loan_exports, loan_payment_status, loan_queue, loan_repayments, loan_schedules, loan_workflow, stock_summary
 from app.services.audit import model_snapshot, record_audit_log
-from app.services.local_uploads import resolve_local_path, save_upload
+from app.services.local_uploads import (
+    loan_documents_subdir,
+    loan_repayments_subdir,
+    resolve_local_path,
+    save_upload,
+)
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
@@ -84,7 +89,7 @@ async def _save_local_document(
     relative_path, original_name = await save_upload(
         file,
         base_dir=base_dir,
-        subdir=Path("loan-documents") / ctx.org_id / str(loan_id),
+        subdir=loan_documents_subdir(ctx.org_id, loan_id),
     )
     document = LoanDocument(
         org_id=ctx.org_id,
@@ -493,7 +498,7 @@ async def record_loan_repayment_with_evidence(
         relative_path, original_name = await save_upload(
             evidence_file,
             base_dir=Path(settings.local_upload_dir),
-            subdir=Path("loan-repayments") / ctx.org_id / str(loan_id),
+            subdir=loan_repayments_subdir(ctx.org_id, loan_id),
         )
         evidence_file_name = original_name
         evidence_storage_path = relative_path
@@ -1826,7 +1831,7 @@ async def upload_legal_issuance_document_file(
     relative_path, original_name = await save_upload(
         file,
         base_dir=base_dir,
-        subdir=Path("loan-documents") / ctx.org_id / str(loan_id),
+        subdir=loan_documents_subdir(ctx.org_id, loan_id),
     )
 
     old_stage = model_snapshot(stage)

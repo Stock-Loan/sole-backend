@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.api import deps
 from app.models.org_document_folder import OrgDocumentFolder
 from app.models.org_document_template import OrgDocumentTemplate
-from app.services.local_uploads import save_upload
+from app.services.local_uploads import org_templates_subdir, save_upload
 
 
 DEFAULT_FOLDERS = [
@@ -168,7 +168,7 @@ async def create_template_from_upload(
     actor_id: UUID,
     base_dir: Path,
 ) -> OrgDocumentTemplate:
-    subdir = Path("org-documents") / ctx.org_id
+    subdir = org_templates_subdir(ctx.org_id, folder_id)
     relative_path, original_name = await save_upload(file, base_dir=base_dir, subdir=subdir)
     template = OrgDocumentTemplate(
         org_id=ctx.org_id,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from uuid import uuid4
+from uuid import UUID
 
 from fastapi import UploadFile
 
@@ -46,3 +47,20 @@ def resolve_local_path(base_dir: Path, relative_path: str) -> Path:
     if base_dir not in candidate.parents and candidate != base_dir:
         raise ValueError("Invalid document path")
     return candidate
+
+
+def org_templates_subdir(org_id: str, folder_id: UUID | None) -> Path:
+    folder_segment = str(folder_id) if folder_id else "unassigned"
+    return Path("orgs") / org_id / "templates" / folder_segment
+
+
+def loan_documents_subdir(org_id: str, loan_id: UUID) -> Path:
+    return Path("orgs") / org_id / "loans" / str(loan_id) / "documents"
+
+
+def loan_repayments_subdir(org_id: str, loan_id: UUID) -> Path:
+    return Path("orgs") / org_id / "loans" / str(loan_id) / "repayments"
+
+
+def profile_pictures_subdir(org_id: str, user_id: UUID) -> Path:
+    return Path("orgs") / org_id / "display-pictures" / str(user_id)
