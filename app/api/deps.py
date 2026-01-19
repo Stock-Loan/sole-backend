@@ -13,7 +13,7 @@ from app.core.permissions import PermissionCode
 from app.services import authz
 from app.core.settings import settings
 from app.db.session import get_db
-from app.models import User
+from app.models import Org, User
 
 
 @dataclass(slots=True)
@@ -33,42 +33,67 @@ def enforce_inactivity(last_active_at: Optional[datetime], now: datetime) -> Non
         )
 
 
-def _resolve_subdomain(request: Request) -> str | None:
-    host = request.headers.get("host", "")
-    # strip port if present
-    host = host.split(":")[0]
-    if settings.allowed_tenant_hosts:
-        if host not in settings.allowed_tenant_hosts:
-            return None
-    parts = host.split(".")
-    # ignore localhost/invalid hosts
-    if len(parts) >= 3:
-        return parts[0]
+def _extract_bearer_token(request: Request) -> str | None:
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    prefix = "bearer "
+    if auth_header.lower().startswith(prefix):
+        return auth_header[len(prefix) :].strip()
     return None
+
+
+async def get_db_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
+    return db
 
 
 async def get_tenant_context(
     request: Request,
-    tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+    org_id_header: str | None = Header(default=None, alias="X-Org-Id"),
+    legacy_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+    db: AsyncSession = Depends(get_db_session),
 ) -> TenantContext:
     mode = settings.tenancy_mode
     if mode == "multi":
-        candidate = tenant_id or _resolve_subdomain(request)
+        token_org = None
+        token_is_superuser = False
+        token = _extract_bearer_token(request)
+        if token:
+            try:
+                payload = decode_token(token)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+            token_org = payload.get("org")
+            token_is_superuser = bool(payload.get("su"))
+
+        header_org = org_id_header or legacy_tenant_id
+        if token_org:
+            if header_org and header_org != token_org:
+                if not token_is_superuser:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Tenant header does not match token",
+                    )
+                candidate = header_org
+            else:
+                candidate = token_org
+        else:
+            candidate = header_org
+
         if not candidate:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Tenant resolution failed: provide X-Tenant-ID header or subdomain",
+                detail="Tenant resolution failed: provide X-Org-Id header",
             )
+        org_stmt = select(Org.id).where(Org.id == candidate)
+        if (await db.execute(org_stmt)).scalar_one_or_none() is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
         set_tenant_id(candidate)
         return TenantContext(org_id=candidate)
 
     default_org = settings.default_org_id
     set_tenant_id(default_org)
     return TenantContext(org_id=default_org)
-
-
-async def get_db_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
-    return db
 
 
 async def get_current_user(
@@ -102,10 +127,20 @@ async def _get_current_user(
         ) from exc
     user_sub = payload.get("sub")
     token_version = payload.get("tv")
+    token_org = payload.get("org")
+    token_is_superuser = bool(payload.get("su"))
     if not user_sub:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    if settings.tenancy_mode == "multi":
+        if not token_org:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim")
+        if token_org != ctx.org_id and not token_is_superuser:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch")
 
-    stmt = select(User).where(User.id == user_sub, User.org_id == ctx.org_id)
+    if token_is_superuser and token_org != ctx.org_id:
+        stmt = select(User).where(User.id == user_sub)
+    else:
+        stmt = select(User).where(User.id == user_sub, User.org_id == ctx.org_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:

@@ -78,10 +78,14 @@ async def refresh_tokens(
     token_version = token_data.get("tv")
     jti = token_data.get("jti")
     exp_ts = token_data.get("exp")
+    token_org = token_data.get("org")
+    token_is_superuser = bool(token_data.get("su"))
     if not user_id or token_version is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     if not jti or not exp_ts:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    if token_org and token_org != ctx.org_id and not token_is_superuser:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch")
 
     stmt = select(User).where(User.id == user_id, User.org_id == ctx.org_id)
     result = await db.execute(stmt)
@@ -108,8 +112,18 @@ async def refresh_tokens(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token reuse detected")
     await mark_refresh_used(jti, datetime.fromtimestamp(exp_ts, tz=timezone.utc))
 
-    access = create_access_token(str(user.id), token_version=user.token_version)
-    refresh = create_refresh_token(str(user.id), token_version=user.token_version)
+    access = create_access_token(
+        str(user.id),
+        org_id=user.org_id,
+        is_superuser=user.is_superuser,
+        token_version=user.token_version,
+    )
+    refresh = create_refresh_token(
+        str(user.id),
+        org_id=user.org_id,
+        is_superuser=user.is_superuser,
+        token_version=user.token_version,
+    )
     return TokenPair(access_token=access, refresh_token=refresh)
 
 
@@ -145,8 +159,18 @@ async def _complete_login_flow(
 
     await record_login_attempt(email, success=True)
 
-    access = create_access_token(str(user.id), token_version=user.token_version)
-    refresh = create_refresh_token(str(user.id), token_version=user.token_version)
+    access = create_access_token(
+        str(user.id),
+        org_id=user.org_id,
+        is_superuser=user.is_superuser,
+        token_version=user.token_version,
+    )
+    refresh = create_refresh_token(
+        str(user.id),
+        org_id=user.org_id,
+        is_superuser=user.is_superuser,
+        token_version=user.token_version,
+    )
     return TokenPair(access_token=access, refresh_token=refresh)
 
 
@@ -214,6 +238,16 @@ async def change_password(
     await db.commit()
     await db.refresh(current_user)
 
-    access = create_access_token(str(current_user.id), token_version=current_user.token_version)
-    refresh = create_refresh_token(str(current_user.id), token_version=current_user.token_version)
+    access = create_access_token(
+        str(current_user.id),
+        org_id=current_user.org_id,
+        is_superuser=current_user.is_superuser,
+        token_version=current_user.token_version,
+    )
+    refresh = create_refresh_token(
+        str(current_user.id),
+        org_id=current_user.org_id,
+        is_superuser=current_user.is_superuser,
+        token_version=current_user.token_version,
+    )
     return TokenPair(access_token=access, refresh_token=refresh)

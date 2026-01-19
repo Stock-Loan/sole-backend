@@ -12,7 +12,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id = request.headers.get("X-Request-ID") or str(uuid4())
-        tenant_id = request.headers.get("X-Tenant-ID") or context.get_tenant_id()
+        tenant_id = (
+            request.headers.get("X-Org-Id")
+            or request.headers.get("X-Tenant-ID")
+            or context.get_tenant_id()
+        )
 
         context.set_request_id(request_id)
         if tenant_id:

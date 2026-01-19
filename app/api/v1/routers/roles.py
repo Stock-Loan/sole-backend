@@ -184,7 +184,10 @@ async def update_role(
     await db.refresh(role)
     
     # Invalidate cache for all users with this role
-    user_role_stmt = select(UserRole.user_id).where(UserRole.role_id == role.id)
+    user_role_stmt = select(UserRole.user_id).where(
+        UserRole.org_id == ctx.org_id,
+        UserRole.role_id == role.id,
+    )
     user_role_result = await db.execute(user_role_stmt)
     for user_id in user_role_result.scalars().all():
         await invalidate_permission_cache(str(user_id), ctx.org_id)
@@ -223,7 +226,10 @@ async def delete_role(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System roles cannot be deleted")
 
     # Invalidate cache for users who had this role
-    user_role_stmt = select(UserRole.user_id).where(UserRole.role_id == role.id)
+    user_role_stmt = select(UserRole.user_id).where(
+        UserRole.org_id == ctx.org_id,
+        UserRole.role_id == role.id,
+    )
     user_role_result = await db.execute(user_role_stmt)
     users_to_invalidate = user_role_result.scalars().all()
 

@@ -53,11 +53,23 @@ def _read_key(path: str) -> str:
 
 
 def create_access_token(
-    subject: str, expires_delta: timedelta | None = None, token_version: int | None = None
+    subject: str,
+    *,
+    org_id: str,
+    is_superuser: bool,
+    expires_delta: timedelta | None = None,
+    token_version: int | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
-    to_encode: dict[str, Any] = {"sub": subject, "exp": expire, "iat": now, "type": "access"}
+    to_encode: dict[str, Any] = {
+        "sub": subject,
+        "org": org_id,
+        "su": bool(is_superuser),
+        "exp": expire,
+        "iat": now,
+        "type": "access",
+    }
     if token_version is not None:
         to_encode["tv"] = token_version
     private_key = _load_private_key()
@@ -66,6 +78,9 @@ def create_access_token(
 
 def create_refresh_token(
     subject: str,
+    *,
+    org_id: str,
+    is_superuser: bool,
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
 ) -> str:
@@ -74,6 +89,8 @@ def create_refresh_token(
     jti = str(uuid.uuid4())
     to_encode: dict[str, Any] = {
         "sub": subject,
+        "org": org_id,
+        "su": bool(is_superuser),
         "exp": expire,
         "iat": now,
         "type": "refresh",

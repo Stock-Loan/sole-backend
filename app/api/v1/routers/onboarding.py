@@ -238,7 +238,10 @@ async def delete_user(
     await db.commit()
 
     # If user has no other memberships, delete user record
-    other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
+    other_stmt = select(OrgMembership.id).where(
+        OrgMembership.org_id == ctx.org_id,
+        OrgMembership.user_id == user.id,
+    )
     other_result = await db.execute(other_stmt)
     if not other_result.first():
         await db.delete(user)
@@ -291,7 +294,10 @@ async def bulk_delete_users(
             new_value=None,
         )
         await db.commit()
-        other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
+        other_stmt = select(OrgMembership.id).where(
+            OrgMembership.org_id == ctx.org_id,
+            OrgMembership.user_id == user.id,
+        )
         other_result = await db.execute(other_stmt)
         if not other_result.first():
             await db.delete(user)
