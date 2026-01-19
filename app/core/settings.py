@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     enable_hsts: bool = Field(default=True, alias="ENABLE_HSTS")
     default_org_id: str = Field(default="default", alias="DEFAULT_ORG_ID")
+    default_org_name: str = Field(default="Default Organization", alias="DEFAULT_ORG_NAME")
+    default_org_slug: str = Field(default="default", alias="DEFAULT_ORG_SLUG")
     secret_key: str = Field(alias="SECRET_KEY", min_length=16)
     jwt_private_key: str | None = Field(default=None, alias="JWT_PRIVATE_KEY")
     jwt_public_key: str | None = Field(default=None, alias="JWT_PUBLIC_KEY")

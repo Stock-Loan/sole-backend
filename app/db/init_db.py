@@ -30,8 +30,8 @@ async def init_db() -> None:
             print("Creating default org...")
             org = Org(
                 id=settings.default_org_id,
-                name="Default Organization",
-                slug=settings.default_org_id,
+                name=settings.default_org_name,
+                slug=settings.default_org_slug or settings.default_org_id,
                 status="ACTIVE",
             )
             session.add(org)

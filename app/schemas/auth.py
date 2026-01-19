@@ -38,6 +38,24 @@ class LoginCompleteRequest(BaseModel):
     password: str
 
 
+class OrgDiscoveryRequest(BaseModel):
+    email: EmailStr
+
+
+class OrgSummary(BaseModel):
+    org_id: str
+    name: str
+    slug: str | None = None
+
+
+class OrgDiscoveryResponse(BaseModel):
+    orgs: list[OrgSummary]
+
+
+class OrgResolveResponse(BaseModel):
+    org: OrgSummary
+
+
 class UserOut(BaseModel):
     id: UUID
     org_id: str

@@ -15,11 +15,16 @@ from app.core.security import (
 )
 from app.db.session import get_db
 from app.models import OrgMembership, User
+from app.models.org import Org
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginCompleteRequest,
     LoginStartRequest,
     LoginStartResponse,
+    OrgDiscoveryRequest,
+    OrgDiscoveryResponse,
+    OrgResolveResponse,
+    OrgSummary,
     RefreshRequest,
     TokenPair,
     UserOut,
@@ -28,6 +33,42 @@ from app.api.auth_utils import constant_time_verify, enforce_login_limits, recor
 from app.utils.login_security import is_refresh_used, mark_refresh_used
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/org-discovery", response_model=OrgDiscoveryResponse, summary="Discover org(s) by email")
+async def discover_orgs_by_email(
+    payload: OrgDiscoveryRequest,
+    db: AsyncSession = Depends(get_db),
+) -> OrgDiscoveryResponse:
+    stmt = (
+        select(Org)
+        .join(User, User.org_id == Org.id)
+        .where(User.email == payload.email, Org.status == "ACTIVE")
+        .order_by(Org.name.asc())
+    )
+    orgs = (await db.execute(stmt)).scalars().all()
+    summaries = [OrgSummary(org_id=org.id, name=org.name, slug=org.slug) for org in orgs]
+    return OrgDiscoveryResponse(orgs=summaries)
+
+
+@router.get("/orgs/resolve", response_model=OrgResolveResponse, summary="Resolve org by id or slug")
+async def resolve_org(
+    org_id: str | None = None,
+    slug: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> OrgResolveResponse:
+    if not org_id and not slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="org_id or slug is required")
+    stmt = select(Org).where(Org.status == "ACTIVE")
+    if org_id:
+        stmt = stmt.where(Org.id == org_id)
+    if slug:
+        stmt = stmt.where(Org.slug == slug)
+    org = (await db.execute(stmt)).scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+    summary = OrgSummary(org_id=org.id, name=org.name, slug=org.slug)
+    return OrgResolveResponse(org=summary)
 
 
 @router.post("/login/start", response_model=LoginStartResponse)
