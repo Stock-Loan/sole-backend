@@ -113,6 +113,26 @@ async def list_repayments(
     return (await db.execute(stmt)).scalars().all()
 
 
+async def list_repayments_up_to(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    loan_id,
+    *,
+    as_of_date,
+) -> list[LoanRepayment]:
+    stmt = (
+        select(LoanRepayment)
+        .options(selectinload(LoanRepayment.recorded_by_user))
+        .where(
+            LoanRepayment.org_id == ctx.org_id,
+            LoanRepayment.loan_application_id == loan_id,
+            LoanRepayment.payment_date <= as_of_date,
+        )
+        .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.created_at.asc())
+    )
+    return (await db.execute(stmt)).scalars().all()
+
+
 async def sum_repayments_for_org(
     db: AsyncSession,
     ctx: deps.TenantContext,

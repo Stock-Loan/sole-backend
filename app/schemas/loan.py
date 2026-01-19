@@ -314,6 +314,16 @@ class LoanApplicationDTO(BaseModel):
     estimated_monthly_payment: Decimal
     total_payable_amount: Decimal
     total_interest_amount: Decimal
+    next_payment_date: date | None = None
+    next_payment_amount: Decimal | None = None
+    next_principal_due: Decimal | None = None
+    next_interest_due: Decimal | None = None
+    principal_remaining: Decimal | None = None
+    interest_remaining: Decimal | None = None
+    total_remaining: Decimal | None = None
+    missed_payment_count: int | None = None
+    missed_payment_amount_total: Decimal | None = None
+    missed_payment_dates: list[date] | None = None
     quote_inputs_snapshot: dict
     quote_option_snapshot: dict
     allocation_strategy: str
@@ -501,6 +511,8 @@ class LoanRepaymentCreateRequest(BaseModel):
     amount: Decimal = Field(gt=0)
     principal_amount: Decimal = Field(ge=0)
     interest_amount: Decimal = Field(ge=0)
+    extra_principal_amount: Decimal | None = Field(default=None, ge=0)
+    extra_interest_amount: Decimal | None = Field(default=None, ge=0)
     payment_date: date
 
 
@@ -525,6 +537,19 @@ class LoanRepaymentListResponse(BaseModel):
     loan_id: UUID
     total: int
     items: list[LoanRepaymentDTO]
+
+
+class LoanRepaymentRecordResponse(BaseModel):
+    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)})
+
+    repayment: LoanRepaymentDTO
+    next_payment_date: date | None = None
+    next_payment_amount: Decimal | None = None
+    next_principal_due: Decimal | None = None
+    next_interest_due: Decimal | None = None
+    principal_remaining: Decimal | None = None
+    interest_remaining: Decimal | None = None
+    total_remaining: Decimal | None = None
 
 
 LoanApplicationDTO.model_rebuild()

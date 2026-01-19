@@ -39,7 +39,8 @@ from app.schemas.stock import (
 from app.services import (
     eligibility,
     loan_applications,
-    loan_schedules,
+    loan_payment_status,
+    loan_repayments,
     settings as settings_service,
     stock_reservations,
     vesting_engine,
@@ -323,6 +324,12 @@ async def build_self_dashboard_summary(
     remaining_balance = None
     next_payment_date = None
     next_payment_amount = None
+    missed_payment_count = None
+    missed_payment_amount_total = None
+    missed_payment_dates: list[date] = []
+    principal_remaining = None
+    interest_remaining = None
+    total_remaining = None
     current_stage_type = None
     current_stage_status = None
     has_share_certificate = None
@@ -351,14 +358,26 @@ async def build_self_dashboard_summary(
             remaining_balance = max(total_payable - total_paid, Decimal("0"))
 
         try:
-            schedule = loan_schedules.build_schedule(active_application)
-            next_entry = next(
-                (entry for entry in schedule.entries if entry.due_date >= as_of_date),
-                None,
+            repayments_for_status = await loan_repayments.list_repayments_up_to(
+                db,
+                ctx,
+                active_application.id,
+                as_of_date=as_of_date,
             )
-            if next_entry:
-                next_payment_date = next_entry.due_date
-                next_payment_amount = _as_decimal(next_entry.payment)
+            status_snapshot = loan_payment_status.compute_payment_status(
+                active_application,
+                repayments_for_status,
+                as_of_date,
+            )
+            next_payment_date = status_snapshot.next_payment_date
+            next_payment_amount = status_snapshot.next_payment_amount
+            missed_payment_count = status_snapshot.missed_payment_count
+            missed_payment_amount_total = status_snapshot.missed_payment_amount_total
+            missed_payment_dates = status_snapshot.missed_payment_dates
+            principal_remaining = status_snapshot.principal_remaining
+            interest_remaining = status_snapshot.interest_remaining
+            total_remaining = status_snapshot.total_remaining
+            remaining_balance = status_snapshot.total_remaining
         except ValueError:
             next_payment_date = None
             next_payment_amount = None
@@ -459,8 +478,14 @@ async def build_self_dashboard_summary(
             total_paid=total_paid,
             total_interest_paid=total_interest_paid,
             remaining_balance=remaining_balance,
+            principal_remaining=principal_remaining,
+            interest_remaining=interest_remaining,
+            total_remaining=total_remaining,
             next_payment_date=next_payment_date,
             next_payment_amount=next_payment_amount,
+            missed_payment_count=missed_payment_count,
+            missed_payment_amount_total=missed_payment_amount_total,
+            missed_payment_dates=missed_payment_dates,
             current_stage_type=current_stage_type,
             current_stage_status=current_stage_status,
             has_share_certificate=has_share_certificate,

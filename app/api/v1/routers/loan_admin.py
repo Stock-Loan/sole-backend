@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -35,6 +36,7 @@ from app.schemas.loan import (
     LoanRepaymentCreateRequest,
     LoanRepaymentDTO,
     LoanRepaymentListResponse,
+    LoanRepaymentRecordResponse,
     LoanFinanceReviewResponse,
     LoanHRReviewResponse,
     LoanLegalReviewResponse,
@@ -46,7 +48,7 @@ from app.schemas.loan import (
     LoanWorkflowStageStatus,
     LoanWorkflowStageUpdateRequest,
 )
-from app.services import authz, loan_applications, loan_exports, loan_queue, loan_repayments, loan_schedules, loan_workflow, stock_summary
+from app.services import authz, loan_applications, loan_exports, loan_payment_status, loan_queue, loan_repayments, loan_schedules, loan_workflow, stock_summary
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.local_uploads import resolve_local_path, save_upload
 
@@ -177,6 +179,43 @@ async def _fetch_applicant_summary(db: AsyncSession, ctx: deps.TenantContext, ap
     return _build_applicant_summary(membership, user, department)
 
 
+async def _payment_status_fields(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    application,
+    *,
+    as_of_date: date | None = None,
+) -> dict:
+    if as_of_date is None:
+        as_of_date = date.today()
+    try:
+        repayments_for_status = await loan_repayments.list_repayments_up_to(
+            db,
+            ctx,
+            application.id,
+            as_of_date=as_of_date,
+        )
+        status_snapshot = loan_payment_status.compute_payment_status(
+            application,
+            repayments_for_status,
+            as_of_date,
+        )
+    except ValueError:
+        return {}
+    return {
+        "next_payment_date": status_snapshot.next_payment_date,
+        "next_payment_amount": status_snapshot.next_payment_amount,
+        "next_principal_due": status_snapshot.next_principal_due,
+        "next_interest_due": status_snapshot.next_interest_due,
+        "principal_remaining": status_snapshot.principal_remaining,
+        "interest_remaining": status_snapshot.interest_remaining,
+        "total_remaining": status_snapshot.total_remaining,
+        "missed_payment_count": status_snapshot.missed_payment_count,
+        "missed_payment_amount_total": status_snapshot.missed_payment_amount_total,
+        "missed_payment_dates": status_snapshot.missed_payment_dates,
+    }
+
+
 @router.get(
     "",
     response_model=LoanApplicationListResponse,
@@ -272,12 +311,14 @@ async def get_loan(
         await db.refresh(application)
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    payment_fields = await _payment_status_fields(db, ctx, application)
     return LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            **payment_fields,
         }
     )
 
@@ -337,58 +378,102 @@ async def list_loan_repayments(
 
 @router.post(
     "/{loan_id}/repayments",
-    response_model=LoanRepaymentDTO,
-    status_code=status.HTTP_201_CREATED,
-    summary="Record a loan repayment",
-)
-async def record_loan_repayment(
-    loan_id: UUID,
-    payload: LoanRepaymentCreateRequest,
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_PAYMENT_RECORD)),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    db: AsyncSession = Depends(get_db),
-) -> LoanRepaymentDTO:
-    application = await _get_application_or_404(db, ctx, loan_id)
-    try:
-        repayment = await loan_repayments.record_repayment(
-            db,
-            ctx,
-            application,
-            payload,
-            actor_id=current_user.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "invalid_repayment", "message": str(exc), "details": {}},
-        ) from exc
-    await db.commit()
-    await db.refresh(repayment)
-    return LoanRepaymentDTO.model_validate(repayment)
-
-
-@router.post(
-    "/{loan_id}/repayments/with-evidence",
-    response_model=LoanRepaymentDTO,
+    response_model=LoanRepaymentRecordResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Record a loan repayment with optional evidence",
 )
 async def record_loan_repayment_with_evidence(
     loan_id: UUID,
-    amount: str = Form(...),
-    principal_amount: str = Form(...),
-    interest_amount: str = Form(...),
+    amount: str | None = Form(default=None),
+    principal_amount: str | None = Form(default=None),
+    interest_amount: str | None = Form(default=None),
+    extra_principal_amount: str | None = Form(default=None),
+    extra_interest_amount: str | None = Form(default=None),
     payment_date: date = Form(...),
     evidence_file: UploadFile | None = File(default=None),
     current_user=Depends(deps.require_permission(PermissionCode.LOAN_PAYMENT_RECORD)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
-) -> LoanRepaymentDTO:
+) -> LoanRepaymentRecordResponse:
     application = await _get_application_or_404(db, ctx, loan_id)
+    extra_principal = Decimal(extra_principal_amount or "0")
+    extra_interest = Decimal(extra_interest_amount or "0")
+    existing_repayments = await loan_repayments.list_repayments_up_to(
+        db,
+        ctx,
+        loan_id,
+        as_of_date=payment_date,
+    )
+    status_snapshot = loan_payment_status.compute_payment_status(
+        application,
+        existing_repayments,
+        payment_date,
+    )
+    if status_snapshot.next_payment_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "loan_fully_paid",
+                "message": "Loan has no scheduled payments remaining",
+                "details": {},
+            },
+        )
+    scheduled_principal = status_snapshot.next_principal_due or Decimal("0")
+    scheduled_interest = status_snapshot.next_interest_due or Decimal("0")
+    principal_total = scheduled_principal + extra_principal
+    interest_total = scheduled_interest + extra_interest
+    amount_total = principal_total + interest_total
+    if status_snapshot.principal_remaining is not None and principal_total > status_snapshot.principal_remaining:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "principal_overpayment",
+                "message": "principal_amount exceeds remaining principal balance",
+                "details": {"remaining_principal": str(status_snapshot.principal_remaining)},
+            },
+        )
+    if status_snapshot.interest_remaining is not None and interest_total > status_snapshot.interest_remaining:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "interest_overpayment",
+                "message": "interest_amount exceeds remaining interest balance",
+                "details": {"remaining_interest": str(status_snapshot.interest_remaining)},
+            },
+        )
+    if amount is not None and Decimal(amount) != amount_total:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_repayment_amount",
+                "message": "amount must match scheduled payment plus extras",
+                "details": {"expected": str(amount_total)},
+            },
+        )
+    if principal_amount is not None and Decimal(principal_amount) != principal_total:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_principal_amount",
+                "message": "principal_amount must match scheduled principal plus extra_principal_amount",
+                "details": {"expected": str(principal_total)},
+            },
+        )
+    if interest_amount is not None and Decimal(interest_amount) != interest_total:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_interest_amount",
+                "message": "interest_amount must match scheduled interest plus extra_interest_amount",
+                "details": {"expected": str(interest_total)},
+            },
+        )
     payload = LoanRepaymentCreateRequest(
-        amount=amount,
-        principal_amount=principal_amount,
-        interest_amount=interest_amount,
+        amount=amount_total,
+        principal_amount=principal_total,
+        interest_amount=interest_total,
+        extra_principal_amount=extra_principal,
+        extra_interest_amount=extra_interest,
         payment_date=payment_date,
     )
 
@@ -432,7 +517,23 @@ async def record_loan_repayment_with_evidence(
         ) from exc
     await db.commit()
     await db.refresh(repayment)
-    return LoanRepaymentDTO.model_validate(repayment)
+
+    updated_repayments = existing_repayments + [repayment]
+    updated_status = loan_payment_status.compute_payment_status(
+        application,
+        updated_repayments,
+        payment_date,
+    )
+    return LoanRepaymentRecordResponse(
+        repayment=LoanRepaymentDTO.model_validate(repayment),
+        next_payment_date=updated_status.next_payment_date,
+        next_payment_amount=updated_status.next_payment_amount,
+        next_principal_due=updated_status.next_principal_due,
+        next_interest_due=updated_status.next_interest_due,
+        principal_remaining=updated_status.principal_remaining,
+        interest_remaining=updated_status.interest_remaining,
+        total_remaining=updated_status.total_remaining,
+    )
 
 
 @router.get(
@@ -608,12 +709,14 @@ async def update_loan(
 
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(updated)
     applicant = await _fetch_applicant_summary(db, ctx, updated)
+    payment_fields = await _payment_status_fields(db, ctx, updated)
     return LoanApplicationDTO.model_validate(updated).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            **payment_fields,
         }
     )
 
@@ -958,12 +1061,14 @@ async def get_hr_review(
             break
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            **payment_fields,
         }
     )
     return LoanHRReviewResponse(
@@ -1158,12 +1263,14 @@ async def get_finance_review(
             break
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            **payment_fields,
         }
     )
     return LoanFinanceReviewResponse(
@@ -1351,12 +1458,14 @@ async def get_legal_review(
             break
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            **payment_fields,
         }
     )
     return LoanLegalReviewResponse(

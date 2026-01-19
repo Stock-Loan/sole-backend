@@ -30,14 +30,6 @@ async def get_loan_quote(
 
     try:
         quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, payload)
-        await loan_quotes.record_quote_audit(
-            db,
-            ctx,
-            actor_id=current_user.id,
-            membership=membership,
-            request=payload,
-            quote=quote,
-        )
         return quote
     except loan_quotes.LoanQuoteError as exc:
         raise HTTPException(

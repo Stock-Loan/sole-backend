@@ -88,8 +88,14 @@ class SelfLoanSummary(BaseModel):
     total_paid: Decimal | None = None
     total_interest_paid: Decimal | None = None
     remaining_balance: Decimal | None = None
+    principal_remaining: Decimal | None = None
+    interest_remaining: Decimal | None = None
+    total_remaining: Decimal | None = None
     next_payment_date: date | None = None
     next_payment_amount: Decimal | None = None
+    missed_payment_count: int | None = None
+    missed_payment_amount_total: Decimal | None = None
+    missed_payment_dates: list[date] = Field(default_factory=list)
     current_stage_type: LoanWorkflowStageType | None = None
     current_stage_status: LoanWorkflowStageStatus | None = None
     has_share_certificate: bool | None = None

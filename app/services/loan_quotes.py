@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.models.audit_log import AuditLog
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.org_membership import OrgMembership
 from app.models.org_settings import OrgSettings
@@ -365,28 +364,6 @@ def build_loan_quote_from_data(
         allocation_strategy=ALLOCATION_STRATEGY_OLDEST,
         allocation=allocation,
     )
-
-
-async def record_quote_audit(
-    db: AsyncSession,
-    ctx: deps.TenantContext,
-    *,
-    actor_id,
-    membership: OrgMembership,
-    request: LoanQuoteRequest,
-    quote: LoanQuoteResponse,
-) -> None:
-    entry = AuditLog(
-        org_id=ctx.org_id,
-        actor_id=actor_id,
-        action="loan_quote.requested",
-        resource_type="loan_quote",
-        resource_id=str(membership.id),
-        old_value={"request": request.model_dump(mode="json")},
-        new_value={"quote": quote.model_dump(mode="json")},
-    )
-    db.add(entry)
-    await db.commit()
 
 
 async def calculate_loan_quote(
