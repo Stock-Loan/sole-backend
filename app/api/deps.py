@@ -175,9 +175,11 @@ async def _require_mfa_for_request(
     current_user: User,
     ctx: TenantContext,
     db: AsyncSession,
+    *,
+    action: str | None = None,
 ) -> None:
     org_settings = await settings_service.get_org_settings(db, ctx)
-    if not org_settings.require_two_factor and not current_user.mfa_enabled:
+    if not settings_service.is_mfa_action_required(org_settings, action):
         return
     token = _extract_bearer_token(request)
     if not token:
@@ -194,6 +196,8 @@ def require_permission_with_mfa(
     permission_code: PermissionCode | str,
     resource_type: str | None = None,
     resource_id_param: str | None = None,
+    *,
+    action: str | None = None,
 ):
     async def dependency(
         request: Request,
@@ -201,10 +205,20 @@ def require_permission_with_mfa(
         ctx: TenantContext = Depends(get_tenant_context),
         db: AsyncSession = Depends(get_db_session),
     ) -> User:
-        await _require_mfa_for_request(request, current_user, ctx, db)
+        await _require_mfa_for_request(request, current_user, ctx, db, action=action)
         return current_user
 
     return dependency
+
+
+async def require_mfa_for_action(
+    request: Request,
+    current_user: User,
+    ctx: TenantContext,
+    db: AsyncSession,
+    action: str,
+) -> None:
+    await _require_mfa_for_request(request, current_user, ctx, db, action=action)
 
 
 def require_permission(permission_code: PermissionCode | str, resource_type: str | None = None, resource_id_param: str | None = None):

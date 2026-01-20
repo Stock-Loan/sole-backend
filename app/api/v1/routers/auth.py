@@ -477,6 +477,7 @@ async def _complete_login_flow(
     org_settings = await settings_service.get_org_settings(db, ctx)
     mfa_required = bool(org_settings.require_two_factor or user.mfa_enabled)
     remember_days = org_settings.remember_device_days
+    require_login_mfa = settings_service.is_mfa_action_required(org_settings, "LOGIN")
     if mfa_required and not user.mfa_enabled:
         setup_token = create_mfa_setup_token(str(user.id), ctx.org_id)
         await record_login_attempt(email, success=True)
@@ -495,6 +496,8 @@ async def _complete_login_flow(
     await record_login_attempt(email, success=True)
 
     if mfa_required:
+        if require_login_mfa:
+            remember_device_token = None
         if remember_device_token and org_settings.remember_device_days > 0:
             device = await mfa_service.find_valid_device(
                 db,

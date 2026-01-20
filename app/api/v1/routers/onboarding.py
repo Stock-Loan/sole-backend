@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +19,7 @@ from app.schemas.users import (
     UserDetailResponse,
     UserListResponse,
 )
+from app.schemas.settings import MfaEnforcementAction
 from app.models.org_membership import OrgMembership
 from app.models.user import User as UserModel
 from app.models.user_role import UserRole
@@ -407,10 +408,18 @@ async def update_membership(
 async def update_user_profile(
     membership_id: str,
     payload: UpdateUserProfileRequest,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.USER_PROFILE_EDIT.value,
+    )
     org_settings = await settings_service.get_org_settings(db, ctx)
     if not org_settings.allow_profile_edit:
         raise HTTPException(

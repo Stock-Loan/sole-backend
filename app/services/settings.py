@@ -13,6 +13,7 @@ from app.services import mfa as mfa_service
 from app.schemas.settings import (
     LoanInterestType,
     LoanRepaymentMethod,
+    MfaEnforcementAction,
     OrgSettingsBase,
     OrgSettingsUpdate,
 )
@@ -21,6 +22,7 @@ from app.schemas.settings import (
 DEFAULT_SETTINGS = OrgSettingsBase()
 ALLOWED_REPAYMENT_METHODS = {method.value for method in LoanRepaymentMethod}
 ALLOWED_INTEREST_TYPES = {interest.value for interest in LoanInterestType}
+ALLOWED_MFA_ACTIONS = {action.value for action in MfaEnforcementAction}
 LOAN_POLICY_FIELDS = {
     "allowed_repayment_methods",
     "min_loan_term_months",
@@ -39,6 +41,14 @@ STOCK_POLICY_FIELDS = {
     "min_vested_shares_to_exercise",
 }
 POLICY_FIELDS = LOAN_POLICY_FIELDS | STOCK_POLICY_FIELDS
+
+
+def is_mfa_action_required(settings: OrgSettings, action: str | None) -> bool:
+    if not settings.require_two_factor:
+        return False
+    if action is None:
+        return True
+    return action in (settings.mfa_required_actions or [])
 
 
 def _settings_snapshot(settings: OrgSettings) -> dict:
@@ -183,6 +193,7 @@ async def get_org_settings(
         allow_user_data_export=DEFAULT_SETTINGS.allow_user_data_export,
         allow_profile_edit=DEFAULT_SETTINGS.allow_profile_edit,
         require_two_factor=DEFAULT_SETTINGS.require_two_factor,
+        mfa_required_actions=list(DEFAULT_SETTINGS.mfa_required_actions),
         audit_log_retention_days=DEFAULT_SETTINGS.audit_log_retention_days,
         inactive_user_retention_days=DEFAULT_SETTINGS.inactive_user_retention_days,
         remember_device_days=DEFAULT_SETTINGS.remember_device_days,
@@ -220,6 +231,15 @@ async def update_org_settings(
     settings = await get_org_settings(db, ctx, create_if_missing=True)
     old_snapshot = _settings_snapshot(settings)
     data = payload.model_dump(exclude_unset=True)
+    if data.get("require_two_factor") is False:
+        data["mfa_required_actions"] = []
+    if "mfa_required_actions" in data and data["mfa_required_actions"] is not None:
+        data["mfa_required_actions"] = _normalize_enum_list(data["mfa_required_actions"])
+        unknown = [value for value in data["mfa_required_actions"] if value not in ALLOWED_MFA_ACTIONS]
+        if unknown:
+            raise ValueError(
+                f"mfa_required_actions contains invalid values: {', '.join(unknown)}"
+            )
     if "allowed_repayment_methods" in data and data["allowed_repayment_methods"] is not None:
         data["allowed_repayment_methods"] = _normalize_enum_list(data["allowed_repayment_methods"])
     if "allowed_interest_types" in data and data["allowed_interest_types"] is not None:

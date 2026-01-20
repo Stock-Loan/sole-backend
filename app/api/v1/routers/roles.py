@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy import select, delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ from app.models.role import Role
 from app.models.user_role import UserRole
 from app.models.user import User
 from app.schemas.roles import RoleAssignmentRequest, RoleCreate, RoleListResponse, RoleOut, RoleUpdate
+from app.schemas.settings import MfaEnforcementAction
 from app.schemas.users import UserListResponse
 from app.models.department import Department
 from app.services.authz import invalidate_permission_cache, invalidate_permission_cache_for_org
@@ -266,11 +267,19 @@ async def delete_role(
 async def assign_roles_to_user(
     membership_id: UUID,
     payload: RoleAssignmentRequest,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.ROLE_MANAGE)),
     __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> list[RoleOut]:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.ROLE_ASSIGNMENT.value,
+    )
     if not payload.role_ids:
         return []
 

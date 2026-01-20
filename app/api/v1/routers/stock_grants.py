@@ -1,7 +1,7 @@
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -15,6 +15,7 @@ from app.schemas.stock import (
     StockGrantPreviewResponse,
     StockGrantListResponse,
 )
+from app.schemas.settings import MfaEnforcementAction
 from app.services import stock_grants
 
 router = APIRouter(prefix="/org", tags=["stock-grants"])
@@ -72,10 +73,18 @@ async def preview_grant(
 async def create_grant(
     membership_id: UUID,
     payload: EmployeeStockGrantCreate,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.STOCK_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> EmployeeStockGrantOut:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.STOCK_GRANT_ASSIGNMENT.value,
+    )
     membership = await stock_grants.get_membership(db, ctx, membership_id)
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")

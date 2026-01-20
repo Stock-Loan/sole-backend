@@ -6,7 +6,7 @@ from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.pbgc_rates import PbgcMidTermRateEntry, PbgcRateRefreshResponse
-from app.schemas.settings import OrgSettingsResponse, OrgSettingsUpdate
+from app.schemas.settings import MfaEnforcementAction, OrgSettingsResponse, OrgSettingsUpdate
 from app.services import pbgc_rates, settings as settings_service
 
 router = APIRouter(prefix="/org/settings", tags=["org-settings"])
@@ -32,7 +32,12 @@ async def get_org_settings(
 async def update_org_settings(
     payload: OrgSettingsUpdate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    current_user: User = Depends(deps.require_permission_with_mfa(PermissionCode.ORG_SETTINGS_MANAGE)),
+    current_user: User = Depends(
+        deps.require_permission_with_mfa(
+            PermissionCode.ORG_SETTINGS_MANAGE,
+            action=MfaEnforcementAction.ORG_SETTINGS_CHANGE.value,
+        )
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> OrgSettingsResponse:
     try:

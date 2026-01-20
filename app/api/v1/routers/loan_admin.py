@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -48,6 +48,7 @@ from app.schemas.loan import (
     LoanWorkflowStageStatus,
     LoanWorkflowStageUpdateRequest,
 )
+from app.schemas.settings import MfaEnforcementAction
 from app.services import authz, loan_applications, loan_exports, loan_payment_status, loan_queue, loan_repayments, loan_schedules, loan_workflow, stock_summary
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.local_uploads import (
@@ -396,7 +397,12 @@ async def record_loan_repayment_with_evidence(
     extra_interest_amount: str | None = Form(default=None),
     payment_date: date = Form(...),
     evidence_file: UploadFile | None = File(default=None),
-    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_PAYMENT_RECORD)),
+    current_user=Depends(
+        deps.require_permission_with_mfa(
+            PermissionCode.LOAN_PAYMENT_RECORD,
+            action=MfaEnforcementAction.LOAN_PAYMENT_RECORD.value,
+        )
+    ),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanRepaymentRecordResponse:
@@ -1126,7 +1132,8 @@ async def get_hr_review(
 async def update_hr_stage(
     loan_id: UUID,
     payload: LoanWorkflowStageUpdateRequest,
-    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_WORKFLOW_HR_MANAGE)),
+    request: Request,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_HR_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanWorkflowStageDTO:
@@ -1143,6 +1150,13 @@ async def update_hr_stage(
             },
         )
     if payload.status == LoanWorkflowStageStatus.COMPLETED:
+        await deps.require_mfa_for_action(
+            request,
+            current_user,
+            ctx,
+            db,
+            action=MfaEnforcementAction.WORKFLOW_COMPLETE.value,
+        )
         required_types = {
             LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT.value,
             LoanDocumentType.SPOUSE_PARTNER_CONSENT.value,
@@ -1327,7 +1341,8 @@ async def get_finance_review(
 async def update_finance_stage(
     loan_id: UUID,
     payload: LoanWorkflowStageUpdateRequest,
-    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_WORKFLOW_FINANCE_MANAGE)),
+    request: Request,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_FINANCE_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanWorkflowStageDTO:
@@ -1344,6 +1359,13 @@ async def update_finance_stage(
             },
         )
     if payload.status == LoanWorkflowStageStatus.COMPLETED:
+        await deps.require_mfa_for_action(
+            request,
+            current_user,
+            ctx,
+            db,
+            action=MfaEnforcementAction.WORKFLOW_COMPLETE.value,
+        )
         doc_stmt = select(LoanDocument).where(
             LoanDocument.org_id == ctx.org_id,
             LoanDocument.loan_application_id == loan_id,
@@ -1522,7 +1544,8 @@ async def get_legal_review(
 async def update_legal_stage(
     loan_id: UUID,
     payload: LoanWorkflowStageUpdateRequest,
-    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_WORKFLOW_LEGAL_MANAGE)),
+    request: Request,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_LEGAL_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanWorkflowStageDTO:
@@ -1540,6 +1563,13 @@ async def update_legal_stage(
             },
         )
     if payload.status == LoanWorkflowStageStatus.COMPLETED:
+        await deps.require_mfa_for_action(
+            request,
+            current_user,
+            ctx,
+            db,
+            action=MfaEnforcementAction.WORKFLOW_COMPLETE.value,
+        )
         required_types = {
             LoanDocumentType.STOCK_OPTION_EXERCISE_AND_LOAN_AGREEMENT.value,
             LoanDocumentType.SECURED_PROMISSORY_NOTE.value,
@@ -1696,6 +1726,7 @@ async def upload_legal_document_file(
 async def upload_legal_issuance_document(
     loan_id: UUID,
     payload: LoanDocumentCreateRequest,
+    request: Request,
     current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_POST_ISSUANCE_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
@@ -1748,6 +1779,13 @@ async def upload_legal_issuance_document(
         uploaded_by_user_id=current_user.id,
     )
     db.add(document)
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.WORKFLOW_COMPLETE.value,
+    )
     stage.status = "COMPLETED"
     stage.completed_at = datetime.now(timezone.utc)
     stage.completed_by_user_id = current_user.id
@@ -1785,6 +1823,7 @@ async def upload_legal_issuance_document(
 )
 async def upload_legal_issuance_document_file(
     loan_id: UUID,
+    request: Request,
     document_type: LoanDocumentType = Form(...),
     file: UploadFile = File(...),
     current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_MANAGE_LEGAL)),
@@ -1845,6 +1884,13 @@ async def upload_legal_issuance_document_file(
         uploaded_by_user_id=current_user.id,
     )
     db.add(document)
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.WORKFLOW_COMPLETE.value,
+    )
     stage.status = "COMPLETED"
     stage.completed_at = datetime.now(timezone.utc)
     stage.completed_by_user_id = current_user.id

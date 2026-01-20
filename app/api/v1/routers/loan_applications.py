@@ -22,6 +22,7 @@ from app.schemas.loan import (
     LoanApplicationStatus,
     LoanWorkflowStageStatus,
 )
+from app.schemas.settings import MfaEnforcementAction
 from app.services import loan_applications, loan_quotes, loan_workflow
 
 router = APIRouter(prefix="/me/loan-applications", tags=["loan-applications"])
@@ -279,7 +280,12 @@ async def update_loan_application(
 )
 async def submit_loan_application(
     application_id: UUID,
-    current_user: User = Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_APPLY)),
+    current_user: User = Depends(
+        deps.require_permission_with_mfa(
+            PermissionCode.LOAN_APPLY,
+            action=MfaEnforcementAction.LOAN_SUBMISSION.value,
+        )
+    ),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),

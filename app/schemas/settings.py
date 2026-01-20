@@ -16,12 +16,24 @@ class LoanInterestType(str, Enum):
     VARIABLE = "VARIABLE"
 
 
+class MfaEnforcementAction(str, Enum):
+    LOGIN = "LOGIN"
+    LOAN_SUBMISSION = "LOAN_SUBMISSION"
+    STOCK_GRANT_ASSIGNMENT = "STOCK_GRANT_ASSIGNMENT"
+    LOAN_PAYMENT_RECORD = "LOAN_PAYMENT_RECORD"
+    WORKFLOW_COMPLETE = "WORKFLOW_COMPLETE"
+    ORG_SETTINGS_CHANGE = "ORG_SETTINGS_CHANGE"
+    USER_PROFILE_EDIT = "USER_PROFILE_EDIT"
+    ROLE_ASSIGNMENT = "ROLE_ASSIGNMENT"
+
+
 class OrgSettingsBase(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     allow_user_data_export: bool = Field(default=True)
     allow_profile_edit: bool = Field(default=True)
     require_two_factor: bool = Field(default=False)
+    mfa_required_actions: list[MfaEnforcementAction] = Field(default_factory=list)
     remember_device_days: int = Field(default=30, ge=0)
     audit_log_retention_days: int = Field(default=180, ge=0)
     inactive_user_retention_days: int = Field(default=180, ge=0)
@@ -75,6 +87,7 @@ class OrgPolicyResponse(BaseModel):
     allow_user_data_export: bool
     allow_profile_edit: bool
     require_two_factor: bool
+    mfa_required_actions: list[MfaEnforcementAction] = Field(default_factory=list)
     remember_device_days: int
     enforce_service_duration_rule: bool
     min_service_duration_years: Decimal | None = None
@@ -97,6 +110,7 @@ class OrgSettingsUpdate(BaseModel):
     allow_user_data_export: bool | None = None
     allow_profile_edit: bool | None = None
     require_two_factor: bool | None = None
+    mfa_required_actions: list[MfaEnforcementAction] | None = None
     remember_device_days: int | None = Field(default=None, ge=0)
     audit_log_retention_days: int | None = Field(default=None, ge=0)
     inactive_user_retention_days: int | None = Field(default=None, ge=0)
