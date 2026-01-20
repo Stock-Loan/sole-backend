@@ -20,7 +20,7 @@ def _partition_suffix(org_id: str) -> str:
     return safe
 
 
-async def _ensure_audit_partitions(db: AsyncSession, org_id: str) -> None:
+async def ensure_audit_partitions(db: AsyncSession, org_id: str) -> None:
     suffix = _partition_suffix(org_id)
     audit_table = f"audit_logs_{suffix}"
     journal_table = f"journal_entries_{suffix}"
@@ -39,6 +39,13 @@ async def _ensure_audit_partitions(db: AsyncSession, org_id: str) -> None:
         )
     )
     await db.commit()
+
+
+async def ensure_audit_partitions_for_orgs(db: AsyncSession) -> None:
+    stmt = select(Org.id)
+    rows = (await db.execute(stmt)).all()
+    for (org_id,) in rows:
+        await ensure_audit_partitions(db, org_id)
 
 
 async def create_org(
@@ -64,7 +71,7 @@ async def create_org(
     await db.commit()
     await db.refresh(org)
 
-    await _ensure_audit_partitions(db, org.id)
+    await ensure_audit_partitions(db, org.id)
     await authz.seed_system_roles(db, org.id)
     await settings_service.get_org_settings(db, deps.TenantContext(org_id=org.id), create_if_missing=True)
     return org

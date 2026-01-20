@@ -10,6 +10,7 @@ from app.models.org import Org
 from app.models.org_membership import OrgMembership
 from app.models.user import User
 from app.services.authz import ensure_org_admin_for_seed_user, ensure_user_in_role, seed_system_roles
+from app.services.orgs import ensure_audit_partitions_for_orgs
 
 async def init_db() -> None:
     """
@@ -36,6 +37,8 @@ async def init_db() -> None:
             )
             session.add(org)
             await session.commit()
+
+        await ensure_audit_partitions_for_orgs(session)
 
         # Ensure system roles exist for the default org
         roles = await seed_system_roles(session, settings.default_org_id)
