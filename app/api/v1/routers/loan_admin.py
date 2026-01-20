@@ -396,7 +396,7 @@ async def record_loan_repayment_with_evidence(
     extra_interest_amount: str | None = Form(default=None),
     payment_date: date = Form(...),
     evidence_file: UploadFile | None = File(default=None),
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_PAYMENT_RECORD)),
+    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_PAYMENT_RECORD)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanRepaymentRecordResponse:
@@ -1126,7 +1126,7 @@ async def get_hr_review(
 async def update_hr_stage(
     loan_id: UUID,
     payload: LoanWorkflowStageUpdateRequest,
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_HR_MANAGE)),
+    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_WORKFLOW_HR_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanWorkflowStageDTO:
@@ -1327,7 +1327,7 @@ async def get_finance_review(
 async def update_finance_stage(
     loan_id: UUID,
     payload: LoanWorkflowStageUpdateRequest,
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_FINANCE_MANAGE)),
+    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_WORKFLOW_FINANCE_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanWorkflowStageDTO:
@@ -1522,7 +1522,7 @@ async def get_legal_review(
 async def update_legal_stage(
     loan_id: UUID,
     payload: LoanWorkflowStageUpdateRequest,
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_LEGAL_MANAGE)),
+    current_user=Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_WORKFLOW_LEGAL_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanWorkflowStageDTO:

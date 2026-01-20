@@ -8,6 +8,7 @@ from app.models.access_control_list import AccessControlList
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_role import UserRole
+from app.models.user_mfa_device import UserMfaDevice
 from app.models.org_settings import OrgSettings
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.stock_grant_reservation import StockGrantReservation
@@ -31,6 +32,7 @@ __all__ = [
     "User",
     "Role",
     "UserRole",
+    "UserMfaDevice",
     "AccessControlList",
     "OrgSettings",
     "EmployeeStockGrant",

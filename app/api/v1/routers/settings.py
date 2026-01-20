@@ -32,7 +32,7 @@ async def get_org_settings(
 async def update_org_settings(
     payload: OrgSettingsUpdate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    current_user: User = Depends(deps.require_permission(PermissionCode.ORG_SETTINGS_MANAGE)),
+    current_user: User = Depends(deps.require_permission_with_mfa(PermissionCode.ORG_SETTINGS_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> OrgSettingsResponse:
     try:

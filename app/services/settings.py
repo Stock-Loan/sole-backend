@@ -1,10 +1,12 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api import deps
+if TYPE_CHECKING:
+    from app.api.deps import TenantContext
 from app.models.audit_log import AuditLog
 from app.models.org_settings import OrgSettings
 from app.schemas.settings import (
@@ -164,7 +166,7 @@ def _validate_loan_policy(
 
 
 async def get_org_settings(
-    db: AsyncSession, ctx: deps.TenantContext, create_if_missing: bool = True
+    db: AsyncSession, ctx: "TenantContext", create_if_missing: bool = True
 ) -> OrgSettings:
     stmt = select(OrgSettings).where(OrgSettings.org_id == ctx.org_id)
     result = await db.execute(stmt)
@@ -182,6 +184,7 @@ async def get_org_settings(
         require_two_factor=DEFAULT_SETTINGS.require_two_factor,
         audit_log_retention_days=DEFAULT_SETTINGS.audit_log_retention_days,
         inactive_user_retention_days=DEFAULT_SETTINGS.inactive_user_retention_days,
+        remember_device_days=DEFAULT_SETTINGS.remember_device_days,
         enforce_service_duration_rule=DEFAULT_SETTINGS.enforce_service_duration_rule,
         min_service_duration_years=DEFAULT_SETTINGS.min_service_duration_years,
         enforce_min_vested_to_exercise=DEFAULT_SETTINGS.enforce_min_vested_to_exercise,
@@ -208,7 +211,7 @@ async def get_org_settings(
 
 async def update_org_settings(
     db: AsyncSession,
-    ctx: deps.TenantContext,
+    ctx: "TenantContext",
     payload: OrgSettingsUpdate,
     *,
     actor_id=None,
@@ -271,6 +274,9 @@ async def update_org_settings(
             list(loan_candidate["allowed_interest_types"])
         )
     _validate_loan_policy(**loan_candidate)
+    remember_days = data.get("remember_device_days", settings.remember_device_days)
+    if remember_days is not None and remember_days < 0:
+        raise ValueError("remember_device_days must be greater than or equal to 0")
     for field, value in data.items():
         setattr(settings, field, value)
     new_snapshot = _settings_snapshot(settings)

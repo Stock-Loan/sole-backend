@@ -59,6 +59,7 @@ def create_access_token(
     is_superuser: bool,
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
+    mfa_authenticated: bool = False,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
@@ -66,6 +67,7 @@ def create_access_token(
         "sub": subject,
         "org": org_id,
         "su": bool(is_superuser),
+        "mfa": bool(mfa_authenticated),
         "exp": expire,
         "iat": now,
         "type": "access",
@@ -83,6 +85,7 @@ def create_refresh_token(
     is_superuser: bool,
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
+    mfa_authenticated: bool = False,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.refresh_token_expire_minutes))
@@ -91,6 +94,7 @@ def create_refresh_token(
         "sub": subject,
         "org": org_id,
         "su": bool(is_superuser),
+        "mfa": bool(mfa_authenticated),
         "exp": expire,
         "iat": now,
         "type": "refresh",
@@ -127,6 +131,52 @@ def create_login_challenge_token(email: str, org_id: str, *, ttl_minutes: int = 
     }
     private_key = _load_private_key()
     return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
+
+
+def create_mfa_challenge_token(user_id: str, org_id: str, *, ttl_minutes: int = 5) -> str:
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=ttl_minutes)
+    to_encode: dict[str, Any] = {
+        "sub": user_id,
+        "org": org_id,
+        "type": "mfa_challenge",
+        "iat": now,
+        "exp": expire,
+    }
+    private_key = _load_private_key()
+    return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_mfa_challenge_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token, expected_type="mfa_challenge")
+    user_id = payload.get("sub")
+    org_id = payload.get("org")
+    if not user_id or not org_id:
+        raise ValueError("Invalid MFA challenge token")
+    return payload
+
+
+def create_mfa_setup_token(user_id: str, org_id: str, *, ttl_minutes: int = 10) -> str:
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=ttl_minutes)
+    to_encode: dict[str, Any] = {
+        "sub": user_id,
+        "org": org_id,
+        "type": "mfa_setup",
+        "iat": now,
+        "exp": expire,
+    }
+    private_key = _load_private_key()
+    return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_mfa_setup_token(token: str) -> dict[str, Any]:
+    payload = decode_token(token, expected_type="mfa_setup")
+    user_id = payload.get("sub")
+    org_id = payload.get("org")
+    if not user_id or not org_id:
+        raise ValueError("Invalid MFA setup token")
+    return payload
 
 
 def decode_login_challenge_token(token: str) -> dict[str, Any]:

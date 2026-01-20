@@ -12,6 +12,7 @@ class OrgSettings(Base):
     allow_user_data_export = Column(Boolean, nullable=False, default=True, server_default="true")
     allow_profile_edit = Column(Boolean, nullable=False, default=True, server_default="true")
     require_two_factor = Column(Boolean, nullable=False, default=False, server_default="false")
+    remember_device_days = Column(Integer, nullable=False, default=30, server_default="30")
     audit_log_retention_days = Column(Integer, nullable=False, default=180, server_default="180")
     inactive_user_retention_days = Column(Integer, nullable=False, default=180, server_default="180")
     enforce_service_duration_rule = Column(Boolean, nullable=False, default=False, server_default="false")

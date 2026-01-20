@@ -279,7 +279,7 @@ async def update_loan_application(
 )
 async def submit_loan_application(
     application_id: UUID,
-    current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_APPLY)),
+    current_user: User = Depends(deps.require_permission_with_mfa(PermissionCode.LOAN_APPLY)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),

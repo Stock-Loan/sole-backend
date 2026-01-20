@@ -35,6 +35,8 @@ class User(Base):
     is_superuser = Column(Boolean, nullable=False, server_default="false")
     mfa_enabled = Column(Boolean, nullable=False, server_default="false")
     mfa_method = Column(String(50), nullable=True)
+    mfa_secret_encrypted = Column(String(255), nullable=True)
+    mfa_confirmed_at = Column(DateTime(timezone=True), nullable=True)
     token_version = Column(Integer, nullable=False, server_default="0")
     last_active_at = Column(DateTime(timezone=True), nullable=True)
     must_change_password = Column(Boolean, nullable=False, default=True)

@@ -36,6 +36,49 @@ class LoginStartResponse(BaseModel):
 class LoginCompleteRequest(BaseModel):
     challenge_token: str
     password: str
+    remember_device_token: str | None = None
+
+
+class LoginCompleteResponse(BaseModel):
+    access_token: str | None = None
+    refresh_token: str | None = None
+    token_type: str = "bearer"
+    mfa_required: bool = False
+    mfa_setup_required: bool = False
+    mfa_token: str | None = None
+    setup_token: str | None = None
+
+
+class LoginMfaRequest(BaseModel):
+    mfa_token: str
+    code: str
+    remember_device: bool = False
+
+
+class LoginMfaResponse(TokenPair):
+    remember_device_token: str | None = None
+
+
+class LoginMfaSetupStartRequest(BaseModel):
+    setup_token: str
+
+
+class LoginMfaSetupVerifyRequest(BaseModel):
+    setup_token: str
+    code: str
+    remember_device: bool = False
+
+
+class MfaSetupStartResponse(BaseModel):
+    secret: str
+    otpauth_url: str
+    issuer: str
+    account: str
+
+
+class MfaSetupVerifyRequest(BaseModel):
+    code: str
+    remember_device: bool = False
 
 
 class OrgDiscoveryRequest(BaseModel):

@@ -22,6 +22,7 @@ class OrgSettingsBase(BaseModel):
     allow_user_data_export: bool = Field(default=True)
     allow_profile_edit: bool = Field(default=True)
     require_two_factor: bool = Field(default=False)
+    remember_device_days: int = Field(default=30, ge=0)
     audit_log_retention_days: int = Field(default=180, ge=0)
     inactive_user_retention_days: int = Field(default=180, ge=0)
     enforce_service_duration_rule: bool = Field(default=False)
@@ -74,6 +75,7 @@ class OrgPolicyResponse(BaseModel):
     allow_user_data_export: bool
     allow_profile_edit: bool
     require_two_factor: bool
+    remember_device_days: int
     enforce_service_duration_rule: bool
     min_service_duration_years: Decimal | None = None
     enforce_min_vested_to_exercise: bool
@@ -95,6 +97,7 @@ class OrgSettingsUpdate(BaseModel):
     allow_user_data_export: bool | None = None
     allow_profile_edit: bool | None = None
     require_two_factor: bool | None = None
+    remember_device_days: int | None = Field(default=None, ge=0)
     audit_log_retention_days: int | None = Field(default=None, ge=0)
     inactive_user_retention_days: int | None = Field(default=None, ge=0)
     enforce_service_duration_rule: bool | None = None

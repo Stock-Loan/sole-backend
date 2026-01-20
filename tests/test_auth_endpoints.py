@@ -147,6 +147,10 @@ def test_login_start_and_complete(monkeypatch, tmp_path):
     override_dependencies(user, session)
     _patch_keys(monkeypatch, tmp_path)
 
+    class DummyOrgSettings:
+        require_two_factor = False
+        remember_device_days = 30
+
     # Patch rate limiters and login attempts to no-ops
     async def noop_enforce(ip, email):
         return None
@@ -156,6 +160,10 @@ def test_login_start_and_complete(monkeypatch, tmp_path):
 
     monkeypatch.setattr("app.api.v1.routers.auth.enforce_login_limits", noop_enforce)
     monkeypatch.setattr("app.api.v1.routers.auth.record_login_attempt", noop_record)
+    async def noop_get_org_settings(*_args, **_kwargs):
+        return DummyOrgSettings()
+
+    monkeypatch.setattr("app.api.v1.routers.auth.settings_service.get_org_settings", noop_get_org_settings)
 
     client = TestClient(app)
     start_resp = client.post("/api/v1/auth/login/start", json={"email": user.email})

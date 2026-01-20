@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import set_tenant_id
 from app.core.security import decode_token
 from app.core.permissions import PermissionCode
-from app.services import authz
+from app.services import authz, settings as settings_service
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models import Org, User
@@ -168,6 +168,43 @@ async def _get_current_user(
 async def require_authenticated_user(current_user: User = Depends(get_current_user)) -> User:
     """Simple guard to require an authenticated user (no permission checks)."""
     return current_user
+
+
+async def _require_mfa_for_request(
+    request: Request,
+    current_user: User,
+    ctx: TenantContext,
+    db: AsyncSession,
+) -> None:
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    if not org_settings.require_two_factor and not current_user.mfa_enabled:
+        return
+    token = _extract_bearer_token(request)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+    try:
+        payload = decode_token(token, expected_type="access")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    if not payload.get("mfa"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA required")
+
+
+def require_permission_with_mfa(
+    permission_code: PermissionCode | str,
+    resource_type: str | None = None,
+    resource_id_param: str | None = None,
+):
+    async def dependency(
+        request: Request,
+        current_user: User = Depends(require_permission(permission_code, resource_type, resource_id_param)),
+        ctx: TenantContext = Depends(get_tenant_context),
+        db: AsyncSession = Depends(get_db_session),
+    ) -> User:
+        await _require_mfa_for_request(request, current_user, ctx, db)
+        return current_user
+
+    return dependency
 
 
 def require_permission(permission_code: PermissionCode | str, resource_type: str | None = None, resource_id_param: str | None = None):
