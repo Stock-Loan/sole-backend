@@ -14,7 +14,7 @@ from app.models.user_role import UserRole
 from app.schemas.self import OrgSummary, RoleSummary, SelfContextResponse
 from app.schemas.settings import OrgPolicyResponse
 from app.schemas.users import UserDetailResponse
-from app.services import settings as settings_service
+from app.services import pbgc_rates, settings as settings_service
 
 router = APIRouter(prefix="/self", tags=["self"])
 
@@ -62,7 +62,13 @@ async def get_self_policy(
     db: AsyncSession = Depends(get_db),
 ) -> OrgPolicyResponse:
     settings = await settings_service.get_org_settings(db, ctx)
-    return OrgPolicyResponse.model_validate(settings)
+    latest_rate = await pbgc_rates.get_latest_annual_rate(db)
+    response = OrgPolicyResponse.model_validate(settings)
+    if latest_rate is not None:
+        response = response.model_copy(
+            update={"variable_base_rate_annual_percent": latest_rate}
+        )
+    return response
 
 
 @router.get("/profile", response_model=UserDetailResponse, summary="Get current user profile")

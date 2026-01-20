@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     seed_admin_password: str = Field(alias="SEED_ADMIN_PASSWORD")
     seed_admin_full_name: str = Field(default="Admin User", alias="SEED_ADMIN_FULL_NAME")
     local_upload_dir: str = Field(default="local_uploads", alias="LOCAL_UPLOAD_DIR")
+    pbgc_mid_term_rates_url: str = Field(
+        default="https://www.pbgc.gov/employers-practitioners/interest-rates/historical-applicable-mid-term",
+        alias="PBGC_MID_TERM_RATES_URL",
+    )
+    pbgc_rate_scrape_enabled: bool = Field(default=True, alias="PBGC_RATE_SCRAPE_ENABLED")
+    pbgc_rate_scrape_day: int = Field(default=30, alias="PBGC_RATE_SCRAPE_DAY")
+    pbgc_rate_scrape_hour: int = Field(default=0, alias="PBGC_RATE_SCRAPE_HOUR")
+    pbgc_rate_scrape_minute: int = Field(default=0, alias="PBGC_RATE_SCRAPE_MINUTE")
 
 
 @lru_cache(maxsize=1)

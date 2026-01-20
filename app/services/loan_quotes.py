@@ -20,7 +20,7 @@ from app.schemas.loan import (
     LoanShareAllocation,
 )
 from app.schemas.settings import LoanInterestType, LoanRepaymentMethod
-from app.services import eligibility, settings as settings_service, stock_reservations, vesting_engine
+from app.services import eligibility, pbgc_rates, settings as settings_service, stock_reservations, vesting_engine
 
 
 @dataclass(frozen=True)
@@ -208,6 +208,7 @@ def build_loan_quote_from_data(
     request: LoanQuoteRequest,
     as_of_date: date,
     reserved_by_grant: dict | None = None,
+    variable_base_rate_annual_percent: Decimal | None = None,
 ) -> LoanQuoteResponse:
     reserved_by_grant = reserved_by_grant or {}
     selection_mode = LoanSelectionMode(request.selection_mode)
@@ -321,15 +322,18 @@ def build_loan_quote_from_data(
         if interest_type == LoanInterestType.FIXED:
             annual_rate = _as_decimal(org_settings.fixed_interest_rate_annual_percent or 0)
         else:
-            base = _as_decimal(org_settings.variable_base_rate_annual_percent or 0)
+            base = _as_decimal(variable_base_rate_annual_percent or 0)
             margin = _as_decimal(org_settings.variable_margin_annual_percent or 0)
-            if (org_settings.variable_base_rate_annual_percent is None) or (
+            if (variable_base_rate_annual_percent is None) or (
                 org_settings.variable_margin_annual_percent is None
             ):
                 raise LoanQuoteError(
                     code="variable_rate_missing",
-                    message="Variable rate settings are required for variable interest quotes",
-                    details={"variable_base_rate_annual_percent": str(base), "variable_margin_annual_percent": str(margin)},
+                    message="Variable rate data is required for variable interest quotes",
+                    details={
+                        "variable_base_rate_annual_percent": str(base),
+                        "variable_margin_annual_percent": str(margin),
+                    },
                 )
             annual_rate = base + margin
         for repayment_method in repayment_methods:
@@ -374,6 +378,7 @@ async def calculate_loan_quote(
 ) -> LoanQuoteResponse:
     as_of_date = request.as_of_date or date.today()
     org_settings = await settings_service.get_org_settings(db, ctx)
+    variable_base_rate = await pbgc_rates.get_latest_annual_rate(db)
     grants = await vesting_engine.load_active_grants(db, ctx, membership.id)
     reserved_by_grant = await stock_reservations.get_active_reservations_by_grant(
         db, ctx, membership_id=membership.id, grant_ids=[grant.id for grant in grants]
@@ -385,4 +390,5 @@ async def calculate_loan_quote(
         request=request,
         as_of_date=as_of_date,
         reserved_by_grant=reserved_by_grant,
+        variable_base_rate_annual_percent=variable_base_rate,
     )

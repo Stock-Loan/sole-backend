@@ -27,10 +27,14 @@ from app.schemas.loan import (
     LoanQuoteRequest,
     LoanSelectionMode,
 )
-from app.services import loan_quotes, settings as settings_service, stock_reservations, vesting_engine
+from app.services import loan_quotes, pbgc_rates, settings as settings_service, stock_reservations, vesting_engine
 
 
-def _snapshot_org_settings(settings: OrgSettings) -> dict:
+def _snapshot_org_settings(
+    settings: OrgSettings,
+    *,
+    variable_base_rate_annual_percent: Decimal | None = None,
+) -> dict:
     data: dict[str, object] = {}
     for column in settings.__table__.columns:
         name = column.name
@@ -42,6 +46,10 @@ def _snapshot_org_settings(settings: OrgSettings) -> dict:
         if isinstance(value, Decimal):
             value = str(value)
         data[name] = value
+    if variable_base_rate_annual_percent is not None:
+        data["variable_base_rate_annual_percent"] = str(
+            variable_base_rate_annual_percent
+        )
     return data
 
 
@@ -339,6 +347,7 @@ def _apply_quote(
     quote_request: LoanQuoteRequest,
     selection_mode: LoanSelectionMode,
     org_settings: OrgSettings,
+    variable_base_rate_annual_percent: Decimal | None = None,
 ) -> None:
     option = quote.options[0]
     selection_mode_value = (
@@ -365,7 +374,10 @@ def _apply_quote(
     application.quote_option_snapshot = _quote_option_snapshot(option)
     application.allocation_strategy = quote.allocation_strategy
     application.allocation_snapshot = _allocation_snapshot(quote.allocation)
-    application.org_settings_snapshot = _snapshot_org_settings(org_settings)
+    application.org_settings_snapshot = _snapshot_org_settings(
+        org_settings,
+        variable_base_rate_annual_percent=variable_base_rate_annual_percent,
+    )
     application.eligibility_result_snapshot = quote.eligibility_result.model_dump(mode="json")
 
 
@@ -655,6 +667,7 @@ async def create_draft_application(
         desired_term_months=payload.desired_term_months,
     )
     org_settings = await settings_service.get_org_settings(db, ctx)
+    variable_base_rate = await pbgc_rates.get_latest_annual_rate(db)
     quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, quote_request)
     application = LoanApplication(
         org_id=ctx.org_id,
@@ -675,6 +688,7 @@ async def create_draft_application(
         quote_request=quote_request,
         selection_mode=payload.selection_mode,
         org_settings=org_settings,
+        variable_base_rate_annual_percent=variable_base_rate,
     )
     db.add(application)
     await db.flush()
@@ -733,6 +747,7 @@ async def update_draft_application(
     }
     recalc = any(getattr(payload, field) is not None for field in recalc_fields)
     org_settings = await settings_service.get_org_settings(db, ctx)
+    variable_base_rate = await pbgc_rates.get_latest_annual_rate(db)
     current_policy_version = _current_policy_version(org_settings)
     if not recalc and _policy_version_mismatch(application, current_policy_version):
         raise loan_quotes.LoanQuoteError(
@@ -763,6 +778,7 @@ async def update_draft_application(
             quote_request=quote_request,
             selection_mode=selection_mode,
             org_settings=org_settings,
+            variable_base_rate_annual_percent=variable_base_rate,
         )
 
     for field in [
@@ -866,6 +882,7 @@ async def submit_application(
         desired_term_months=application.term_months,
     )
     org_settings = await settings_service.get_org_settings(db, ctx)
+    variable_base_rate = await pbgc_rates.get_latest_annual_rate(db)
     current_policy_version = _current_policy_version(org_settings)
     if _policy_version_mismatch(application, current_policy_version):
         raise loan_quotes.LoanQuoteError(
@@ -883,6 +900,7 @@ async def submit_application(
         quote_request=quote_request,
         selection_mode=selection_mode,
         org_settings=org_settings,
+        variable_base_rate_annual_percent=variable_base_rate,
     )
     application.status = LoanApplicationStatus.SUBMITTED.value
     if idempotency_key:
