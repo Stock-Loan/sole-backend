@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pyotp
 from cryptography.fernet import Fernet
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.settings import settings
@@ -101,6 +101,11 @@ async def find_valid_device(
     await db.commit()
     await db.refresh(device)
     return device
+
+
+async def delete_org_devices(db: AsyncSession, *, org_id: str) -> None:
+    stmt = delete(UserMfaDevice).where(UserMfaDevice.org_id == org_id)
+    await db.execute(stmt)
 
 
 def compute_device_expiry(days: int) -> datetime:

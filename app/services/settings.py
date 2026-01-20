@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from app.api.deps import TenantContext
 from app.models.audit_log import AuditLog
 from app.models.org_settings import OrgSettings
+from app.services import mfa as mfa_service
 from app.schemas.settings import (
     LoanInterestType,
     LoanRepaymentMethod,
@@ -277,6 +278,7 @@ async def update_org_settings(
     remember_days = data.get("remember_device_days", settings.remember_device_days)
     if remember_days is not None and remember_days < 0:
         raise ValueError("remember_device_days must be greater than or equal to 0")
+    previous_remember_days = settings.remember_device_days
     for field, value in data.items():
         setattr(settings, field, value)
     new_snapshot = _settings_snapshot(settings)
@@ -298,6 +300,12 @@ async def update_org_settings(
     )
     db.add(audit)
     db.add(settings)
+    if (
+        data.get("remember_device_days") is not None
+        and int(data.get("remember_device_days") or 0) == 0
+        and previous_remember_days
+    ):
+        await mfa_service.delete_org_devices(db, org_id=ctx.org_id)
     await db.commit()
     await db.refresh(settings)
     from app.services import stock_dashboard, stock_summary

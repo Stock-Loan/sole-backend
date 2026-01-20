@@ -221,7 +221,14 @@ async def login_mfa_setup_start(
     org = (await db.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
     issuer = org.name if org else ctx.org_id
     otpauth_url = mfa_service.build_totp_uri(secret, user.email, issuer)
-    return MfaSetupStartResponse(secret=secret, otpauth_url=otpauth_url, issuer=issuer, account=user.email)
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    return MfaSetupStartResponse(
+        secret=secret,
+        otpauth_url=otpauth_url,
+        issuer=issuer,
+        account=user.email,
+        remember_device_days=org_settings.remember_device_days,
+    )
 
 
 @router.post("/login/mfa/setup/verify", response_model=LoginMfaResponse)
@@ -469,10 +476,15 @@ async def _complete_login_flow(
 
     org_settings = await settings_service.get_org_settings(db, ctx)
     mfa_required = bool(org_settings.require_two_factor or user.mfa_enabled)
+    remember_days = org_settings.remember_device_days
     if mfa_required and not user.mfa_enabled:
         setup_token = create_mfa_setup_token(str(user.id), ctx.org_id)
         await record_login_attempt(email, success=True)
-        return LoginCompleteResponse(mfa_setup_required=True, setup_token=setup_token)
+        return LoginCompleteResponse(
+            mfa_setup_required=True,
+            setup_token=setup_token,
+            remember_device_days=remember_days,
+        )
 
     now = datetime.now(timezone.utc)
     user.last_active_at = now
@@ -483,7 +495,7 @@ async def _complete_login_flow(
     await record_login_attempt(email, success=True)
 
     if mfa_required:
-        if remember_device_token:
+        if remember_device_token and org_settings.remember_device_days > 0:
             device = await mfa_service.find_valid_device(
                 db,
                 org_id=ctx.org_id,
@@ -505,10 +517,18 @@ async def _complete_login_flow(
                     token_version=user.token_version,
                     mfa_authenticated=True,
                 )
-                return LoginCompleteResponse(access_token=access, refresh_token=refresh)
+                return LoginCompleteResponse(
+                    access_token=access,
+                    refresh_token=refresh,
+                    remember_device_days=remember_days,
+                )
 
         mfa_token = create_mfa_challenge_token(str(user.id), ctx.org_id)
-        return LoginCompleteResponse(mfa_required=True, mfa_token=mfa_token)
+        return LoginCompleteResponse(
+            mfa_required=True,
+            mfa_token=mfa_token,
+            remember_device_days=remember_days,
+        )
 
     access = create_access_token(
         str(user.id),
@@ -524,7 +544,11 @@ async def _complete_login_flow(
         token_version=user.token_version,
         mfa_authenticated=False,
     )
-    return LoginCompleteResponse(access_token=access, refresh_token=refresh)
+    return LoginCompleteResponse(
+        access_token=access,
+        refresh_token=refresh,
+        remember_device_days=remember_days,
+    )
 
 
 @router.post("/logout", status_code=204)

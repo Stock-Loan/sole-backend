@@ -47,6 +47,7 @@ class LoginCompleteResponse(BaseModel):
     mfa_setup_required: bool = False
     mfa_token: str | None = None
     setup_token: str | None = None
+    remember_device_days: int | None = None
 
 
 class LoginMfaRequest(BaseModel):
@@ -74,6 +75,7 @@ class MfaSetupStartResponse(BaseModel):
     otpauth_url: str
     issuer: str
     account: str
+    remember_device_days: int | None = None
 
 
 class MfaSetupVerifyRequest(BaseModel):
