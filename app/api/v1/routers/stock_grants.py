@@ -126,6 +126,7 @@ async def get_grant(
 async def update_grant(
     grant_id: UUID,
     payload: EmployeeStockGrantUpdate,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.STOCK_MANAGE)),
     db: AsyncSession = Depends(get_db),
@@ -133,6 +134,17 @@ async def update_grant(
     grant = await stock_grants.get_grant(db, ctx, grant_id)
     if not grant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
+    
+    # Require step-up MFA if status is being changed
+    if payload.status is not None:
+        await deps.require_mfa_for_action(
+            request,
+            current_user,
+            ctx,
+            db,
+            action=MfaEnforcementAction.STOCK_STATUS_CHANGE.value,
+        )
+    
     try:
         updated = await stock_grants.update_grant(
             db,
