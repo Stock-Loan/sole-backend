@@ -494,10 +494,14 @@ async def _complete_login_flow(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     org_settings = await settings_service.get_org_settings(db, ctx)
-    mfa_required = bool(org_settings.require_two_factor or user.mfa_enabled)
+    # MFA is only required if the org mandates it AND user has MFA enabled
+    # If org doesn't require MFA, users can skip it even if they have it set up
+    mfa_required = bool(org_settings.require_two_factor and user.mfa_enabled)
     remember_days = org_settings.remember_device_days
     require_login_mfa = settings_service.is_mfa_action_required(org_settings, "LOGIN")
-    if mfa_required and not user.mfa_enabled:
+    
+    # If org requires MFA but user hasn't set it up yet, prompt for setup
+    if org_settings.require_two_factor and not user.mfa_enabled:
         setup_token = create_mfa_setup_token(str(user.id), ctx.org_id)
         await record_login_attempt(email, success=True)
         return LoginCompleteResponse(
