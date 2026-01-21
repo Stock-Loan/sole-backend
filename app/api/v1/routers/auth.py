@@ -11,9 +11,11 @@ from app.core.security import (
     create_mfa_challenge_token,
     create_mfa_setup_token,
     create_refresh_token,
+    create_step_up_token,
     decode_login_challenge_token,
     decode_mfa_challenge_token,
     decode_mfa_setup_token,
+    decode_step_up_challenge_token,
     decode_token,
     get_password_hash,
 )
@@ -37,6 +39,8 @@ from app.schemas.auth import (
     OrgResolveResponse,
     OrgSummary,
     RefreshRequest,
+    StepUpVerifyRequest,
+    StepUpVerifyResponse,
     TokenPair,
     UserOut,
 )
@@ -173,6 +177,7 @@ async def login_mfa(
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
+        mfa_method="totp",
     )
     refresh = create_refresh_token(
         str(user.id),
@@ -180,6 +185,7 @@ async def login_mfa(
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
+        mfa_method="totp",
     )
     return LoginMfaResponse(
         access_token=access,
@@ -286,6 +292,7 @@ async def login_mfa_setup_verify(
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
+        mfa_method="totp",
     )
     refresh = create_refresh_token(
         str(user.id),
@@ -293,6 +300,7 @@ async def login_mfa_setup_verify(
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
+        mfa_method="totp",
     )
     return LoginMfaResponse(
         access_token=access,
@@ -372,6 +380,7 @@ async def mfa_setup_verify(
         is_superuser=current_user.is_superuser,
         token_version=current_user.token_version,
         mfa_authenticated=True,
+        mfa_method="totp",
     )
     refresh = create_refresh_token(
         str(current_user.id),
@@ -379,6 +388,7 @@ async def mfa_setup_verify(
         is_superuser=current_user.is_superuser,
         token_version=current_user.token_version,
         mfa_authenticated=True,
+        mfa_method="totp",
     )
     return LoginMfaResponse(
         access_token=access,
@@ -401,6 +411,7 @@ async def refresh_tokens(
     token_org = token_data.get("org")
     token_is_superuser = bool(token_data.get("su"))
     token_mfa = bool(token_data.get("mfa"))
+    token_mfa_method = token_data.get("mfa_method")
     if not user_id or token_version is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     if not jti or not exp_ts:
@@ -439,6 +450,7 @@ async def refresh_tokens(
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=token_mfa,
+        mfa_method=token_mfa_method,
     )
     refresh = create_refresh_token(
         str(user.id),
@@ -446,6 +458,7 @@ async def refresh_tokens(
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=token_mfa,
+        mfa_method=token_mfa_method,
     )
     return TokenPair(access_token=access, refresh_token=refresh)
 
@@ -512,6 +525,7 @@ async def _complete_login_flow(
                     is_superuser=user.is_superuser,
                     token_version=user.token_version,
                     mfa_authenticated=True,
+                    mfa_method="remember_device",
                 )
                 refresh = create_refresh_token(
                     str(user.id),
@@ -519,6 +533,7 @@ async def _complete_login_flow(
                     is_superuser=user.is_superuser,
                     token_version=user.token_version,
                     mfa_authenticated=True,
+                    mfa_method="remember_device",
                 )
                 return LoginCompleteResponse(
                     access_token=access,
@@ -633,3 +648,78 @@ async def change_password(
         mfa_authenticated=current_user.mfa_enabled,
     )
     return TokenPair(access_token=access, refresh_token=refresh)
+
+
+@router.post(
+    "/step-up/verify",
+    response_model=StepUpVerifyResponse,
+    summary="Verify step-up MFA for a sensitive action",
+)
+async def verify_step_up_mfa(
+    payload: StepUpVerifyRequest,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StepUpVerifyResponse:
+    """
+    Verify a TOTP code for step-up MFA.
+    
+    When a sensitive action requires step-up authentication, the endpoint
+    returns a challenge token. Submit that token along with the TOTP code
+    to this endpoint to receive a short-lived step-up token that authorizes
+    the specific action.
+    """
+    try:
+        challenge_data = decode_step_up_challenge_token(payload.challenge_token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired challenge token",
+        ) from exc
+    
+    # Verify the challenge belongs to the current user and org
+    if challenge_data.get("sub") != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Challenge token does not match current user",
+        )
+    if challenge_data.get("org") != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Challenge token does not match current org",
+        )
+    
+    action = challenge_data.get("action")
+    if not action:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid challenge token: missing action",
+        )
+    
+    # Verify TOTP code
+    if not current_user.mfa_enabled or not current_user.mfa_secret_encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is not enabled for this user",
+        )
+    
+    secret = mfa_service.decrypt_secret(current_user.mfa_secret_encrypted)
+    if not mfa_service.verify_totp(secret, payload.code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid TOTP code",
+        )
+    
+    # Create step-up token valid for 5 minutes
+    step_up_token = create_step_up_token(
+        str(current_user.id),
+        ctx.org_id,
+        action,
+        ttl_minutes=5,
+    )
+    
+    return StepUpVerifyResponse(
+        step_up_token=step_up_token,
+        action=action,
+        expires_in_seconds=300,  # 5 minutes
+    )

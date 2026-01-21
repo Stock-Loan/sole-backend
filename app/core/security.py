@@ -60,6 +60,7 @@ def create_access_token(
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
     mfa_authenticated: bool = False,
+    mfa_method: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
@@ -74,6 +75,8 @@ def create_access_token(
     }
     if token_version is not None:
         to_encode["tv"] = token_version
+    if mfa_method:
+        to_encode["mfa_method"] = str(mfa_method)
     private_key = _load_private_key()
     return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
 
@@ -86,6 +89,7 @@ def create_refresh_token(
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
     mfa_authenticated: bool = False,
+    mfa_method: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.refresh_token_expire_minutes))
@@ -102,6 +106,8 @@ def create_refresh_token(
     }
     if token_version is not None:
         to_encode["tv"] = token_version
+    if mfa_method:
+        to_encode["mfa_method"] = str(mfa_method)
     private_key = _load_private_key()
     return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
 
@@ -185,4 +191,70 @@ def decode_login_challenge_token(token: str) -> dict[str, Any]:
     org_id = payload.get("org")
     if not email or not org_id:
         raise ValueError("Invalid challenge token")
+    return payload
+
+
+def create_step_up_challenge_token(
+    user_id: str,
+    org_id: str,
+    action: str,
+    *,
+    ttl_minutes: int = 5,
+) -> str:
+    """Create a short-lived token for step-up MFA challenge."""
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=ttl_minutes)
+    to_encode: dict[str, Any] = {
+        "sub": user_id,
+        "org": org_id,
+        "action": action,
+        "type": "step_up_challenge",
+        "iat": now,
+        "exp": expire,
+    }
+    private_key = _load_private_key()
+    return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_step_up_challenge_token(token: str) -> dict[str, Any]:
+    """Decode and validate a step-up MFA challenge token."""
+    payload = decode_token(token, expected_type="step_up_challenge")
+    user_id = payload.get("sub")
+    org_id = payload.get("org")
+    action = payload.get("action")
+    if not user_id or not org_id or not action:
+        raise ValueError("Invalid step-up challenge token")
+    return payload
+
+
+def create_step_up_token(
+    user_id: str,
+    org_id: str,
+    action: str,
+    *,
+    ttl_minutes: int = 5,
+) -> str:
+    """Create a short-lived token proving step-up MFA was completed for an action."""
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=ttl_minutes)
+    to_encode: dict[str, Any] = {
+        "sub": user_id,
+        "org": org_id,
+        "action": action,
+        "type": "step_up",
+        "iat": now,
+        "exp": expire,
+    }
+    private_key = _load_private_key()
+    return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_step_up_token(token: str) -> dict[str, Any]:
+    """Decode and validate a step-up MFA token."""
+    payload = decode_token(token, expected_type="step_up")
+    user_id = payload.get("sub")
+    org_id = payload.get("org")
+    action = payload.get("action")
+    if not user_id or not org_id or not action:
+        raise ValueError("Invalid step-up token")
     return payload

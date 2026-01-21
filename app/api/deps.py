@@ -3,17 +3,26 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import set_tenant_id
-from app.core.security import decode_token
+from app.core.security import decode_token, create_step_up_challenge_token, decode_step_up_token
 from app.core.permissions import PermissionCode
 from app.services import authz, settings as settings_service
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models import Org, User
+
+
+class StepUpMfaRequired(Exception):
+    """Exception raised when step-up MFA is required for an action."""
+    def __init__(self, challenge_token: str, action: str):
+        self.challenge_token = challenge_token
+        self.action = action
+        super().__init__("Step-up MFA required")
 
 
 @dataclass(slots=True)
@@ -170,6 +179,11 @@ async def require_authenticated_user(current_user: User = Depends(get_current_us
     return current_user
 
 
+def _extract_step_up_token(request: Request) -> str | None:
+    """Extract step-up token from X-Step-Up-Token header."""
+    return request.headers.get("X-Step-Up-Token")
+
+
 async def _require_mfa_for_request(
     request: Request,
     current_user: User,
@@ -181,6 +195,32 @@ async def _require_mfa_for_request(
     org_settings = await settings_service.get_org_settings(db, ctx)
     if not settings_service.is_mfa_action_required(org_settings, action):
         return
+    
+    # For action-level MFA, check for step-up token first
+    if action is not None:
+        step_up_token = _extract_step_up_token(request)
+        if step_up_token:
+            try:
+                step_up_payload = decode_step_up_token(step_up_token)
+                # Verify the step-up token matches this user, org, and action
+                if (
+                    step_up_payload.get("sub") == str(current_user.id)
+                    and step_up_payload.get("org") == ctx.org_id
+                    and step_up_payload.get("action") == action
+                ):
+                    return  # Step-up MFA already completed
+            except ValueError:
+                pass  # Invalid step-up token, continue to require new challenge
+        
+        # No valid step-up token, create a challenge and raise exception
+        challenge_token = create_step_up_challenge_token(
+            str(current_user.id),
+            ctx.org_id,
+            action,
+        )
+        raise StepUpMfaRequired(challenge_token=challenge_token, action=action)
+    
+    # For general MFA requirement (not action-specific), check token claims
     token = _extract_bearer_token(request)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
@@ -188,6 +228,7 @@ async def _require_mfa_for_request(
         payload = decode_token(token, expected_type="access")
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    logger.info(f"Token claims: mfa={payload.get('mfa')}, mfa_method={payload.get('mfa_method')}")
     if not payload.get("mfa"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA required")
 

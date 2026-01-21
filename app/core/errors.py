@@ -112,10 +112,32 @@ async def unhandled_exception_handler(
 
 
 def register_exception_handlers(app) -> None:
+    from app.api.deps import StepUpMfaRequired
+    
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)
+    app.add_exception_handler(StepUpMfaRequired, step_up_mfa_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
+
+
+async def step_up_mfa_exception_handler(
+    request: Request, exc: "StepUpMfaRequired"
+) -> JSONResponse:
+    """Handle step-up MFA required exceptions with a structured response."""
+    return JSONResponse(
+        status_code=403,
+        content={
+            "code": "step_up_mfa_required",
+            "message": "Step-up MFA verification required",
+            "data": None,
+            "details": {
+                "step_up_required": True,
+                "challenge_token": exc.challenge_token,
+                "action": exc.action,
+            },
+        },
+    )
 
 
 async def rate_limit_exception_handler(

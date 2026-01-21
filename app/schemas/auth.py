@@ -113,3 +113,23 @@ class UserOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class StepUpChallengeResponse(BaseModel):
+    """Response when step-up MFA is required for a sensitive action."""
+    step_up_required: bool = True
+    challenge_token: str
+    action: str
+
+
+class StepUpVerifyRequest(BaseModel):
+    """Request to verify step-up MFA."""
+    challenge_token: str
+    code: str
+
+
+class StepUpVerifyResponse(BaseModel):
+    """Response after successful step-up MFA verification."""
+    step_up_token: str
+    action: str
+    expires_in_seconds: int
