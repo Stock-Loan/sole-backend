@@ -15,6 +15,7 @@ class PermissionCode(str, Enum):
     USER_VIEW = "user.view"
     USER_MANAGE = "user.manage"
     USER_ONBOARD = "user.onboard"
+    USER_MFA_RESET = "user.mfa.reset"
 
     ROLE_VIEW = "role.view"
     ROLE_MANAGE = "role.manage"

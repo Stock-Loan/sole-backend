@@ -473,3 +473,65 @@ async def update_user_profile(
     )
     await db.commit()
     return UserDetailResponse(user=user, membership=membership, roles=user_roles)
+
+
+@router.post("/{membership_id}/mfa/reset", status_code=200, summary="Admin reset of user MFA")
+async def admin_reset_user_mfa(
+    membership_id: str,
+    request: Request,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_MFA_RESET)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """
+    Admin endpoint to reset a user's MFA. Requires USER_MFA_RESET permission.
+    This action requires step-up MFA verification for the admin.
+    Clears the target user's MFA settings, recovery codes, and remembered devices.
+    """
+    from app.services import mfa as mfa_service
+
+    # Check if step-up MFA is required for this action
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    if MfaEnforcementAction.USER_MFA_RESET in org_settings.mfa_required_actions:
+        from app.api.auth_utils import require_step_up_mfa
+        await require_step_up_mfa(request, current_user, ctx.org_id, action="USER_MFA_RESET")
+
+    # Get the target user via membership
+    stmt = (
+        select(OrgMembership)
+        .options(selectinload(OrgMembership.user))
+        .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+    )
+    result = await db.execute(stmt)
+    membership = result.scalar_one_or_none()
+    if not membership or not membership.user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    target_user = membership.user
+
+    # Prevent resetting your own MFA via admin endpoint
+    if target_user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot reset your own MFA via admin endpoint. Use self-service reset."
+        )
+
+    if not target_user.mfa_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User does not have MFA enabled")
+
+    # Clear all MFA data
+    await mfa_service.clear_user_mfa(db, org_id=ctx.org_id, user=target_user)
+
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user.mfa.reset",
+        resource_type="user",
+        resource_id=str(target_user.id),
+        old_value={"mfa_enabled": True},
+        new_value={"mfa_enabled": False},
+    )
+    await db.commit()
+
+    return {"message": f"MFA has been reset for user {target_user.email}"}

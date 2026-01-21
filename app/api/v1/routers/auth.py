@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,15 +24,19 @@ from app.db.session import get_db
 from app.models import OrgMembership, User
 from app.models.org import Org
 from app.schemas.auth import (
+    AdminMfaResetRequest,
     ChangePasswordRequest,
     LoginCompleteRequest,
     LoginCompleteResponse,
     LoginMfaRequest,
     LoginMfaResponse,
+    LoginMfaRecoveryRequest,
     LoginMfaSetupStartRequest,
     LoginMfaSetupVerifyRequest,
     LoginStartRequest,
     LoginStartResponse,
+    MfaResetRequest,
+    MfaSetupCompleteResponse,
     MfaSetupStartResponse,
     MfaSetupVerifyRequest,
     OrgDiscoveryRequest,
@@ -197,6 +202,70 @@ async def login_mfa(
     )
 
 
+@router.post("/login/mfa/recovery", response_model=LoginMfaResponse)
+async def login_mfa_recovery(
+    payload: LoginMfaRecoveryRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+) -> LoginMfaResponse:
+    """
+    Complete MFA login using a recovery code instead of TOTP.
+    Recovery codes are one-time use.
+    """
+    # Rate limit recovery code attempts
+    await enforce_mfa_rate_limit(payload.mfa_token)
+
+    try:
+        challenge = decode_mfa_challenge_token(payload.mfa_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired MFA token") from exc
+
+    if challenge.get("org") != ctx.org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA token does not match tenant")
+
+    user_id = challenge.get("sub")
+    stmt = select(User).where(User.id == user_id, User.org_id == ctx.org_id)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if not user or not user.is_active or not user.mfa_enabled:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA not available")
+
+    # Verify recovery code (marks it as used if valid)
+    is_valid = await mfa_service.verify_recovery_code(
+        db, org_id=ctx.org_id, user_id=user.id, code=payload.recovery_code
+    )
+    if not is_valid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid recovery code")
+
+    now = datetime.now(timezone.utc)
+    user.last_active_at = now
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    access = create_access_token(
+        str(user.id),
+        org_id=user.org_id,
+        is_superuser=user.is_superuser,
+        token_version=user.token_version,
+        mfa_authenticated=True,
+        mfa_method="recovery",
+    )
+    refresh = create_refresh_token(
+        str(user.id),
+        org_id=user.org_id,
+        is_superuser=user.is_superuser,
+        token_version=user.token_version,
+        mfa_authenticated=True,
+        mfa_method="recovery",
+    )
+    return LoginMfaResponse(
+        access_token=access,
+        refresh_token=refresh,
+        remember_device_token=None,  # No remember device for recovery code login
+    )
+
+
 @router.post("/login/mfa/setup/start", response_model=MfaSetupStartResponse)
 async def login_mfa_setup_start(
     payload: LoginMfaSetupStartRequest,
@@ -240,13 +309,13 @@ async def login_mfa_setup_start(
     )
 
 
-@router.post("/login/mfa/setup/verify", response_model=LoginMfaResponse)
+@router.post("/login/mfa/setup/verify", response_model=MfaSetupCompleteResponse)
 async def login_mfa_setup_verify(
     payload: LoginMfaSetupVerifyRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-) -> LoginMfaResponse:
+) -> MfaSetupCompleteResponse:
     # Rate limit MFA setup verification attempts
     await enforce_mfa_rate_limit(payload.setup_token)
 
@@ -276,6 +345,11 @@ async def login_mfa_setup_verify(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    # Generate recovery codes
+    recovery_codes = await mfa_service.generate_recovery_codes(
+        db, org_id=ctx.org_id, user_id=user.id
+    )
 
     remember_device_token = None
     if payload.remember_device:
@@ -308,10 +382,11 @@ async def login_mfa_setup_verify(
         mfa_authenticated=True,
         mfa_method="totp",
     )
-    return LoginMfaResponse(
+    return MfaSetupCompleteResponse(
         access_token=access,
         refresh_token=refresh,
         remember_device_token=remember_device_token,
+        recovery_codes=recovery_codes,
     )
 
 
@@ -343,14 +418,14 @@ async def mfa_setup_start(
     )
 
 
-@router.post("/mfa/setup/verify", response_model=LoginMfaResponse)
+@router.post("/mfa/setup/verify", response_model=MfaSetupCompleteResponse)
 async def mfa_setup_verify(
     payload: MfaSetupVerifyRequest,
     request: Request,
     current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
-) -> LoginMfaResponse:
+) -> MfaSetupCompleteResponse:
     if not current_user.mfa_secret_encrypted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not initialized")
 
@@ -364,6 +439,11 @@ async def mfa_setup_verify(
     db.add(current_user)
     await db.commit()
     await db.refresh(current_user)
+
+    # Generate recovery codes
+    recovery_codes = await mfa_service.generate_recovery_codes(
+        db, org_id=ctx.org_id, user_id=current_user.id
+    )
 
     remember_device_token = None
     if payload.remember_device:
@@ -396,11 +476,84 @@ async def mfa_setup_verify(
         mfa_authenticated=True,
         mfa_method="totp",
     )
-    return LoginMfaResponse(
+    return MfaSetupCompleteResponse(
         access_token=access,
         refresh_token=refresh,
         remember_device_token=remember_device_token,
+        recovery_codes=recovery_codes,
     )
+
+
+class RecoveryCodesCountResponse(BaseModel):
+    remaining_count: int
+
+
+@router.get("/mfa/recovery-codes/count", response_model=RecoveryCodesCountResponse)
+async def get_recovery_codes_count(
+    current_user: User = Depends(deps.get_current_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> RecoveryCodesCountResponse:
+    """Get the number of remaining (unused) recovery codes."""
+    if not current_user.mfa_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
+
+    count = await mfa_service.get_remaining_recovery_codes_count(
+        db, org_id=ctx.org_id, user_id=current_user.id
+    )
+    return RecoveryCodesCountResponse(remaining_count=count)
+
+
+class RegenerateRecoveryCodesResponse(BaseModel):
+    recovery_codes: list[str]
+
+
+@router.post("/mfa/recovery-codes/regenerate", response_model=RegenerateRecoveryCodesResponse)
+async def regenerate_recovery_codes(
+    request: Request,
+    current_user: User = Depends(deps.get_current_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> RegenerateRecoveryCodesResponse:
+    """
+    Regenerate recovery codes. Requires step-up MFA verification.
+    This invalidates all existing recovery codes.
+    """
+    if not current_user.mfa_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
+
+    # Require step-up MFA verification
+    from app.api.auth_utils import require_step_up_mfa
+    await require_step_up_mfa(request, current_user, ctx.org_id, action="RECOVERY_CODES_REGENERATE")
+
+    recovery_codes = await mfa_service.generate_recovery_codes(
+        db, org_id=ctx.org_id, user_id=current_user.id
+    )
+    return RegenerateRecoveryCodesResponse(recovery_codes=recovery_codes)
+
+
+@router.post("/mfa/reset")
+async def self_mfa_reset(
+    request: Request,
+    current_user: User = Depends(deps.get_current_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """
+    Self-service MFA reset. User must verify via step-up MFA.
+    After reset, user will need to set up MFA again.
+    """
+    if not current_user.mfa_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
+
+    # Require step-up MFA verification
+    from app.api.auth_utils import require_step_up_mfa
+    await require_step_up_mfa(request, current_user, ctx.org_id, action="SELF_MFA_RESET")
+
+    # Clear all MFA data
+    await mfa_service.clear_user_mfa(db, org_id=ctx.org_id, user=current_user)
+
+    return {"message": "MFA has been reset. Please set up MFA again."}
 
 
 @router.post("/refresh", response_model=TokenPair)
@@ -706,19 +859,31 @@ async def verify_step_up_mfa(
             detail="Invalid challenge token: missing action",
         )
     
-    # Verify TOTP code
+    # Verify the code (TOTP or recovery code)
     if not current_user.mfa_enabled or not current_user.mfa_secret_encrypted:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="MFA is not enabled for this user",
         )
     
-    secret = mfa_service.decrypt_secret(current_user.mfa_secret_encrypted)
-    if not mfa_service.verify_totp(secret, payload.code):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid TOTP code",
+    if payload.code_type == "recovery":
+        # Verify and consume recovery code
+        is_valid = await mfa_service.verify_recovery_code(
+            db, org_id=ctx.org_id, user_id=current_user.id, code=payload.code
         )
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid recovery code",
+            )
+    else:
+        # Verify TOTP code
+        secret = mfa_service.decrypt_secret(current_user.mfa_secret_encrypted)
+        if not mfa_service.verify_totp(secret, payload.code):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid TOTP code",
+            )
     
     # Create step-up token valid for 5 minutes
     step_up_token = create_step_up_token(

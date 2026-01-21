@@ -25,6 +25,7 @@ class UserSummary(BaseModel):
     postal_code: str | None = None
     is_active: bool
     is_superuser: bool
+    mfa_enabled: bool = False
     created_at: datetime | None = None
 
 

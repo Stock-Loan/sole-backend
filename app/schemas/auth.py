@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr
@@ -126,6 +126,7 @@ class StepUpVerifyRequest(BaseModel):
     """Request to verify step-up MFA."""
     challenge_token: str
     code: str
+    code_type: Literal["totp", "recovery"] = "totp"
 
 
 class StepUpVerifyResponse(BaseModel):
@@ -133,3 +134,32 @@ class StepUpVerifyResponse(BaseModel):
     step_up_token: str
     action: str
     expires_in_seconds: int
+
+
+# ─── MFA Recovery ─────────────────────────────────────────────────────────────
+
+
+class MfaSetupCompleteResponse(BaseModel):
+    """Response after completing MFA setup, includes recovery codes."""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    remember_device_token: str | None = None
+    recovery_codes: list[str]
+
+
+class LoginMfaRecoveryRequest(BaseModel):
+    """Request to login using a recovery code instead of TOTP."""
+    mfa_token: str
+    recovery_code: str
+
+
+class MfaResetRequest(BaseModel):
+    """Request for self-service MFA reset (requires current TOTP or recovery code)."""
+    code: str
+    code_type: str = "totp"  # "totp" or "recovery"
+
+
+class AdminMfaResetRequest(BaseModel):
+    """Request for admin to reset a user's MFA."""
+    reason: str | None = None
