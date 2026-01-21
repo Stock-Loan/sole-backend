@@ -17,6 +17,7 @@ async def save_upload(
     file: UploadFile,
     base_dir: Path,
     subdir: Path,
+    allowed_extensions: set[str] | None = None,
 ) -> tuple[str, str]:
     base_dir = base_dir.resolve()
     dest_dir = (base_dir / subdir).resolve()
@@ -25,7 +26,22 @@ async def save_upload(
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     original_name = _safe_filename(file.filename, "upload.bin")
-    ext = Path(original_name).suffix
+    ext = Path(original_name).suffix.lower()
+
+    if allowed_extensions:
+        # Normalize allowed extensions to lowercase and ensure dot prefix
+        normalized_allowed = {e if e.startswith(".") else f".{e}" for e in allowed_extensions}
+        # Special handling for jpeg/jpg
+        if ".jpeg" in normalized_allowed:
+            normalized_allowed.add(".jpg")
+        if ".jpg" in normalized_allowed:
+            normalized_allowed.add(".jpeg")
+
+        if ext not in normalized_allowed:
+            raise ValueError(
+                f"File type not allowed. Allowed extensions: {', '.join(sorted(normalized_allowed))}"
+            )
+
     dest_name = f"{uuid4().hex}{ext}"
     dest_path = dest_dir / dest_name
 

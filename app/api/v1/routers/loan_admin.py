@@ -89,6 +89,7 @@ ALLOWED_REPAYMENT_EVIDENCE_TYPES = {
     "image/gif",
 }
 
+SAFE_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 CORE_QUEUE_STAGE_TYPES = {
     LoanWorkflowStageType.HR_REVIEW,
@@ -107,11 +108,16 @@ async def _save_local_document(
     actor_id: UUID,
 ) -> LoanDocument:
     base_dir = Path(settings.local_upload_dir)
-    relative_path, original_name = await save_upload(
-        file,
-        base_dir=base_dir,
-        subdir=loan_documents_subdir(ctx.org_id, loan_id),
-    )
+    try:
+        relative_path, original_name = await save_upload(
+            file,
+            base_dir=base_dir,
+            subdir=loan_documents_subdir(ctx.org_id, loan_id),
+            allowed_extensions=SAFE_EXTENSIONS,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     document = LoanDocument(
         org_id=ctx.org_id,
         loan_application_id=loan_id,
@@ -554,11 +560,15 @@ async def record_loan_repayment_with_evidence(
                     "details": {"content_type": evidence_file.content_type},
                 },
             )
-        relative_path, original_name = await save_upload(
-            evidence_file,
-            base_dir=Path(settings.local_upload_dir),
-            subdir=loan_repayments_subdir(ctx.org_id, loan_id),
-        )
+        try:
+            relative_path, original_name = await save_upload(
+                evidence_file,
+                base_dir=Path(settings.local_upload_dir),
+                subdir=loan_repayments_subdir(ctx.org_id, loan_id),
+                allowed_extensions=SAFE_EXTENSIONS,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         evidence_file_name = original_name
         evidence_storage_path = relative_path
         evidence_content_type = evidence_file.content_type
@@ -1962,11 +1972,15 @@ async def upload_legal_issuance_document_file(
         db.add(stage)
 
     base_dir = Path(settings.local_upload_dir)
-    relative_path, original_name = await save_upload(
-        file,
-        base_dir=base_dir,
-        subdir=loan_documents_subdir(ctx.org_id, loan_id),
-    )
+    try:
+        relative_path, original_name = await save_upload(
+            file,
+            base_dir=base_dir,
+            subdir=loan_documents_subdir(ctx.org_id, loan_id),
+            allowed_extensions=SAFE_EXTENSIONS,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     old_stage = model_snapshot(stage)
     document = LoanDocument(

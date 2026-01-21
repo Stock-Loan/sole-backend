@@ -31,7 +31,7 @@ class FakeResult:
 
     def scalar_one_or_none(self):
         return self.user
-    
+
     def all(self):
         return []
 
