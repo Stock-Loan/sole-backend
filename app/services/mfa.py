@@ -139,12 +139,13 @@ async def generate_recovery_codes(
     user_id,
 ) -> list[str]:
     """Generate new recovery codes for a user, replacing any existing ones."""
-    # Delete existing codes for this user
+    # Delete ALL existing codes for this user first (important for re-enrollment)
     stmt = delete(UserMfaRecoveryCode).where(
         UserMfaRecoveryCode.org_id == org_id,
         UserMfaRecoveryCode.user_id == user_id,
     )
     await db.execute(stmt)
+    await db.flush()  # Ensure deletion is applied before generating new codes
     
     # Generate new codes
     plain_codes: list[str] = []
@@ -219,6 +220,7 @@ async def delete_user_recovery_codes(
         UserMfaRecoveryCode.user_id == user_id,
     )
     await db.execute(stmt)
+    await db.flush()  # Ensure deletion is applied immediately
 
 
 async def delete_user_devices(
