@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import uuid
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any
 
 from passlib.context import CryptContext
 from jose import JWTError, ExpiredSignatureError, jwt

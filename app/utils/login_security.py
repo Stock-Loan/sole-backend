@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException, status
@@ -83,4 +83,69 @@ async def mark_refresh_used(jti: str, expires_at: datetime) -> None:
         logger.error(f"Redis error in mark_refresh_used: {e}")
         # If we can't mark it as used, we risk replay attacks.
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
+
+
+async def enforce_mfa_rate_limit(mfa_token: str) -> None:
+    """Rate-limit MFA code verification attempts per mfa_token.
+
+    Limits to 5 attempts per token to prevent brute-forcing the 6-digit TOTP code
+    within the 5-minute token validity window.
+    """
+    redis = get_redis_client()
+    key = f"mfa_attempt:{mfa_token}"
+    limit = 5  # Max attempts per MFA token
+    window_seconds = 300  # 5 minutes (matches token validity)
+    try:
+        pipe = redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, window_seconds)
+        count, _ = await pipe.execute()
+        if count > limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many MFA verification attempts; please request a new code",
+            )
+    except RedisError as e:
+        logger.error(f"Redis error in enforce_mfa_rate_limit: {e}")
+        # Fail closed for MFA security
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
+
+
+async def check_pbgc_refresh_cooldown(org_id: str) -> None:
+    """Enforce a 24-hour cooldown on PBGC rate refresh per organization.
+
+    Raises HTTP 429 if a refresh was already performed within the last 24 hours.
+    """
+    redis = get_redis_client()
+    key = f"pbgc_refresh:{org_id}"
+    try:
+        if await redis.exists(key):
+            ttl = await redis.ttl(key)
+            hours_remaining = max(1, ttl // 3600)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"PBGC rates already refreshed recently. Please wait {hours_remaining} hour(s) before refreshing again.",
+            )
+    except RedisError as e:
+        logger.error(f"Redis error in check_pbgc_refresh_cooldown: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
+
+
+async def record_pbgc_refresh(org_id: str) -> None:
+    """Record a PBGC refresh to enforce the 24-hour cooldown."""
+    redis = get_redis_client()
+    key = f"pbgc_refresh:{org_id}"
+    cooldown_seconds = 24 * 60 * 60  # 24 hours
+    try:
+        await redis.setex(key, cooldown_seconds, 1)
+    except RedisError as e:
+        logger.error(f"Redis error in record_pbgc_refresh: {e}")
+        # Non-critical, proceed without recording
+
 

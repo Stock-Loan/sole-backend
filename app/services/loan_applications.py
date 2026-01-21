@@ -17,7 +17,6 @@ from app.models.user import User
 from app.models.department import Department
 from app.models.org_settings import OrgSettings
 from app.models.stock_grant_reservation import StockGrantReservation
-from app.models.user import User
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.schemas.common import MaritalStatus, normalize_marital_status
 from app.schemas.loan import (

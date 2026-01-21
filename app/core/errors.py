@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from fastapi import Request
+
+if TYPE_CHECKING:
+    from app.api.deps import StepUpMfaRequired
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse

@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.settings import settings
 from app.db.session import engine

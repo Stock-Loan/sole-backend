@@ -1,9 +1,9 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,8 @@ from app.services import authz, settings as settings_service
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models import Org, User
+
+logger = logging.getLogger(__name__)
 
 
 class StepUpMfaRequired(Exception):

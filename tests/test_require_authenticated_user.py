@@ -1,6 +1,5 @@
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-import pytest
 
 from app.api import deps
 from app.core.errors import register_exception_handlers

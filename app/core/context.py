@@ -1,5 +1,4 @@
 import contextvars
-from typing import Optional
 
 _tenant_id: contextvars.ContextVar[str] = contextvars.ContextVar("tenant_id", default="-")
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")

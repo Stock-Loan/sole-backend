@@ -5,7 +5,6 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR
 from typing import Iterable
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps

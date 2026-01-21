@@ -24,7 +24,6 @@ from app.schemas.onboarding import (
     OnboardingUserCreate,
 )
 from app.resources.countries import COUNTRIES, SUBDIVISIONS
-from app.core.permissions import PermissionCode
 
 
 def _generate_temp_password(length: int = 16) -> str:
@@ -406,7 +405,7 @@ async def bulk_onboard_users(
                     temporary_password=temp_password,
                 )
             )
-        except IntegrityError as exc:
+        except IntegrityError:
             await db.rollback()
             errors.append(
                 BulkOnboardingRowError(

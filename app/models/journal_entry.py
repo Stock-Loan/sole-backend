@@ -1,5 +1,4 @@
 import uuid
-from decimal import Decimal
 
 from sqlalchemy import Column, Date, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID

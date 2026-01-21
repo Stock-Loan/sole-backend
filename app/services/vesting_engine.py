@@ -12,7 +12,6 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.models.employee_stock_grant import EmployeeStockGrant
-from app.models.vesting_event import VestingEvent
 
 
 @dataclass(frozen=True)

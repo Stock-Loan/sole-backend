@@ -8,6 +8,7 @@ from app.models.user import User
 from app.schemas.pbgc_rates import PbgcMidTermRateEntry, PbgcRateRefreshResponse
 from app.schemas.settings import MfaEnforcementAction, OrgSettingsResponse, OrgSettingsUpdate
 from app.services import pbgc_rates, settings as settings_service
+from app.utils.login_security import check_pbgc_refresh_cooldown, record_pbgc_refresh
 
 router = APIRouter(prefix="/org/settings", tags=["org-settings"])
 
@@ -68,8 +69,14 @@ async def refresh_pbgc_rates(
     _: User = Depends(deps.require_permission(PermissionCode.ORG_SETTINGS_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> PbgcRateRefreshResponse:
-    _ = ctx
+    # Enforce 24-hour cooldown to prevent abuse and external rate limiting
+    await check_pbgc_refresh_cooldown(ctx.org_id)
+
     updated_rows, fetched_at = await pbgc_rates.upsert_current_year_rates(db)
+
+    # Record successful refresh to start the 24-hour cooldown
+    await record_pbgc_refresh(ctx.org_id)
+
     return PbgcRateRefreshResponse(updated_rows=updated_rows, fetched_at=fetched_at)
 
 

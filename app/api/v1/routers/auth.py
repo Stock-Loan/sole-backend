@@ -46,7 +46,7 @@ from app.schemas.auth import (
 )
 from app.api.auth_utils import constant_time_verify, enforce_login_limits, record_login_attempt
 from app.services import mfa as mfa_service, settings as settings_service
-from app.utils.login_security import is_refresh_used, mark_refresh_used
+from app.utils.login_security import enforce_mfa_rate_limit, is_refresh_used, mark_refresh_used
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -130,6 +130,9 @@ async def login_mfa(
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> LoginMfaResponse:
+    # Rate limit MFA attempts to prevent brute-forcing the 6-digit code
+    await enforce_mfa_rate_limit(payload.mfa_token)
+
     try:
         challenge = decode_mfa_challenge_token(payload.mfa_token)
     except ValueError as exc:
@@ -244,6 +247,9 @@ async def login_mfa_setup_verify(
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> LoginMfaResponse:
+    # Rate limit MFA setup verification attempts
+    await enforce_mfa_rate_limit(payload.setup_token)
+
     try:
         setup = decode_mfa_setup_token(payload.setup_token)
     except ValueError as exc:

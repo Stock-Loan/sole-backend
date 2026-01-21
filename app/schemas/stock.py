@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class VestingStrategy(str, Enum):

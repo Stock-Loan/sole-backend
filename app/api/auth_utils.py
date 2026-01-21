@@ -1,7 +1,5 @@
-from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import HTTPException, status
 
 from app.core.security import verify_password
 from app.core.settings import settings

@@ -1,5 +1,4 @@
 import os
-from datetime import date
 from uuid import uuid4
 
 import pytest

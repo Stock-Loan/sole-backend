@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
