@@ -64,7 +64,9 @@ def _month_index(as_of: date, value: date) -> int:
     return (value.year - as_of.year) * 12 + (value.month - as_of.month)
 
 
-def _grant_next_vesting(grant: EmployeeStockGrant, as_of_date: date) -> tuple[date | None, int | None]:
+def _grant_next_vesting(
+    grant: EmployeeStockGrant, as_of_date: date
+) -> tuple[date | None, int | None]:
     strategy = (grant.vesting_strategy or "SCHEDULED").upper()
     if strategy == VestingStrategy.IMMEDIATE.value:
         if grant.grant_date > as_of_date:
@@ -244,9 +246,9 @@ async def build_self_dashboard_summary(
 
     reserved_by_status: dict[str, int] = {}
     for reservation in reservations:
-        reserved_by_status[reservation.status] = reserved_by_status.get(reservation.status, 0) + int(
-            reservation.shares_reserved
-        )
+        reserved_by_status[reservation.status] = reserved_by_status.get(
+            reservation.status, 0
+        ) + int(reservation.shares_reserved)
     reserved_share_percent = Decimal("0")
     if totals.total_vested_shares:
         reserved_share_percent = (
@@ -309,7 +311,9 @@ async def build_self_dashboard_summary(
             LoanApplication.org_membership_id == membership.id,
             LoanApplication.status == LoanApplicationStatus.ACTIVE.value,
         )
-        .order_by(LoanApplication.activation_date.desc().nullslast(), LoanApplication.created_at.desc())
+        .order_by(
+            LoanApplication.activation_date.desc().nullslast(), LoanApplication.created_at.desc()
+        )
         .limit(1)
     )
     active_application = (await db.execute(active_stmt)).scalar_one_or_none()
@@ -405,7 +409,8 @@ async def build_self_dashboard_summary(
     )
     repayment_rows = (await db.execute(repayment_history_stmt)).all()
     repayment_history = [
-        RepaymentHistoryItem(payment_date=row[1], amount=_as_decimal(row[0])) for row in repayment_rows
+        RepaymentHistoryItem(payment_date=row[1], amount=_as_decimal(row[0]))
+        for row in repayment_rows
     ]
     last_payment_date = repayment_history[0].payment_date if repayment_history else None
     last_payment_amount = repayment_history[0].amount if repayment_history else None
@@ -430,8 +435,12 @@ async def build_self_dashboard_summary(
         ),
         stock_eligibility=eligibility_result,
         vesting_timeline=SelfVestingTimeline(
-            next_vesting_date=totals.next_vesting_event.vest_date if totals.next_vesting_event else None,
-            next_vesting_shares=totals.next_vesting_event.shares if totals.next_vesting_event else None,
+            next_vesting_date=(
+                totals.next_vesting_event.vest_date if totals.next_vesting_event else None
+            ),
+            next_vesting_shares=(
+                totals.next_vesting_event.shares if totals.next_vesting_event else None
+            ),
             upcoming_events=[
                 NextVestingEvent(vest_date=event.vest_date, shares=event.shares)
                 for event in vesting_engine.upcoming_vesting_events(grants, as_of_date, limit=6)

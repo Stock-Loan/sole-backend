@@ -16,7 +16,9 @@ async def list_countries() -> dict:
     return {"countries": COUNTRIES}
 
 
-@router.get("/countries/{country_code}/subdivisions", summary="List subdivisions/states for a country")
+@router.get(
+    "/countries/{country_code}/subdivisions", summary="List subdivisions/states for a country"
+)
 async def list_subdivisions(country_code: str) -> dict:
     country_code = country_code.upper()
     subdivisions = SUBDIVISIONS.get(country_code, [])

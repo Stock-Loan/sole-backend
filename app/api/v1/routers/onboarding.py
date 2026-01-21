@@ -33,7 +33,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/org/users", tags=["users"])
 
 
-@router.post("", response_model=OnboardingResponse, status_code=201, summary="Onboard a single user into the current org")
+@router.post(
+    "",
+    response_model=OnboardingResponse,
+    status_code=201,
+    summary="Onboard a single user into the current org",
+)
 async def onboard_user(
     payload: OnboardingUserCreate,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -44,7 +49,9 @@ async def onboard_user(
         user, membership, temp_password = await onboarding.onboard_single_user(db, ctx, payload)
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate user or employee_id") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate user or employee_id"
+        ) from exc
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -94,11 +101,15 @@ async def bulk_onboard(
     MAX_BYTES = 5 * 1024 * 1024  # 5 MB guardrail
     raw = await file.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="CSV too large (max 5MB)")
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="CSV too large (max 5MB)"
+        )
     try:
         content = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid encoding; expected UTF-8") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid encoding; expected UTF-8"
+        ) from exc
     try:
         result = await onboarding.bulk_onboard_users(db, ctx, content)
         for success in result.successes:
@@ -173,11 +184,15 @@ async def list_users(
     items = []
     for membership, user, dept in rows:
         membership.department_name = dept.name if dept else None
-        items.append({"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])})
+        items.append(
+            {"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])}
+        )
     return UserListResponse(items=items, total=total)
 
 
-@router.get("/{membership_id}", response_model=UserDetailResponse, summary="Get a user membership detail")
+@router.get(
+    "/{membership_id}", response_model=UserDetailResponse, summary="Get a user membership detail"
+)
 async def get_user(
     membership_id: str,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -205,7 +220,11 @@ async def get_user(
     return UserDetailResponse(user=user, membership=membership, roles=roles)
 
 
-@router.delete("/{membership_id}", status_code=204, summary="Delete a user membership and user if no other memberships")
+@router.delete(
+    "/{membership_id}",
+    status_code=204,
+    summary="Delete a user membership and user if no other memberships",
+)
 async def delete_user(
     membership_id: str,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -317,7 +336,9 @@ async def bulk_delete_users(
     return {"deleted": deleted, "not_found": not_found}
 
 
-@router.patch("/{membership_id}", response_model=UserDetailResponse, summary="Update membership status fields")
+@router.patch(
+    "/{membership_id}", response_model=UserDetailResponse, summary="Update membership status fields"
+)
 async def update_membership(
     membership_id: str,
     payload: UpdateMembershipRequest,
@@ -329,9 +350,7 @@ async def update_membership(
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
-        .options(
-            selectinload(UserModel.roles).selectinload(UserRole.role)
-        )
+        .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
@@ -348,9 +367,8 @@ async def update_membership(
     db.add(membership)
     await db.commit()
     # Remove role assignments and revoke sessions if platform/employment status is not ACTIVE
-    if (
-        (membership.platform_status and membership.platform_status.upper() != "ACTIVE")
-        or (membership.employment_status and membership.employment_status.upper() != "ACTIVE")
+    if (membership.platform_status and membership.platform_status.upper() != "ACTIVE") or (
+        membership.employment_status and membership.employment_status.upper() != "ACTIVE"
     ):
         roles_to_remove = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
         await db.execute(
@@ -385,7 +403,7 @@ async def update_membership(
         )
     await db.refresh(membership)
     await db.refresh(user)
-    # Refresh logic for roles is tricky here because we just deleted them. 
+    # Refresh logic for roles is tricky here because we just deleted them.
     # But since we eager loaded them initially, the object might still have stale roles?
     # No, we modified DB. We should expire the relationship or reload.
     await db.refresh(user, attribute_names=["roles"])
@@ -404,7 +422,11 @@ async def update_membership(
     return UserDetailResponse(user=user, membership=membership, roles=user_roles)
 
 
-@router.patch("/{membership_id}/profile", response_model=UserDetailResponse, summary="Update user profile fields")
+@router.patch(
+    "/{membership_id}/profile",
+    response_model=UserDetailResponse,
+    summary="Update user profile fields",
+)
 async def update_user_profile(
     membership_id: str,
     payload: UpdateUserProfileRequest,
@@ -430,9 +452,7 @@ async def update_user_profile(
         select(OrgMembership, UserModel)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
-        .options(
-            selectinload(UserModel.roles).selectinload(UserRole.role)
-        )
+        .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
@@ -456,7 +476,11 @@ async def update_user_profile(
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "duplicate_email", "message": "Email already exists for this organization", "details": {}},
+            detail={
+                "code": "duplicate_email",
+                "message": "Email already exists for this organization",
+                "details": {},
+            },
         ) from exc
     await db.refresh(user)
     await db.refresh(membership)
@@ -494,6 +518,7 @@ async def admin_reset_user_mfa(
     org_settings = await settings_service.get_org_settings(db, ctx)
     if MfaEnforcementAction.USER_MFA_RESET in org_settings.mfa_required_actions:
         from app.api.auth_utils import require_step_up_mfa
+
         await require_step_up_mfa(request, current_user, ctx.org_id, action="USER_MFA_RESET")
 
     # Get the target user via membership
@@ -513,11 +538,13 @@ async def admin_reset_user_mfa(
     if target_user.id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot reset your own MFA via admin endpoint. Use self-service reset."
+            detail="Cannot reset your own MFA via admin endpoint. Use self-service reset.",
         )
 
     if not target_user.mfa_enabled:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User does not have MFA enabled")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="User does not have MFA enabled"
+        )
 
     # Clear all MFA data
     await mfa_service.clear_user_mfa(db, org_id=ctx.org_id, user=target_user)

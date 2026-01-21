@@ -16,7 +16,11 @@ from app.core.security import get_password_hash
 from app.services.authz import assign_default_employee_role
 from app.models.org_membership import OrgMembership
 from app.models.user import User
-from app.schemas.common import EmploymentStatus, normalize_employment_status, normalize_marital_status
+from app.schemas.common import (
+    EmploymentStatus,
+    normalize_employment_status,
+    normalize_marital_status,
+)
 from app.schemas.onboarding import (
     BulkOnboardingResult,
     BulkOnboardingRowError,
@@ -121,18 +125,24 @@ def _normalize_location(country: str | None, state: str | None) -> tuple[str | N
                 else:
                     # Fuzzy match subdivision names
                     choices = list(allowed_names.keys())
-                    match = process.extractOne(name_key, choices, scorer=fuzz.WRatio, score_cutoff=85)
+                    match = process.extractOne(
+                        name_key, choices, scorer=fuzz.WRatio, score_cutoff=85
+                    )
                     if match:
                         normalized_state = allowed_names[match[0]]
                     else:
-                        raise ValueError(f"Unsupported state '{state_raw}' for country {country_code}")
+                        raise ValueError(
+                            f"Unsupported state '{state_raw}' for country {country_code}"
+                        )
         else:
             normalized_state = state_upper[:10]
 
     return country_code, normalized_state
 
 
-def _normalize_text(value: str | None, *, lower: bool = False, upper: bool = False, title: bool = False) -> str | None:
+def _normalize_text(
+    value: str | None, *, lower: bool = False, upper: bool = False, title: bool = False
+) -> str | None:
     if value is None:
         return None
     cleaned = value.strip()
@@ -167,7 +177,8 @@ def _normalize_payload(payload: OnboardingUserCreate) -> OnboardingUserCreate:
         temporary_password=_normalize_text(payload.temporary_password),
         employee_id=_normalize_text(payload.employee_id),
         employment_start_date=payload.employment_start_date,
-        employment_status=normalize_employment_status(payload.employment_status) or EmploymentStatus.ACTIVE,
+        employment_status=normalize_employment_status(payload.employment_status)
+        or EmploymentStatus.ACTIVE,
     )
 
 
@@ -348,16 +359,21 @@ async def bulk_onboard_users(
             normalized_employee_id = _normalize_text(row.get("employee_id") or "") or ""
             existing_membership_id = None
             if normalized_email:
-                user_stmt = select(User.id).where(User.org_id == ctx.org_id, User.email == normalized_email)
+                user_stmt = select(User.id).where(
+                    User.org_id == ctx.org_id, User.email == normalized_email
+                )
                 user_id = (await db.execute(user_stmt)).scalar_one_or_none()
                 if user_id:
                     membership_stmt = select(OrgMembership.id).where(
                         OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == user_id
                     )
-                    existing_membership_id = (await db.execute(membership_stmt)).scalar_one_or_none()
+                    existing_membership_id = (
+                        await db.execute(membership_stmt)
+                    ).scalar_one_or_none()
             if not existing_membership_id and normalized_employee_id:
                 employee_stmt = select(OrgMembership.id).where(
-                    OrgMembership.org_id == ctx.org_id, OrgMembership.employee_id == normalized_employee_id
+                    OrgMembership.org_id == ctx.org_id,
+                    OrgMembership.employee_id == normalized_employee_id,
                 )
                 existing_membership_id = (await db.execute(employee_stmt)).scalar_one_or_none()
             if existing_membership_id:

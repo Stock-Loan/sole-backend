@@ -109,3 +109,30 @@ class PermissionCode(str, Enum):
                 seen.add(code.value)
                 normalized.append(code.value)
         return normalized
+
+
+SENSITIVE_PERMISSIONS = {
+    PermissionCode.SYSTEM_ADMIN,
+    PermissionCode.ORG_SETTINGS_MANAGE,
+    PermissionCode.USER_MANAGE,
+    PermissionCode.USER_MFA_RESET,
+    PermissionCode.ROLE_MANAGE,
+    PermissionCode.DEPARTMENT_MANAGE,
+    PermissionCode.ACL_MANAGE,
+    PermissionCode.ORG_DOCUMENT_MANAGE,
+    PermissionCode.ANNOUNCEMENT_MANAGE,
+    PermissionCode.STOCK_MANAGE,
+    PermissionCode.STOCK_PROGRAM_MANAGE,
+    PermissionCode.STOCK_GRANT_MANAGE,
+    PermissionCode.LOAN_MANAGE,
+    PermissionCode.LOAN_WORKFLOW_HR_MANAGE,
+    PermissionCode.LOAN_WORKFLOW_FINANCE_MANAGE,
+    PermissionCode.LOAN_WORKFLOW_LEGAL_MANAGE,
+    PermissionCode.LOAN_WORKFLOW_POST_ISSUANCE_MANAGE,
+    PermissionCode.LOAN_WORKFLOW_83B_MANAGE,
+    PermissionCode.LOAN_DOCUMENT_MANAGE_HR,
+    PermissionCode.LOAN_DOCUMENT_MANAGE_FINANCE,
+    PermissionCode.LOAN_DOCUMENT_MANAGE_LEGAL,
+    PermissionCode.LOAN_PAYMENT_RECORD,
+    PermissionCode.LOAN_PAYMENT_REFUND,
+}

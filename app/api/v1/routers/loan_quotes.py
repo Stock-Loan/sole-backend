@@ -13,7 +13,11 @@ from app.services import loan_quotes
 router = APIRouter(prefix="/me/loan-applications", tags=["loan-applications"])
 
 
-@router.post("/quote", response_model=LoanQuoteResponse, summary="Get a loan quote for exercising stock options")
+@router.post(
+    "/quote",
+    response_model=LoanQuoteResponse,
+    summary="Get a loan quote for exercising stock options",
+)
 async def get_loan_quote(
     payload: LoanQuoteRequest,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),

@@ -77,26 +77,22 @@ async def build_dashboard_summary(
     )
     activated_last_30_days = int((await db.execute(activated_stmt)).scalar_one() or 0)
 
-    active_aggregate_stmt = (
-        select(
-            func.coalesce(func.sum(LoanApplication.loan_principal), 0),
-            func.coalesce(func.sum(LoanApplication.shares_to_exercise), 0),
-        )
-        .where(
-            LoanApplication.org_id == ctx.org_id,
-            LoanApplication.status == "ACTIVE",
-        )
+    active_aggregate_stmt = select(
+        func.coalesce(func.sum(LoanApplication.loan_principal), 0),
+        func.coalesce(func.sum(LoanApplication.shares_to_exercise), 0),
+    ).where(
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.status == "ACTIVE",
     )
     active_principal_sum, active_shares_sum = (await db.execute(active_aggregate_stmt)).first()
     active_loan_principal_sum = _as_decimal(active_principal_sum)
     active_loan_total_shares = int(active_shares_sum or 0)
 
-    completed_shares_stmt = (
-        select(func.coalesce(func.sum(LoanApplication.shares_to_exercise), 0))
-        .where(
-            LoanApplication.org_id == ctx.org_id,
-            LoanApplication.status == "COMPLETED",
-        )
+    completed_shares_stmt = select(
+        func.coalesce(func.sum(LoanApplication.shares_to_exercise), 0)
+    ).where(
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.status == "COMPLETED",
     )
     completed_loan_total_shares = int((await db.execute(completed_shares_stmt)).scalar_one() or 0)
 
@@ -106,12 +102,9 @@ async def build_dashboard_summary(
         statuses=["ACTIVE", "COMPLETED"],
     )
 
-    total_due_stmt = (
-        select(func.coalesce(func.sum(LoanApplication.total_payable_amount), 0))
-        .where(
-            LoanApplication.org_id == ctx.org_id,
-            LoanApplication.status.in_(["ACTIVE", "COMPLETED"]),
-        )
+    total_due_stmt = select(func.coalesce(func.sum(LoanApplication.total_payable_amount), 0)).where(
+        LoanApplication.org_id == ctx.org_id,
+        LoanApplication.status.in_(["ACTIVE", "COMPLETED"]),
     )
     total_due = _as_decimal((await db.execute(total_due_stmt)).scalar_one() or 0)
     sum_amount_paid = paid_sum
@@ -146,7 +139,9 @@ async def build_dashboard_summary(
     )
     active_fixed_count = int((await db.execute(active_fixed_stmt)).scalar_one() or 0)
     active_variable_count = int((await db.execute(active_variable_stmt)).scalar_one() or 0)
-    active_interest_only_count = int((await db.execute(active_interest_only_stmt)).scalar_one() or 0)
+    active_interest_only_count = int(
+        (await db.execute(active_interest_only_stmt)).scalar_one() or 0
+    )
     active_balloon_count = int((await db.execute(active_balloon_stmt)).scalar_one() or 0)
     active_principal_and_interest_count = int(
         (await db.execute(active_principal_and_interest_stmt)).scalar_one() or 0

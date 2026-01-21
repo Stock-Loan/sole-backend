@@ -29,7 +29,9 @@ async def _get_announcement_or_404(
     ctx: deps.TenantContext,
     announcement_id: UUID,
 ) -> Announcement:
-    stmt = select(Announcement).where(Announcement.id == announcement_id, Announcement.org_id == ctx.org_id)
+    stmt = select(Announcement).where(
+        Announcement.id == announcement_id, Announcement.org_id == ctx.org_id
+    )
     result = await db.execute(stmt)
     announcement = result.scalar_one_or_none()
     if not announcement:
@@ -63,7 +65,11 @@ async def list_announcements(
     return AnnouncementListResponse(items=announcements, total=total)
 
 
-@router.get("/admin", response_model=AnnouncementListResponse, summary="Admin list of announcements (all statuses)")
+@router.get(
+    "/admin",
+    response_model=AnnouncementListResponse,
+    summary="Admin list of announcements (all statuses)",
+)
 async def list_admin_announcements(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -88,7 +94,11 @@ async def list_admin_announcements(
     return AnnouncementListResponse(items=announcements, total=total)
 
 
-@router.get("/unread", response_model=AnnouncementListResponse, summary="List unread announcements for current user")
+@router.get(
+    "/unread",
+    response_model=AnnouncementListResponse,
+    summary="List unread announcements for current user",
+)
 async def list_unread_announcements(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -102,13 +112,10 @@ async def list_unread_announcements(
         AnnouncementRead.user_id == current_user.id,
         AnnouncementRead.org_id == ctx.org_id,
     )
-    base_stmt = (
-        select(Announcement)
-        .where(
-            Announcement.org_id == ctx.org_id,
-            Announcement.status == "PUBLISHED",
-            unread_filter,
-        )
+    base_stmt = select(Announcement).where(
+        Announcement.org_id == ctx.org_id,
+        Announcement.status == "PUBLISHED",
+        unread_filter,
     )
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
@@ -155,7 +162,9 @@ async def get_announcement(
     db: AsyncSession = Depends(get_db),
 ) -> AnnouncementOut:
     announcement = await _get_announcement_or_404(db, ctx, announcement_id)
-    has_manage = await authz.check_permission(current_user, ctx, PermissionCode.ANNOUNCEMENT_MANAGE, db)
+    has_manage = await authz.check_permission(
+        current_user, ctx, PermissionCode.ANNOUNCEMENT_MANAGE, db
+    )
     if not has_manage and announcement.status != "PUBLISHED":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Announcement not found")
 
@@ -178,7 +187,11 @@ async def create_announcement(
     announcement.target_count = await announcement_service.get_recipient_count(db, ctx)
     logger.info(
         "Announcement created",
-        extra={"org_id": ctx.org_id, "announcement_id": str(announcement.id), "status": announcement.status},
+        extra={
+            "org_id": ctx.org_id,
+            "announcement_id": str(announcement.id),
+            "status": announcement.status,
+        },
     )
     record_audit_log(
         db,
@@ -194,7 +207,9 @@ async def create_announcement(
     return announcement
 
 
-@router.patch("/{announcement_id}", response_model=AnnouncementOut, summary="Update an announcement or status")
+@router.patch(
+    "/{announcement_id}", response_model=AnnouncementOut, summary="Update an announcement or status"
+)
 async def update_announcement(
     announcement_id: UUID,
     payload: AnnouncementUpdate,

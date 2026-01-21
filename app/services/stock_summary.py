@@ -17,7 +17,12 @@ from app.schemas.stock import (
     StockReservationSummary,
     StockSummaryResponse,
 )
-from app.services import eligibility, settings as settings_service, stock_reservations, vesting_engine
+from app.services import (
+    eligibility,
+    settings as settings_service,
+    stock_reservations,
+    vesting_engine,
+)
 from app.utils.redis_client import get_redis_client
 
 
@@ -176,7 +181,9 @@ def build_stock_summary_from_data(
                     summary.vested_shares - reserved_by_grant.get(summary.grant_id, 0), 0
                 ),
                 exercise_price=summary.exercise_price,
-                vesting_strategy=getattr(grants_by_id.get(summary.grant_id), "vesting_strategy", None),
+                vesting_strategy=getattr(
+                    grants_by_id.get(summary.grant_id), "vesting_strategy", None
+                ),
                 status=getattr(grants_by_id.get(summary.grant_id), "status", None),
             )
             for summary in summaries

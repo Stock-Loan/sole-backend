@@ -166,8 +166,10 @@ async def upsert_current_year_rates(db: AsyncSession) -> tuple[int, datetime]:
             }
             for month in range(1, 13)
         ]
-        next_stmt = insert(PbgcMidTermRate).values(next_payload).on_conflict_do_nothing(
-            index_elements=[PbgcMidTermRate.year, PbgcMidTermRate.month]
+        next_stmt = (
+            insert(PbgcMidTermRate)
+            .values(next_payload)
+            .on_conflict_do_nothing(index_elements=[PbgcMidTermRate.year, PbgcMidTermRate.month])
         )
         await db.execute(next_stmt)
 

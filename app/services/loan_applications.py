@@ -26,7 +26,13 @@ from app.schemas.loan import (
     LoanQuoteRequest,
     LoanSelectionMode,
 )
-from app.services import loan_quotes, pbgc_rates, settings as settings_service, stock_reservations, vesting_engine
+from app.services import (
+    loan_quotes,
+    pbgc_rates,
+    settings as settings_service,
+    stock_reservations,
+    vesting_engine,
+)
 
 
 def _snapshot_org_settings(
@@ -46,9 +52,7 @@ def _snapshot_org_settings(
             value = str(value)
         data[name] = value
     if variable_base_rate_annual_percent is not None:
-        data["variable_base_rate_annual_percent"] = str(
-            variable_base_rate_annual_percent
-        )
+        data["variable_base_rate_annual_percent"] = str(variable_base_rate_annual_percent)
     return data
 
 
@@ -109,8 +113,12 @@ def _application_snapshot(application: LoanApplication) -> dict:
         "interest_type": application.interest_type,
         "repayment_method": application.repayment_method,
         "term_months": application.term_months,
-        "nominal_annual_rate_percent": _serialize_snapshot_value(application.nominal_annual_rate_percent),
-        "estimated_monthly_payment": _serialize_snapshot_value(application.estimated_monthly_payment),
+        "nominal_annual_rate_percent": _serialize_snapshot_value(
+            application.nominal_annual_rate_percent
+        ),
+        "estimated_monthly_payment": _serialize_snapshot_value(
+            application.estimated_monthly_payment
+        ),
         "total_payable_amount": _serialize_snapshot_value(application.total_payable_amount),
         "total_interest_amount": _serialize_snapshot_value(application.total_interest_amount),
         "quote_inputs_snapshot": application.quote_inputs_snapshot,
@@ -131,25 +139,25 @@ def _application_snapshot(application: LoanApplication) -> dict:
     }
 
 
-def _compute_workflow_flags(application: LoanApplication) -> tuple[bool | None, bool | None, int | None]:
+def _compute_workflow_flags(
+    application: LoanApplication,
+) -> tuple[bool | None, bool | None, int | None]:
     if application.activation_date is None or application.election_83b_due_date is None:
         return None, None, None
     documents = application.documents or []
-    has_share_certificate = any(
-        doc.document_type == "SHARE_CERTIFICATE" for doc in documents
-    )
-    has_83b_election = any(
-        doc.document_type == "SECTION_83B_ELECTION" for doc in documents
-    )
+    has_share_certificate = any(doc.document_type == "SHARE_CERTIFICATE" for doc in documents)
+    has_83b_election = any(doc.document_type == "SECTION_83B_ELECTION" for doc in documents)
     days_until = (application.election_83b_due_date - date.today()).days
     return has_share_certificate, has_83b_election, days_until
 
 
 def _quote_inputs_snapshot(request: LoanQuoteRequest) -> dict:
     return {
-        "selection_mode": request.selection_mode.value
-        if isinstance(request.selection_mode, LoanSelectionMode)
-        else str(request.selection_mode),
+        "selection_mode": (
+            request.selection_mode.value
+            if isinstance(request.selection_mode, LoanSelectionMode)
+            else str(request.selection_mode)
+        ),
         "selection_value": str(request.selection_value),
         "as_of_date": _serialize_snapshot_value(request.as_of_date),
         "desired_interest_type": _enum_value(request.desired_interest_type),
@@ -350,7 +358,9 @@ def _apply_quote(
 ) -> None:
     option = quote.options[0]
     selection_mode_value = (
-        selection_mode.value if isinstance(selection_mode, LoanSelectionMode) else str(selection_mode)
+        selection_mode.value
+        if isinstance(selection_mode, LoanSelectionMode)
+        else str(selection_mode)
     )
     application.status = LoanApplicationStatus.DRAFT.value
     application.as_of_date = quote.as_of_date
@@ -363,7 +373,9 @@ def _apply_quote(
     application.loan_principal = quote.loan_principal
     application.policy_version_snapshot = _current_policy_version(org_settings)
     application.interest_type = _enum_value(option.interest_type) or str(option.interest_type)
-    application.repayment_method = _enum_value(option.repayment_method) or str(option.repayment_method)
+    application.repayment_method = _enum_value(option.repayment_method) or str(
+        option.repayment_method
+    )
     application.term_months = option.term_months
     application.nominal_annual_rate_percent = option.nominal_annual_rate
     application.estimated_monthly_payment = option.estimated_monthly_payment
@@ -604,7 +616,9 @@ async def update_admin_application(
     actor_id,
 ) -> LoanApplication:
     old_snapshot = _application_snapshot(application)
-    next_value = next_status.value if isinstance(next_status, LoanApplicationStatus) else str(next_status)
+    next_value = (
+        next_status.value if isinstance(next_status, LoanApplicationStatus) else str(next_status)
+    )
     _validate_admin_status_transition(application.status, next_value)
 
     application.status = next_value
@@ -632,7 +646,9 @@ async def update_admin_application(
     if next_value == LoanApplicationStatus.REJECTED.value:
         from app.services import stock_dashboard, stock_summary
 
-        await stock_summary.invalidate_stock_summary_cache(ctx.org_id, application.org_membership_id)
+        await stock_summary.invalidate_stock_summary_cache(
+            ctx.org_id, application.org_membership_id
+        )
         await stock_dashboard.invalidate_stock_dashboard_cache(ctx.org_id)
     return application
 
@@ -760,14 +776,17 @@ async def update_draft_application(
     if recalc:
         selection_mode = payload.selection_mode or LoanSelectionMode(application.selection_mode)
         selection_value = (
-            payload.selection_value if payload.selection_value is not None else _selection_value_from_application(application)
+            payload.selection_value
+            if payload.selection_value is not None
+            else _selection_value_from_application(application)
         )
         quote_request = LoanQuoteRequest(
             selection_mode=selection_mode,
             selection_value=selection_value,
             as_of_date=payload.as_of_date or application.as_of_date,
             desired_interest_type=payload.desired_interest_type or application.interest_type,
-            desired_repayment_method=payload.desired_repayment_method or application.repayment_method,
+            desired_repayment_method=payload.desired_repayment_method
+            or application.repayment_method,
             desired_term_months=payload.desired_term_months or application.term_months,
         )
         quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, quote_request)
@@ -834,7 +853,11 @@ async def submit_application(
             details={"status": application.status},
         )
 
-    if idempotency_key and application.submit_idempotency_key and application.submit_idempotency_key != idempotency_key:
+    if (
+        idempotency_key
+        and application.submit_idempotency_key
+        and application.submit_idempotency_key != idempotency_key
+    ):
         raise loan_quotes.LoanQuoteError(
             code="idempotency_conflict",
             message="Submission already processed with a different idempotency key",

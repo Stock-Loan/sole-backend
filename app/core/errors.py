@@ -72,8 +72,12 @@ def _parse_http_exception_detail(detail: Any, status_code: int) -> tuple[str, st
         if "details" in detail:
             details = _normalize_details(detail.get("details"))
         else:
-            remainder = {k: v for k, v in detail.items() if k not in {"code", "message", "detail", "error"}}
-            details = remainder or {"detail": detail.get("detail") or detail.get("error") or message}
+            remainder = {
+                k: v for k, v in detail.items() if k not in {"code", "message", "detail", "error"}
+            }
+            details = remainder or {
+                "detail": detail.get("detail") or detail.get("error") or message
+            }
         return code, message, details
 
     if isinstance(detail, list):
@@ -85,9 +89,7 @@ def _parse_http_exception_detail(detail: Any, status_code: int) -> tuple[str, st
     return code, message, {"detail": str(detail)}
 
 
-async def http_exception_handler(
-    request: Request, exc: StarletteHTTPException
-) -> JSONResponse:
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     code, message, details = _parse_http_exception_detail(exc.detail, exc.status_code)
     return _build_response(exc.status_code, code, message, details)
 
@@ -103,9 +105,7 @@ async def validation_exception_handler(
     )
 
 
-async def unhandled_exception_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     return _build_response(
         status_code=500,
         code="internal_server_error",
@@ -116,7 +116,7 @@ async def unhandled_exception_handler(
 
 def register_exception_handlers(app) -> None:
     from app.api.deps import StepUpMfaRequired
-    
+
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)
@@ -124,9 +124,7 @@ def register_exception_handlers(app) -> None:
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
 
-async def step_up_mfa_exception_handler(
-    request: Request, exc: "StepUpMfaRequired"
-) -> JSONResponse:
+async def step_up_mfa_exception_handler(request: Request, exc: "StepUpMfaRequired") -> JSONResponse:
     """Handle step-up MFA required exceptions with a structured response."""
     return JSONResponse(
         status_code=403,
@@ -143,9 +141,7 @@ async def step_up_mfa_exception_handler(
     )
 
 
-async def rate_limit_exception_handler(
-    request: Request, exc: RateLimitExceeded
-) -> JSONResponse:
+async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     details = getattr(exc, "detail", None)
     response = _build_response(
         status_code=429,

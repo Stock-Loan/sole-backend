@@ -22,7 +22,9 @@ class OrgDocumentTemplate(Base):
     description = Column(Text, nullable=True)
     file_name = Column(String(255), nullable=False)
     storage_path_or_url = Column(String(1024), nullable=False)
-    uploaded_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    uploaded_by_user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

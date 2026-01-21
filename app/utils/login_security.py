@@ -22,12 +22,17 @@ async def rate_limit(key: str, limit: int, window_seconds: int) -> None:
         pipe.expire(key, window_seconds)
         count, _ = await pipe.execute()
         if count > limit:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded"
+            )
     except RedisError as e:
         logger.error(f"Redis error in rate_limit: {e}")
         # Fail open for general rate limiting to avoid outage, OR fail closed for strict security.
         # For login security, fail closed is usually preferred.
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
 
 
 async def check_lockout(identifier: str) -> None:
@@ -35,10 +40,16 @@ async def check_lockout(identifier: str) -> None:
     try:
         locked_until = await redis.get(f"lock:{identifier}")
         if locked_until:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts; try later")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many login attempts; try later",
+            )
     except RedisError as e:
         logger.error(f"Redis error in check_lockout: {e}")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
 
 
 async def register_login_attempt(identifier: str, success: bool) -> None:
@@ -55,11 +66,17 @@ async def register_login_attempt(identifier: str, success: bool) -> None:
         if attempts >= settings.login_attempt_limit:
             await redis.setex(lock_key, _ttl(settings.login_lockout_minutes * 60), 1)
             await redis.delete(fail_key)
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Account temporarily locked due to failed attempts")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Account temporarily locked due to failed attempts",
+            )
     except RedisError as e:
         logger.error(f"Redis error in register_login_attempt: {e}")
         # We cannot safely track attempts, so we must fail to prevent brute force
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
 
 
 async def is_refresh_used(jti: str) -> bool:
@@ -69,7 +86,10 @@ async def is_refresh_used(jti: str) -> bool:
     except RedisError as e:
         logger.error(f"Redis error in is_refresh_used: {e}")
         # Fail closed: assume token might be used if we can't check
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
 
 
 async def mark_refresh_used(jti: str, expires_at: datetime) -> None:
@@ -82,7 +102,10 @@ async def mark_refresh_used(jti: str, expires_at: datetime) -> None:
     except RedisError as e:
         logger.error(f"Redis error in mark_refresh_used: {e}")
         # If we can't mark it as used, we risk replay attacks.
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service temporarily unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
 
 
 async def enforce_mfa_rate_limit(mfa_token: str) -> None:
@@ -147,5 +170,3 @@ async def record_pbgc_refresh(org_id: str) -> None:
     except RedisError as e:
         logger.error(f"Redis error in record_pbgc_refresh: {e}")
         # Non-critical, proceed without recording
-
-

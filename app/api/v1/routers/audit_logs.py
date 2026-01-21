@@ -73,7 +73,5 @@ async def list_audit_logs(
                 full_name=user.full_name,
                 email=user.email,
             )
-        items.append(
-            AuditLogEntry.model_validate(audit_log).model_copy(update={"actor": actor})
-        )
+        items.append(AuditLogEntry.model_validate(audit_log).model_copy(update={"actor": actor}))
     return AuditLogListResponse(items=items, total=total)

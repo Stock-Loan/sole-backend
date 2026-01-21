@@ -40,7 +40,9 @@ class LoanRepayment(Base):
     principal_amount = Column(Numeric(18, 6), nullable=False, default=0)
     interest_amount = Column(Numeric(18, 6), nullable=False, default=0)
     payment_date = Column(Date, nullable=False)
-    recorded_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    recorded_by_user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     evidence_file_name = Column(String(255), nullable=True)
     evidence_storage_path_or_url = Column(String(1024), nullable=True)
     evidence_content_type = Column(String(100), nullable=True)

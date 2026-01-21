@@ -2,7 +2,12 @@ from datetime import datetime, date
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 
-from app.schemas.common import EmploymentStatus, MaritalStatus, normalize_employment_status, normalize_marital_status
+from app.schemas.common import (
+    EmploymentStatus,
+    MaritalStatus,
+    normalize_employment_status,
+    normalize_marital_status,
+)
 
 
 class UserSummary(BaseModel):

@@ -14,10 +14,9 @@ from app.services import vesting_engine
 
 
 def _membership_active(membership: OrgMembership) -> bool:
-    return (
-        (membership.employment_status or "").upper() == "ACTIVE"
-        and (membership.platform_status or "").upper() == "ACTIVE"
-    )
+    return (membership.employment_status or "").upper() == "ACTIVE" and (
+        membership.platform_status or ""
+    ).upper() == "ACTIVE"
 
 
 def evaluate_eligibility_from_totals(

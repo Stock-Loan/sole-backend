@@ -23,7 +23,9 @@ def _monthly_rate(annual_rate_percent: Decimal) -> Decimal:
     return annual_rate_percent / Decimal("1200")
 
 
-def _payment_principal_and_interest(principal: Decimal, annual_rate_percent: Decimal, term_months: int) -> Decimal:
+def _payment_principal_and_interest(
+    principal: Decimal, annual_rate_percent: Decimal, term_months: int
+) -> Decimal:
     if term_months <= 0:
         return Decimal("0.00")
     rate = _monthly_rate(annual_rate_percent)
@@ -130,15 +132,21 @@ def build_schedule_what_if(
         remaining_principal, _ = _apply_repayments(build_schedule(application).entries, repayments)
         principal = sum(remaining_principal, Decimal("0"))
     else:
-        principal = _as_decimal(payload.principal if payload.principal is not None else application.loan_principal)
+        principal = _as_decimal(
+            payload.principal if payload.principal is not None else application.loan_principal
+        )
     annual_rate = _as_decimal(
         payload.annual_rate_percent
         if payload.annual_rate_percent is not None
         else application.nominal_annual_rate_percent
     )
-    term_months = int(payload.term_months if payload.term_months is not None else application.term_months or 0)
+    term_months = int(
+        payload.term_months if payload.term_months is not None else application.term_months or 0
+    )
     repayment_method = LoanRepaymentMethod(
-        payload.repayment_method if payload.repayment_method is not None else application.repayment_method
+        payload.repayment_method
+        if payload.repayment_method is not None
+        else application.repayment_method
     )
     start_date = (
         payload.as_of_date
@@ -160,11 +168,16 @@ def build_schedule_what_if(
 
 
 def _estimate_monthly_payment(
-    principal: Decimal, annual_rate: Decimal, term_months: int, repayment_method: LoanRepaymentMethod
+    principal: Decimal,
+    annual_rate: Decimal,
+    term_months: int,
+    repayment_method: LoanRepaymentMethod,
 ) -> Decimal:
     if repayment_method == LoanRepaymentMethod.PRINCIPAL_AND_INTEREST:
         return _payment_principal_and_interest(principal, annual_rate, term_months)
-    monthly_interest = (principal * _monthly_rate(annual_rate)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+    monthly_interest = (principal * _monthly_rate(annual_rate)).quantize(
+        TWOPLACES, rounding=ROUND_HALF_UP
+    )
     return monthly_interest
 
 
@@ -222,11 +235,17 @@ def _build_schedule_from_terms(
     if repayment_method == LoanRepaymentMethod.PRINCIPAL_AND_INTEREST:
         monthly_payment = _payment_principal_and_interest(principal, annual_rate, term_months)
         for period in range(1, term_months + 1):
-            interest = (balance * _monthly_rate(annual_rate)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
-            principal_payment = (monthly_payment - interest).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+            interest = (balance * _monthly_rate(annual_rate)).quantize(
+                TWOPLACES, rounding=ROUND_HALF_UP
+            )
+            principal_payment = (monthly_payment - interest).quantize(
+                TWOPLACES, rounding=ROUND_HALF_UP
+            )
             if period == term_months:
                 principal_payment = balance
-                monthly_payment = (principal_payment + interest).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+                monthly_payment = (principal_payment + interest).quantize(
+                    TWOPLACES, rounding=ROUND_HALF_UP
+                )
             balance = (balance - principal_payment).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
             entries.append(
                 LoanScheduleEntry(
@@ -239,13 +258,17 @@ def _build_schedule_from_terms(
                 )
             )
     else:
-        monthly_interest = (principal * _monthly_rate(annual_rate)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+        monthly_interest = (principal * _monthly_rate(annual_rate)).quantize(
+            TWOPLACES, rounding=ROUND_HALF_UP
+        )
         for period in range(1, term_months + 1):
             principal_payment = Decimal("0.00")
             payment = monthly_interest
             if period == term_months:
                 principal_payment = balance
-                payment = (monthly_interest + principal_payment).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+                payment = (monthly_interest + principal_payment).quantize(
+                    TWOPLACES, rounding=ROUND_HALF_UP
+                )
             balance = (balance - principal_payment).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
             entries.append(
                 LoanScheduleEntry(

@@ -7,9 +7,12 @@ from app.core.settings import settings
 from app.core.errors import register_exception_handlers
 from app.core.response_envelope import register_response_envelope
 
+
 @pytest.fixture(autouse=True)
 def _base_env(monkeypatch):
-    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://test:test@localhost:5432/test")
+    monkeypatch.setattr(
+        settings, "database_url", "postgresql+asyncpg://test:test@localhost:5432/test"
+    )
     monkeypatch.setattr(settings, "redis_url", "redis://localhost:6379/0")
     monkeypatch.setattr(settings, "secret_key", "test-secret-key-boot")
     monkeypatch.setattr(settings, "default_org_id", "default")

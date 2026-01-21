@@ -104,12 +104,9 @@ async def set_reservation_status_for_application(
     application_id: UUID,
     status: str,
 ) -> None:
-    stmt = (
-        select(StockGrantReservation)
-        .where(
-            StockGrantReservation.org_id == ctx.org_id,
-            StockGrantReservation.loan_application_id == application_id,
-        )
+    stmt = select(StockGrantReservation).where(
+        StockGrantReservation.org_id == ctx.org_id,
+        StockGrantReservation.loan_application_id == application_id,
     )
     result = await db.execute(stmt)
     reservations = result.scalars().all()

@@ -20,7 +20,11 @@ from app.services import pbgc_rates, settings as settings_service
 router = APIRouter(prefix="/self", tags=["self"])
 
 
-@router.get("/context", response_model=SelfContextResponse, summary="Get current org context, roles, and permissions")
+@router.get(
+    "/context",
+    response_model=SelfContextResponse,
+    summary="Get current org context, roles, and permissions",
+)
 async def get_self_context(
     current_user: User = Depends(deps.require_authenticated_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -35,7 +39,11 @@ async def get_self_context(
     roles_stmt = (
         select(Role)
         .join(UserRole, UserRole.role_id == Role.id)
-        .where(UserRole.user_id == current_user.id, Role.org_id == ctx.org_id, UserRole.org_id == ctx.org_id)
+        .where(
+            UserRole.user_id == current_user.id,
+            Role.org_id == ctx.org_id,
+            UserRole.org_id == ctx.org_id,
+        )
     )
     roles_result = await db.execute(roles_stmt)
     roles = roles_result.scalars().all()
@@ -71,9 +79,7 @@ async def get_self_policy(
     latest_rate = await pbgc_rates.get_latest_annual_rate(db)
     response = OrgPolicyResponse.model_validate(settings)
     if latest_rate is not None:
-        response = response.model_copy(
-            update={"variable_base_rate_annual_percent": latest_rate}
-        )
+        response = response.model_copy(update={"variable_base_rate_annual_percent": latest_rate})
     return response
 
 

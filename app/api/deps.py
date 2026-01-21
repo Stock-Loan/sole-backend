@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class StepUpMfaRequired(Exception):
     """Exception raised when step-up MFA is required for an action."""
+
     def __init__(self, challenge_token: str, action: str):
         self.challenge_token = challenge_token
         self.action = action
@@ -73,7 +74,9 @@ async def get_tenant_context(
             try:
                 payload = decode_token(token)
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+                ) from exc
             token_org = payload.get("org")
             token_is_superuser = bool(payload.get("su"))
 
@@ -144,9 +147,13 @@ async def _get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     if settings.tenancy_mode == "multi":
         if not token_org:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim"
+            )
         if token_org != ctx.org_id and not token_is_superuser:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
+            )
 
     if token_is_superuser and token_org != ctx.org_id:
         stmt = select(User).where(User.id == user_sub)
@@ -197,7 +204,7 @@ async def _require_mfa_for_request(
     org_settings = await settings_service.get_org_settings(db, ctx)
     if not settings_service.is_mfa_action_required(org_settings, action):
         return
-    
+
     # For action-level MFA, check for step-up token first
     if action is not None:
         step_up_token = _extract_step_up_token(request)
@@ -213,7 +220,7 @@ async def _require_mfa_for_request(
                     return  # Step-up MFA already completed
             except ValueError:
                 pass  # Invalid step-up token, continue to require new challenge
-        
+
         # No valid step-up token, create a challenge and raise exception
         challenge_token = create_step_up_challenge_token(
             str(current_user.id),
@@ -221,7 +228,7 @@ async def _require_mfa_for_request(
             action,
         )
         raise StepUpMfaRequired(challenge_token=challenge_token, action=action)
-    
+
     # For general MFA requirement (not action-specific), check token claims
     token = _extract_bearer_token(request)
     if not token:
@@ -244,7 +251,9 @@ def require_permission_with_mfa(
 ):
     async def dependency(
         request: Request,
-        current_user: User = Depends(require_permission(permission_code, resource_type, resource_id_param)),
+        current_user: User = Depends(
+            require_permission(permission_code, resource_type, resource_id_param)
+        ),
         ctx: TenantContext = Depends(get_tenant_context),
         db: AsyncSession = Depends(get_db_session),
     ) -> User:
@@ -264,7 +273,11 @@ async def require_mfa_for_action(
     await _require_mfa_for_request(request, current_user, ctx, db, action=action)
 
 
-def require_permission(permission_code: PermissionCode | str, resource_type: str | None = None, resource_id_param: str | None = None):
+def require_permission(
+    permission_code: PermissionCode | str,
+    resource_type: str | None = None,
+    resource_id_param: str | None = None,
+):
     async def dependency(
         request: Request,
         current_user: User = Depends(require_authenticated_user),
@@ -272,7 +285,9 @@ def require_permission(permission_code: PermissionCode | str, resource_type: str
         db: AsyncSession = Depends(get_db_session),
     ) -> User:
         if not ctx.org_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant context missing")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant context missing"
+            )
         resource_id = None
         if resource_type and resource_id_param:
             resource_id = request.path_params.get(resource_id_param)
@@ -285,7 +300,11 @@ def require_permission(permission_code: PermissionCode | str, resource_type: str
             resource_id=resource_id,
         )
         if not allowed:
-            target = permission_code.value if isinstance(permission_code, PermissionCode) else str(permission_code)
+            target = (
+                permission_code.value
+                if isinstance(permission_code, PermissionCode)
+                else str(permission_code)
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing permission: {target}",

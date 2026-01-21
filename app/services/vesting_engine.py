@@ -52,19 +52,25 @@ def compute_grant_vesting(grant: EmployeeStockGrant, as_of: date) -> tuple[int, 
     if strategy == "IMMEDIATE":
         vested = total if grant.grant_date <= as_of else 0
     else:
-        vested = sum(int(event.shares) for event in grant.vesting_events if event.vest_date <= as_of)
+        vested = sum(
+            int(event.shares) for event in grant.vesting_events if event.vest_date <= as_of
+        )
     vested = min(vested, total)
     unvested = max(total - vested, 0)
     return int(vested), int(unvested)
 
 
-def next_vesting_event(grants: Iterable[EmployeeStockGrant], as_of: date) -> NextVestingEvent | None:
+def next_vesting_event(
+    grants: Iterable[EmployeeStockGrant], as_of: date
+) -> NextVestingEvent | None:
     upcoming: dict[date, int] = {}
     for grant in grants:
         strategy = _normalize_strategy(grant.vesting_strategy)
         if strategy == "IMMEDIATE":
             if grant.grant_date > as_of:
-                upcoming[grant.grant_date] = upcoming.get(grant.grant_date, 0) + _grant_total_shares(grant)
+                upcoming[grant.grant_date] = upcoming.get(
+                    grant.grant_date, 0
+                ) + _grant_total_shares(grant)
             continue
         for event in grant.vesting_events:
             if event.vest_date > as_of:
@@ -84,7 +90,9 @@ def upcoming_vesting_events(
         strategy = _normalize_strategy(grant.vesting_strategy)
         if strategy == "IMMEDIATE":
             if grant.grant_date > as_of:
-                upcoming[grant.grant_date] = upcoming.get(grant.grant_date, 0) + _grant_total_shares(grant)
+                upcoming[grant.grant_date] = upcoming.get(
+                    grant.grant_date, 0
+                ) + _grant_total_shares(grant)
             continue
         for event in grant.vesting_events:
             if event.vest_date > as_of:
@@ -98,7 +106,9 @@ def upcoming_vesting_events(
     return events[: max(limit, 0)]
 
 
-def build_grant_summaries(grants: Iterable[EmployeeStockGrant], as_of: date) -> list[GrantVestingSummary]:
+def build_grant_summaries(
+    grants: Iterable[EmployeeStockGrant], as_of: date
+) -> list[GrantVestingSummary]:
     summaries: list[GrantVestingSummary] = []
     for grant in grants:
         vested, unvested = compute_grant_vesting(grant, as_of)

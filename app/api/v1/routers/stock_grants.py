@@ -38,7 +38,9 @@ async def list_grants(
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     offset = (page - 1) * page_size
-    grants, total = await stock_grants.list_grants(db, ctx, membership_id, offset=offset, limit=page_size)
+    grants, total = await stock_grants.list_grants(
+        db, ctx, membership_id, offset=offset, limit=page_size
+    )
     return StockGrantListResponse(items=grants, total=total)
 
 
@@ -134,7 +136,7 @@ async def update_grant(
     grant = await stock_grants.get_grant(db, ctx, grant_id)
     if not grant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
-    
+
     # Require step-up MFA if status is being changed
     if payload.status is not None:
         await deps.require_mfa_for_action(
@@ -144,7 +146,7 @@ async def update_grant(
             db,
             action=MfaEnforcementAction.STOCK_STATUS_CHANGE.value,
         )
-    
+
     try:
         updated = await stock_grants.update_grant(
             db,

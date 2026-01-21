@@ -9,9 +9,7 @@ from app.db.base import Base
 class Announcement(Base):
     __tablename__ = "announcements"
     __allow_unmapped__ = True
-    __table_args__ = (
-        UniqueConstraint("org_id", "title", name="uq_announcements_org_title"),
-    )
+    __table_args__ = (UniqueConstraint("org_id", "title", name="uq_announcements_org_title"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -42,7 +40,9 @@ class AnnouncementRead(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    announcement_id = Column(UUID(as_uuid=True), ForeignKey("announcements.id", ondelete="CASCADE"), nullable=False)
+    announcement_id = Column(
+        UUID(as_uuid=True), ForeignKey("announcements.id", ondelete="CASCADE"), nullable=False
+    )
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     read_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

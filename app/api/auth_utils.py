@@ -39,7 +39,7 @@ async def require_step_up_mfa(
                 return  # Step-up MFA already completed
         except ValueError:
             pass  # Invalid step-up token, continue to require new challenge
-    
+
     # No valid step-up token, create a challenge and raise exception
     challenge_token = create_step_up_challenge_token(
         str(current_user.id),

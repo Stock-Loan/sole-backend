@@ -22,6 +22,7 @@ class DummyUser:
         self.mfa_enabled = False
         self.token_version = 0
         self.last_active_at = None
+        self.must_change_password = False
 
 
 class FakeResult:
@@ -30,6 +31,9 @@ class FakeResult:
 
     def scalar_one_or_none(self):
         return self.user
+    
+    def all(self):
+        return []
 
 
 class FakeSession:
@@ -55,6 +59,9 @@ def override_dependencies(user: DummyUser, session: FakeSession) -> None:
     async def _get_current_user():
         return user
 
+    async def _get_current_user_allow_password_change():
+        return user
+
     async def _get_db():
         yield session
 
@@ -62,12 +69,16 @@ def override_dependencies(user: DummyUser, session: FakeSession) -> None:
         return deps.TenantContext(org_id="default")
 
     app.dependency_overrides[deps.get_current_user] = _get_current_user
+    app.dependency_overrides[deps.get_current_user_allow_password_change] = (
+        _get_current_user_allow_password_change
+    )
     app.dependency_overrides[get_db] = _get_db
     app.dependency_overrides[deps.get_tenant_context] = _get_ctx
 
 
 def clear_overrides() -> None:
     app.dependency_overrides.pop(deps.get_current_user, None)
+    app.dependency_overrides.pop(deps.get_current_user_allow_password_change, None)
     app.dependency_overrides.pop(get_db, None)
     app.dependency_overrides.pop(deps.get_tenant_context, None)
 
@@ -103,6 +114,13 @@ def _patch_keys(monkeypatch, tmp_path):
     security._load_public_key.cache_clear()
 
 
+def get_data(resp):
+    json_data = resp.json()
+    if "data" in json_data:
+        return json_data["data"]
+    return json_data
+
+
 def test_change_password_success(tmp_path, monkeypatch):
     user = DummyUser()
     session = FakeSession(user)
@@ -115,7 +133,7 @@ def test_change_password_success(tmp_path, monkeypatch):
         json={"current_password": "OldPassword123!", "new_password": "NewPassword123!"},
     )
     assert resp.status_code == 200
-    data = resp.json()["data"]
+    data = get_data(resp)
     assert "access_token" in data and "refresh_token" in data
     assert user.token_version == 1
     assert verify_password("NewPassword123!", user.hashed_password)
@@ -160,20 +178,23 @@ def test_login_start_and_complete(monkeypatch, tmp_path):
 
     monkeypatch.setattr("app.api.v1.routers.auth.enforce_login_limits", noop_enforce)
     monkeypatch.setattr("app.api.v1.routers.auth.record_login_attempt", noop_record)
+
     async def noop_get_org_settings(*_args, **_kwargs):
         return DummyOrgSettings()
 
-    monkeypatch.setattr("app.api.v1.routers.auth.settings_service.get_org_settings", noop_get_org_settings)
+    monkeypatch.setattr(
+        "app.api.v1.routers.auth.settings_service.get_org_settings", noop_get_org_settings
+    )
 
     client = TestClient(app)
     start_resp = client.post("/api/v1/auth/login/start", json={"email": user.email})
     assert start_resp.status_code == 200
-    challenge = start_resp.json()["data"]["challenge_token"]
+    challenge = get_data(start_resp)["challenge_token"]
 
     complete_resp = client.post(
         "/api/v1/auth/login/complete",
         json={"challenge_token": challenge, "password": "OldPassword123!"},
     )
     assert complete_resp.status_code == 200
-    data = complete_resp.json()["data"]
+    data = get_data(complete_resp)
     assert "access_token" in data and "refresh_token" in data

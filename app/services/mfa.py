@@ -146,7 +146,7 @@ async def generate_recovery_codes(
     )
     await db.execute(stmt)
     await db.flush()  # Ensure deletion is applied before generating new codes
-    
+
     # Generate new codes
     plain_codes: list[str] = []
     for _ in range(RECOVERY_CODE_COUNT):
@@ -158,7 +158,7 @@ async def generate_recovery_codes(
             code_hash=_hash_recovery_code(code),
         )
         db.add(recovery)
-    
+
     await db.commit()
     return plain_codes
 
@@ -180,10 +180,10 @@ async def verify_recovery_code(
     )
     result = await db.execute(stmt)
     recovery = result.scalar_one_or_none()
-    
+
     if not recovery:
         return False
-    
+
     # Mark as used
     recovery.used_at = datetime.now(timezone.utc)
     db.add(recovery)
@@ -199,10 +199,15 @@ async def get_remaining_recovery_codes_count(
 ) -> int:
     """Get the count of unused recovery codes for a user."""
     from sqlalchemy import func
-    stmt = select(func.count()).select_from(UserMfaRecoveryCode).where(
-        UserMfaRecoveryCode.org_id == org_id,
-        UserMfaRecoveryCode.user_id == user_id,
-        UserMfaRecoveryCode.used_at.is_(None),
+
+    stmt = (
+        select(func.count())
+        .select_from(UserMfaRecoveryCode)
+        .where(
+            UserMfaRecoveryCode.org_id == org_id,
+            UserMfaRecoveryCode.user_id == user_id,
+            UserMfaRecoveryCode.used_at.is_(None),
+        )
     )
     result = await db.execute(stmt)
     return result.scalar() or 0
@@ -249,7 +254,7 @@ async def clear_user_mfa(
     user.mfa_method = None
     user.mfa_confirmed_at = None
     db.add(user)
-    
+
     await delete_user_devices(db, org_id=org_id, user_id=user.id)
     await delete_user_recovery_codes(db, org_id=org_id, user_id=user.id)
     await db.commit()

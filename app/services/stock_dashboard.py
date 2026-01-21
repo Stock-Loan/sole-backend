@@ -23,7 +23,12 @@ from app.schemas.stock import (
     StockDashboardMembershipSnapshot,
     NextVestingEvent,
 )
-from app.services import eligibility, settings as settings_service, stock_reservations, vesting_engine
+from app.services import (
+    eligibility,
+    settings as settings_service,
+    stock_reservations,
+    vesting_engine,
+)
 from app.utils.redis_client import get_redis_client
 
 
@@ -46,7 +51,9 @@ async def _get_cached_summary(org_id: str, as_of_date: date) -> StockDashboardSu
     return None
 
 
-async def _set_cached_summary(summary: StockDashboardSummary, org_id: str, as_of_date: date) -> None:
+async def _set_cached_summary(
+    summary: StockDashboardSummary, org_id: str, as_of_date: date
+) -> None:
     try:
         redis = get_redis_client()
         await redis.setex(
@@ -186,7 +193,9 @@ def build_dashboard_summary_from_data(
         ),
         exercise_price_range=StockDashboardExercisePriceRange(min=price_min, max=price_max),
         reservation_pressure=StockDashboardReservationPressure(
-            reserved_share_percent_of_vested=_reserved_percent(total_reserved, totals.total_vested_shares),
+            reserved_share_percent_of_vested=_reserved_percent(
+                total_reserved, totals.total_vested_shares
+            ),
             reserved_by_status=reserved_by_status,
         ),
         membership_snapshot=StockDashboardMembershipSnapshot(
@@ -225,7 +234,9 @@ async def build_dashboard_summary(
         .group_by(OrgMembership.platform_status)
     )
     platform_counts = {
-        row[0]: row[1] for row in (await db.execute(platform_counts_stmt)).all() if row[0] is not None
+        row[0]: row[1]
+        for row in (await db.execute(platform_counts_stmt)).all()
+        if row[0] is not None
     }
     employment_counts_stmt = (
         select(OrgMembership.employment_status, func.count())
@@ -233,7 +244,9 @@ async def build_dashboard_summary(
         .group_by(OrgMembership.employment_status)
     )
     employment_counts = {
-        row[0]: row[1] for row in (await db.execute(employment_counts_stmt)).all() if row[0] is not None
+        row[0]: row[1]
+        for row in (await db.execute(employment_counts_stmt)).all()
+        if row[0] is not None
     }
 
     grant_status_stmt = (
@@ -250,7 +263,9 @@ async def build_dashboard_summary(
         .group_by(EmployeeStockGrant.vesting_strategy)
     )
     grant_strategy_counts = {
-        row[0]: row[1] for row in (await db.execute(grant_strategy_stmt)).all() if row[0] is not None
+        row[0]: row[1]
+        for row in (await db.execute(grant_strategy_stmt)).all()
+        if row[0] is not None
     }
 
     membership_ids = {grant.org_membership_id for grant in grants}

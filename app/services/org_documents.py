@@ -48,8 +48,10 @@ async def list_folders(
     ctx: deps.TenantContext,
 ) -> list[OrgDocumentFolder]:
     await ensure_default_folders(db, ctx.org_id)
-    stmt = select(OrgDocumentFolder).where(OrgDocumentFolder.org_id == ctx.org_id).order_by(
-        OrgDocumentFolder.is_system.desc(), OrgDocumentFolder.name.asc()
+    stmt = (
+        select(OrgDocumentFolder)
+        .where(OrgDocumentFolder.org_id == ctx.org_id)
+        .order_by(OrgDocumentFolder.is_system.desc(), OrgDocumentFolder.name.asc())
     )
     return (await db.execute(stmt)).scalars().all()
 
@@ -113,9 +115,13 @@ async def delete_folder(
     ctx: deps.TenantContext,
     folder: OrgDocumentFolder,
 ) -> None:
-    stmt = select(func.count()).select_from(OrgDocumentTemplate).where(
-        OrgDocumentTemplate.org_id == ctx.org_id,
-        OrgDocumentTemplate.folder_id == folder.id,
+    stmt = (
+        select(func.count())
+        .select_from(OrgDocumentTemplate)
+        .where(
+            OrgDocumentTemplate.org_id == ctx.org_id,
+            OrgDocumentTemplate.folder_id == folder.id,
+        )
     )
     count = (await db.execute(stmt)).scalar_one() or 0
     if count:
@@ -150,8 +156,8 @@ async def get_template(
         select(OrgDocumentTemplate)
         .options(selectinload(OrgDocumentTemplate.uploaded_by_user))
         .where(
-        OrgDocumentTemplate.org_id == ctx.org_id,
-        OrgDocumentTemplate.id == template_id,
+            OrgDocumentTemplate.org_id == ctx.org_id,
+            OrgDocumentTemplate.id == template_id,
         )
     )
     return (await db.execute(stmt)).scalar_one_or_none()

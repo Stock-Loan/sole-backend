@@ -102,7 +102,9 @@ class SelfLoanSummary(BaseModel):
     has_83b_election: bool | None = None
     days_until_83b_due: int | None = None
 
-    model_config = ConfigDict(json_encoders={Decimal: lambda value: str(value)}, use_enum_values=True)
+    model_config = ConfigDict(
+        json_encoders={Decimal: lambda value: str(value)}, use_enum_values=True
+    )
 
 
 class RepaymentHistoryItem(BaseModel):

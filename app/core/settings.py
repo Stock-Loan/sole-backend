@@ -19,8 +19,12 @@ class Settings(BaseSettings):
     tenancy_mode: Literal["single", "multi"] = Field(default="single", alias="TENANCY_MODE")
     session_timeout_minutes: int = Field(default=30, alias="SESSION_TIMEOUT_MINUTES")
     access_token_expire_minutes: int = Field(default=15, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
-    refresh_token_expire_minutes: int = Field(default=60 * 24 * 7, alias="REFRESH_TOKEN_EXPIRE_MINUTES")
-    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"], alias="ALLOWED_ORIGINS")
+    refresh_token_expire_minutes: int = Field(
+        default=60 * 24 * 7, alias="REFRESH_TOKEN_EXPIRE_MINUTES"
+    )
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000"], alias="ALLOWED_ORIGINS"
+    )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     enable_hsts: bool = Field(default=True, alias="ENABLE_HSTS")
     default_org_id: str = Field(default="default", alias="DEFAULT_ORG_ID")
@@ -38,7 +42,11 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = Field(default=15, alias="LOGIN_LOCKOUT_MINUTES")
     default_password_min_length: int = Field(default=12, alias="DEFAULT_PASSWORD_MIN_LENGTH")
     proxies_count: int = Field(default=0, alias="PROXIES_COUNT")
-    extra_seed_org_ids: str = Field(default="", alias="EXTRA_SEED_ORG_IDS", description="Comma-separated org_ids to also grant seed admin ORG_ADMIN")
+    extra_seed_org_ids: str = Field(
+        default="",
+        alias="EXTRA_SEED_ORG_IDS",
+        description="Comma-separated org_ids to also grant seed admin ORG_ADMIN",
+    )
     seed_admin_email: str = Field(alias="SEED_ADMIN_EMAIL")
     seed_admin_password: str = Field(alias="SEED_ADMIN_PASSWORD")
     seed_admin_full_name: str = Field(default="Admin User", alias="SEED_ADMIN_FULL_NAME")

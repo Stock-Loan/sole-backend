@@ -28,9 +28,7 @@ from app.services import loan_applications, loan_quotes, loan_workflow
 router = APIRouter(prefix="/me/loan-applications", tags=["loan-applications"])
 
 
-async def _get_membership_or_404(
-    db: AsyncSession, ctx: deps.TenantContext, user_id
-):
+async def _get_membership_or_404(db: AsyncSession, ctx: deps.TenantContext, user_id):
     membership = await loan_applications.get_membership_for_user(db, ctx, user_id)
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
@@ -47,8 +45,12 @@ def _current_stage_from_workflow(stages):
 
 
 def _build_self_payload(application: LoanApplication) -> LoanApplicationSelfDTO:
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
-    current_stage_type, current_stage_status = _current_stage_from_workflow(application.workflow_stages or [])
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        application
+    )
+    current_stage_type, current_stage_status = _current_stage_from_workflow(
+        application.workflow_stages or []
+    )
     return LoanApplicationSelfDTO.model_validate(application).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
@@ -79,7 +81,11 @@ def _build_self_payload(application: LoanApplication) -> LoanApplicationSelfDTO:
     )
 
 
-@router.get("", response_model=LoanApplicationSelfListResponse, summary="List loan applications for the current user")
+@router.get(
+    "",
+    response_model=LoanApplicationSelfListResponse,
+    summary="List loan applications for the current user",
+)
 async def list_loan_applications(
     current_user: User = Depends(deps.require_permission(PermissionCode.LOAN_VIEW_OWN)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -176,13 +182,19 @@ async def get_loan_application(
         db, ctx, application_id, membership_id=membership.id
     )
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     activated = await loan_workflow.try_activate_loan(db, ctx, application)
     if activated:
         await db.commit()
         await db.refresh(application)
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
-    current_stage_type, current_stage_status = _current_stage_from_workflow(application.workflow_stages or [])
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        application
+    )
+    current_stage_type, current_stage_status = _current_stage_from_workflow(
+        application.workflow_stages or []
+    )
     return _build_self_payload(application)
 
 
@@ -242,7 +254,9 @@ async def update_loan_application(
     result = await db.execute(stmt)
     application = result.scalar_one_or_none()
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     try:
         updated = await loan_applications.update_draft_application(
             db,
@@ -299,7 +313,9 @@ async def submit_loan_application(
     result = await db.execute(stmt)
     application = result.scalar_one_or_none()
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     try:
         submitted = await loan_applications.submit_application(
             db,
@@ -351,7 +367,9 @@ async def cancel_loan_application(
     result = await db.execute(stmt)
     application = result.scalar_one_or_none()
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     try:
         cancelled = await loan_applications.cancel_draft_application(
             db, ctx, application, actor_id=current_user.id

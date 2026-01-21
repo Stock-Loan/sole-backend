@@ -13,7 +13,13 @@ from app.models.org_membership import OrgMembership
 from app.models.role import Role
 from app.models.user_role import UserRole
 from app.models.user import User
-from app.schemas.roles import RoleAssignmentRequest, RoleCreate, RoleListResponse, RoleOut, RoleUpdate
+from app.schemas.roles import (
+    RoleAssignmentRequest,
+    RoleCreate,
+    RoleListResponse,
+    RoleOut,
+    RoleUpdate,
+)
 from app.schemas.settings import MfaEnforcementAction
 from app.schemas.users import UserListResponse
 from app.models.department import Department
@@ -41,7 +47,9 @@ async def list_roles(
     return RoleListResponse(items=roles, total=total)
 
 
-@router.get("/{role_id}/members", response_model=UserListResponse, summary="List members assigned to a role")
+@router.get(
+    "/{role_id}/members", response_model=UserListResponse, summary="List members assigned to a role"
+)
 async def list_role_members(
     role_id: UUID,
     page: int = Query(1, ge=1),
@@ -89,7 +97,9 @@ async def list_role_members(
     items = []
     for membership, user, dept in rows:
         membership.department_name = dept.name if dept else None
-        items.append({"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])})
+        items.append(
+            {"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])}
+        )
     return UserListResponse(items=items, total=total)
 
 
@@ -122,11 +132,18 @@ async def create_role(
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role name already exists") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Role name already exists"
+        ) from exc
     await db.refresh(role)
     logger.info(
         "Role created",
-        extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name, "system": role.is_system_role},
+        extra={
+            "org_id": ctx.org_id,
+            "role_id": str(role.id),
+            "name": role.name,
+            "system": role.is_system_role,
+        },
     )
     record_audit_log(
         db,
@@ -156,7 +173,9 @@ async def update_role(
     if not role:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
     if role.is_system_role:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System roles cannot be edited")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="System roles cannot be edited"
+        )
 
     old_snapshot = model_snapshot(role)
     updates = payload.model_dump(exclude_unset=True)
@@ -181,9 +200,11 @@ async def update_role(
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role name already exists") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Role name already exists"
+        ) from exc
     await db.refresh(role)
-    
+
     # Invalidate cache for all users with this role
     user_role_stmt = select(UserRole.user_id).where(
         UserRole.org_id == ctx.org_id,
@@ -195,7 +216,12 @@ async def update_role(
 
     logger.info(
         "Role updated",
-        extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name, "system": role.is_system_role},
+        extra={
+            "org_id": ctx.org_id,
+            "role_id": str(role.id),
+            "name": role.name,
+            "system": role.is_system_role,
+        },
     )
     record_audit_log(
         db,
@@ -224,7 +250,9 @@ async def delete_role(
     if not role:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
     if role.is_system_role:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System roles cannot be deleted")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="System roles cannot be deleted"
+        )
 
     # Invalidate cache for users who had this role
     user_role_stmt = select(UserRole.user_id).where(
@@ -247,7 +275,7 @@ async def delete_role(
         new_value=None,
     )
     await db.commit()
-    
+
     for user_id in users_to_invalidate:
         await invalidate_permission_cache(str(user_id), ctx.org_id)
 
@@ -321,19 +349,27 @@ async def assign_roles_to_user(
     # Optimization: Perform checks once if possible, but role names might differ
     # We can check platform/employment status once
     platform_active = membership.platform_status and membership.platform_status.upper() == "ACTIVE"
-    employment_active = membership.employment_status and membership.employment_status.upper() == "ACTIVE"
+    employment_active = (
+        membership.employment_status and membership.employment_status.upper() == "ACTIVE"
+    )
 
     if not employment_active:
-         raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "membership_inactive", "message": "Cannot assign role when employment status is not ACTIVE"},
+            detail={
+                "code": "membership_inactive",
+                "message": "Cannot assign role when employment status is not ACTIVE",
+            },
         )
 
     for role in roles:
         if role.name != "EMPLOYEE" and not platform_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "membership_inactive", "message": f"Platform status must be ACTIVE for role {role.name}"},
+                detail={
+                    "code": "membership_inactive",
+                    "message": f"Platform status must be ACTIVE for role {role.name}",
+                },
             )
 
     # Identify which ones need insertion
@@ -348,7 +384,9 @@ async def assign_roles_to_user(
     to_add = [rid for rid in role_ids if rid not in existing_ids]
 
     if to_add:
-        db.add_all([UserRole(org_id=ctx.org_id, user_id=membership.user_id, role_id=rid) for rid in to_add])
+        db.add_all(
+            [UserRole(org_id=ctx.org_id, user_id=membership.user_id, role_id=rid) for rid in to_add]
+        )
         for role_id in to_add:
             record_audit_log(
                 db,
@@ -361,15 +399,19 @@ async def assign_roles_to_user(
                 new_value={"user_id": str(membership.user_id), "role_id": str(role_id)},
             )
         await db.commit()
-        
+
         # Invalidate permission cache for this user
         await invalidate_permission_cache(str(membership.user_id), ctx.org_id)
-        
+
         logger.info(
             "Assigned roles",
-            extra={"org_id": ctx.org_id, "user_id": str(membership.user_id), "role_ids": [str(rid) for rid in to_add]},
+            extra={
+                "org_id": ctx.org_id,
+                "user_id": str(membership.user_id),
+                "role_ids": [str(rid) for rid in to_add],
+            },
         )
-    
+
     return roles
 
 
@@ -424,13 +466,17 @@ async def remove_roles_from_user(
             new_value=None,
         )
     await db.commit()
-    
+
     # Invalidate permission cache for this user
     await invalidate_permission_cache(str(membership.user_id), ctx.org_id)
-    
+
     logger.info(
         "Removed roles",
-        extra={"org_id": ctx.org_id, "user_id": str(membership.user_id), "role_ids": [str(rid) for rid in payload.role_ids]},
+        extra={
+            "org_id": ctx.org_id,
+            "user_id": str(membership.user_id),
+            "role_ids": [str(rid) for rid in payload.role_ids],
+        },
     )
     return None
 

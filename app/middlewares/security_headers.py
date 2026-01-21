@@ -19,5 +19,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
         if self.enable_hsts:
-            response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload"
+            )
         return response

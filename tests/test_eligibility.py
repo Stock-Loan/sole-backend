@@ -84,7 +84,9 @@ def test_ineligible_when_employment_inactive():
 
 
 def test_ineligible_when_service_duration_short():
-    settings = _settings(enforce_service_duration_rule=True, min_service_duration_years=Decimal("1"))
+    settings = _settings(
+        enforce_service_duration_rule=True, min_service_duration_years=Decimal("1")
+    )
     membership = _membership(employment_start_date=date.today() - timedelta(days=30))
     totals = _totals(vested=100)
     result = eligibility.evaluate_eligibility_from_totals(
@@ -94,7 +96,9 @@ def test_ineligible_when_service_duration_short():
         as_of_date=date.today(),
     )
     assert result.eligible_to_exercise is False
-    assert any(r.code == EligibilityReasonCode.INSUFFICIENT_SERVICE_DURATION for r in result.reasons)
+    assert any(
+        r.code == EligibilityReasonCode.INSUFFICIENT_SERVICE_DURATION for r in result.reasons
+    )
 
 
 def test_ineligible_when_below_min_vested_threshold():

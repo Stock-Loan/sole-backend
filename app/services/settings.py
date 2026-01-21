@@ -132,9 +132,13 @@ def _validate_loan_policy(
     if not allowed_repayment_methods:
         errors.append("allowed_repayment_methods must include at least one repayment method")
     else:
-        unknown = [value for value in allowed_repayment_methods if value not in ALLOWED_REPAYMENT_METHODS]
+        unknown = [
+            value for value in allowed_repayment_methods if value not in ALLOWED_REPAYMENT_METHODS
+        ]
         if unknown:
-            errors.append(f"allowed_repayment_methods contains invalid values: {', '.join(unknown)}")
+            errors.append(
+                f"allowed_repayment_methods contains invalid values: {', '.join(unknown)}"
+            )
 
     if not allowed_interest_types:
         errors.append("allowed_interest_types must include at least one interest type")
@@ -207,9 +211,7 @@ async def get_org_settings(
         ),
         min_loan_term_months=DEFAULT_SETTINGS.min_loan_term_months,
         max_loan_term_months=DEFAULT_SETTINGS.max_loan_term_months,
-        allowed_interest_types=_normalize_enum_list(
-            list(DEFAULT_SETTINGS.allowed_interest_types)
-        ),
+        allowed_interest_types=_normalize_enum_list(list(DEFAULT_SETTINGS.allowed_interest_types)),
         fixed_interest_rate_annual_percent=DEFAULT_SETTINGS.fixed_interest_rate_annual_percent,
         variable_base_rate_annual_percent=DEFAULT_SETTINGS.variable_base_rate_annual_percent,
         variable_margin_annual_percent=DEFAULT_SETTINGS.variable_margin_annual_percent,
@@ -236,18 +238,24 @@ async def update_org_settings(
         data["mfa_required_actions"] = []
     if "mfa_required_actions" in data and data["mfa_required_actions"] is not None:
         data["mfa_required_actions"] = _normalize_enum_list(data["mfa_required_actions"])
-        unknown = [value for value in data["mfa_required_actions"] if value not in ALLOWED_MFA_ACTIONS]
+        unknown = [
+            value for value in data["mfa_required_actions"] if value not in ALLOWED_MFA_ACTIONS
+        ]
         if unknown:
-            raise ValueError(
-                f"mfa_required_actions contains invalid values: {', '.join(unknown)}"
-            )
+            raise ValueError(f"mfa_required_actions contains invalid values: {', '.join(unknown)}")
     if "allowed_repayment_methods" in data and data["allowed_repayment_methods"] is not None:
         data["allowed_repayment_methods"] = _normalize_enum_list(data["allowed_repayment_methods"])
     if "allowed_interest_types" in data and data["allowed_interest_types"] is not None:
         data["allowed_interest_types"] = _normalize_enum_list(data["allowed_interest_types"])
-    if data.get("enforce_service_duration_rule") is False and "min_service_duration_years" not in data:
+    if (
+        data.get("enforce_service_duration_rule") is False
+        and "min_service_duration_years" not in data
+    ):
         data["min_service_duration_years"] = None
-    if data.get("enforce_min_vested_to_exercise") is False and "min_vested_shares_to_exercise" not in data:
+    if (
+        data.get("enforce_min_vested_to_exercise") is False
+        and "min_vested_shares_to_exercise" not in data
+    ):
         data["min_vested_shares_to_exercise"] = None
     if data.get("require_down_payment") is False and "down_payment_percent" not in data:
         data["down_payment_percent"] = None

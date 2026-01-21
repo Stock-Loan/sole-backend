@@ -9,8 +9,13 @@ from app.db.session import AsyncSessionLocal
 from app.models.org import Org
 from app.models.org_membership import OrgMembership
 from app.models.user import User
-from app.services.authz import ensure_org_admin_for_seed_user, ensure_user_in_role, seed_system_roles
+from app.services.authz import (
+    ensure_org_admin_for_seed_user,
+    ensure_user_in_role,
+    seed_system_roles,
+)
 from app.services.orgs import ensure_audit_partitions_for_orgs
+
 
 async def init_db() -> None:
     """
@@ -43,7 +48,9 @@ async def init_db() -> None:
         # Ensure system roles exist for the default org
         roles = await seed_system_roles(session, settings.default_org_id)
 
-        stmt = select(User).where(User.email == settings.seed_admin_email, User.org_id == settings.default_org_id)
+        stmt = select(User).where(
+            User.email == settings.seed_admin_email, User.org_id == settings.default_org_id
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -72,7 +79,9 @@ async def init_db() -> None:
             await ensure_user_in_role(session, settings.default_org_id, user.id, admin_role)
             # Also ensure admin has ORG_ADMIN in any additional orgs provided via settings (comma-separated)
             if settings.extra_seed_org_ids:
-                org_ids = [settings.default_org_id] + [oid.strip() for oid in settings.extra_seed_org_ids.split(",") if oid.strip()]
+                org_ids = [settings.default_org_id] + [
+                    oid.strip() for oid in settings.extra_seed_org_ids.split(",") if oid.strip()
+                ]
                 await ensure_org_admin_for_seed_user(session, user.id, org_ids)
 
         # Ensure admin also has EMPLOYEE role (everyone gets EMPLOYEE by default)
@@ -101,6 +110,7 @@ async def init_db() -> None:
             session.add(membership)
             await session.commit()
             print("Seed admin membership created for default org.")
+
 
 if __name__ == "__main__":
     asyncio.run(init_db())

@@ -64,7 +64,9 @@ class LoanQuoteRequest(BaseModel):
 
 
 class LoanQuoteOption(BaseModel):
-    model_config = ConfigDict(use_enum_values=True, json_encoders={Decimal: lambda value: str(value)})
+    model_config = ConfigDict(
+        use_enum_values=True, json_encoders={Decimal: lambda value: str(value)}
+    )
 
     interest_type: LoanInterestType
     repayment_method: LoanRepaymentMethod
@@ -86,7 +88,9 @@ class LoanShareAllocation(BaseModel):
 
 
 class LoanQuoteResponse(BaseModel):
-    model_config = ConfigDict(use_enum_values=True, json_encoders={Decimal: lambda value: str(value)})
+    model_config = ConfigDict(
+        use_enum_values=True, json_encoders={Decimal: lambda value: str(value)}
+    )
 
     as_of_date: date
     selection_mode: LoanSelectionMode
@@ -462,7 +466,9 @@ class LoanScheduleResponse(BaseModel):
 
 
 class LoanScheduleWhatIfRequest(BaseModel):
-    model_config = ConfigDict(use_enum_values=True, json_encoders={Decimal: lambda value: str(value)})
+    model_config = ConfigDict(
+        use_enum_values=True, json_encoders={Decimal: lambda value: str(value)}
+    )
 
     as_of_date: date | None = None
     repayment_method: LoanRepaymentMethod | None = None
@@ -517,7 +523,9 @@ class LoanRepaymentCreateRequest(BaseModel):
 
 
 class LoanRepaymentDTO(BaseModel):
-    model_config = ConfigDict(from_attributes=True, json_encoders={Decimal: lambda value: str(value)})
+    model_config = ConfigDict(
+        from_attributes=True, json_encoders={Decimal: lambda value: str(value)}
+    )
 
     id: UUID
     org_id: str

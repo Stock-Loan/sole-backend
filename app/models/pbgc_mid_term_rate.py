@@ -1,4 +1,3 @@
-
 from sqlalchemy import Column, DateTime, Integer, Numeric, String, UniqueConstraint, func
 
 from app.db.base import Base
@@ -7,9 +6,7 @@ from app.db.base import Base
 class PbgcMidTermRate(Base):
     __tablename__ = "pbgc_mid_term_rates"
     __allow_unmapped__ = True
-    __table_args__ = (
-        UniqueConstraint("year", "month", name="uq_pbgc_mid_term_rates_year_month"),
-    )
+    __table_args__ = (UniqueConstraint("year", "month", name="uq_pbgc_mid_term_rates_year_month"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     year = Column(Integer, nullable=False, index=True)

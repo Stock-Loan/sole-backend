@@ -82,7 +82,9 @@ async def create_department(
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Department name/code already exists") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Department name/code already exists"
+        ) from exc
     await db.refresh(dept)
     record_audit_log(
         db,
@@ -125,7 +127,9 @@ async def update_department(
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Department name/code already exists") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Department name/code already exists"
+        ) from exc
     await db.refresh(dept)
     record_audit_log(
         db,
@@ -169,7 +173,11 @@ async def delete_department(
     return None
 
 
-@router.get("/{department_id}/members", response_model=UserListResponse, summary="List members of a department")
+@router.get(
+    "/{department_id}/members",
+    response_model=UserListResponse,
+    summary="List members of a department",
+)
 async def list_department_members(
     department_id: str,
     page: int = Query(1, ge=1),
@@ -178,13 +186,18 @@ async def list_department_members(
     _: User = Depends(deps.require_permission(PermissionCode.DEPARTMENT_VIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> UserListResponse:
-    dept_stmt = select(Department).where(Department.id == department_id, Department.org_id == ctx.org_id)
+    dept_stmt = select(Department).where(
+        Department.id == department_id, Department.org_id == ctx.org_id
+    )
     dept_result = await db.execute(dept_stmt)
     dept = dept_result.scalar_one_or_none()
     if not dept:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
     if dept.is_archived:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot assign members to an archived department")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot assign members to an archived department",
+        )
 
     offset = (page - 1) * page_size
     base_stmt = (
@@ -211,11 +224,17 @@ async def list_department_members(
     items = []
     for membership, user in rows:
         membership.department_name = dept.name
-        items.append({"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])})
+        items.append(
+            {"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])}
+        )
     return UserListResponse(items=items, total=total)
 
 
-@router.post("/{department_id}/assign", response_model=DepartmentAssignResponse, summary="Assign members to a department")
+@router.post(
+    "/{department_id}/assign",
+    response_model=DepartmentAssignResponse,
+    summary="Assign members to a department",
+)
 async def assign_members(
     department_id: str,
     payload: DepartmentAssignRequest,
@@ -224,7 +243,9 @@ async def assign_members(
     __: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> DepartmentAssignResponse:
-    dept_stmt = select(Department).where(Department.id == department_id, Department.org_id == ctx.org_id)
+    dept_stmt = select(Department).where(
+        Department.id == department_id, Department.org_id == ctx.org_id
+    )
     dept_result = await db.execute(dept_stmt)
     dept = dept_result.scalar_one_or_none()
     if not dept:

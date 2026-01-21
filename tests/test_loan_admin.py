@@ -242,15 +242,18 @@ def test_activation_runs_after_stage_completion(monkeypatch):
         stage_type=LoanWorkflowStageType.HR_REVIEW.value,
         status=LoanWorkflowStageStatus.PENDING.value,
     )
-    session = FakeSession(stage=stage, document=LoanDocument(
-        id=uuid4(),
-        org_id="default",
-        loan_application_id=stage.loan_application_id,
-        stage_type=LoanWorkflowStageType.HR_REVIEW.value,
-        document_type="NOTICE_OF_STOCK_OPTION_GRANT",
-        file_name="doc.pdf",
-        storage_path_or_url="s3://bucket/doc.pdf",
-    ))
+    session = FakeSession(
+        stage=stage,
+        document=LoanDocument(
+            id=uuid4(),
+            org_id="default",
+            loan_application_id=stage.loan_application_id,
+            stage_type=LoanWorkflowStageType.HR_REVIEW.value,
+            document_type="NOTICE_OF_STOCK_OPTION_GRANT",
+            file_name="doc.pdf",
+            storage_path_or_url="s3://bucket/doc.pdf",
+        ),
+    )
     override_dependencies(session, user)
 
     async def _get_application(*args, **kwargs):

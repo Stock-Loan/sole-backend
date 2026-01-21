@@ -23,9 +23,7 @@ async def get_org_settings(
     latest_rate = await pbgc_rates.get_latest_annual_rate(db)
     response = OrgSettingsResponse.model_validate(settings)
     if latest_rate is not None:
-        response = response.model_copy(
-            update={"variable_base_rate_annual_percent": latest_rate}
-        )
+        response = response.model_copy(update={"variable_base_rate_annual_percent": latest_rate})
     return response
 
 
@@ -53,9 +51,7 @@ async def update_org_settings(
     latest_rate = await pbgc_rates.get_latest_annual_rate(db)
     response = OrgSettingsResponse.model_validate(settings)
     if latest_rate is not None:
-        response = response.model_copy(
-            update={"variable_base_rate_annual_percent": latest_rate}
-        )
+        response = response.model_copy(update={"variable_base_rate_annual_percent": latest_rate})
     return response
 
 

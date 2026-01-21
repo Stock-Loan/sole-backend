@@ -61,9 +61,15 @@ async def build_dashboard_summary(
 
     total_users = await _count_memberships(db, ctx)
 
-    platform_status_counts = await _counts_by_membership_field(db, ctx, OrgMembership.platform_status)
-    invitation_status_counts = await _counts_by_membership_field(db, ctx, OrgMembership.invitation_status)
-    employment_status_counts = await _counts_by_membership_field(db, ctx, OrgMembership.employment_status)
+    platform_status_counts = await _counts_by_membership_field(
+        db, ctx, OrgMembership.platform_status
+    )
+    invitation_status_counts = await _counts_by_membership_field(
+        db, ctx, OrgMembership.invitation_status
+    )
+    employment_status_counts = await _counts_by_membership_field(
+        db, ctx, OrgMembership.employment_status
+    )
 
     active_users = platform_status_counts.get("ACTIVE", 0)
     suspended_users = platform_status_counts.get("SUSPENDED", 0)
@@ -78,23 +84,30 @@ async def build_dashboard_summary(
     stale_30_plus_days = await _count_users_with_filter(
         db, ctx, User.last_active_at.is_not(None), User.last_active_at < last_30
     )
-    users_with_temp_password = await _count_users_with_filter(db, ctx, User.must_change_password.is_(True))
+    users_with_temp_password = await _count_users_with_filter(
+        db, ctx, User.must_change_password.is_(True)
+    )
 
-    users_without_department_stmt = select(func.count()).select_from(OrgMembership).where(
-        OrgMembership.org_id == ctx.org_id, OrgMembership.department_id.is_(None)
+    users_without_department_stmt = (
+        select(func.count())
+        .select_from(OrgMembership)
+        .where(OrgMembership.org_id == ctx.org_id, OrgMembership.department_id.is_(None))
     )
     users_without_department = (await db.execute(users_without_department_stmt)).scalar_one() or 0
 
-    missing_profile_stmt = select(func.count()).select_from(User).join(
-        OrgMembership, OrgMembership.user_id == User.id
-    ).where(
-        OrgMembership.org_id == ctx.org_id,
-        (
-            User.timezone.is_(None)
-            | User.phone_number.is_(None)
-            | User.address_line1.is_(None)
-            | User.country.is_(None)
-        ),
+    missing_profile_stmt = (
+        select(func.count())
+        .select_from(User)
+        .join(OrgMembership, OrgMembership.user_id == User.id)
+        .where(
+            OrgMembership.org_id == ctx.org_id,
+            (
+                User.timezone.is_(None)
+                | User.phone_number.is_(None)
+                | User.address_line1.is_(None)
+                | User.country.is_(None)
+            ),
+        )
     )
     missing_profile_fields = (await db.execute(missing_profile_stmt)).scalar_one() or 0
 
@@ -127,7 +140,9 @@ async def build_dashboard_summary(
         .order_by(Role.name.asc())
     )
     role_rows = (await db.execute(role_stmt)).all()
-    role_counts = [UserRoleCount(role_id=row[0], role_name=row[1], count=row[2]) for row in role_rows]
+    role_counts = [
+        UserRoleCount(role_id=row[0], role_name=row[1], count=row[2]) for row in role_rows
+    ]
     roles_with_zero_members = [role.role_name for role in role_counts if role.count == 0]
 
     return UserDashboardSummary(

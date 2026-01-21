@@ -65,7 +65,9 @@ class LoanDocument(Base):
     document_type = Column(String(100), nullable=False)
     file_name = Column(String(255), nullable=False)
     storage_path_or_url = Column(String(1024), nullable=False)
-    uploaded_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    uploaded_by_user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     uploaded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

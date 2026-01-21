@@ -84,7 +84,9 @@ async def delete_acl(
     current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    stmt = select(AccessControlList).where(AccessControlList.id == acl_id, AccessControlList.org_id == ctx.org_id)
+    stmt = select(AccessControlList).where(
+        AccessControlList.id == acl_id, AccessControlList.org_id == ctx.org_id
+    )
     result = await db.execute(stmt)
     acl = result.scalar_one_or_none()
     if not acl:

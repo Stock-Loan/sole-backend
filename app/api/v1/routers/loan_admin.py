@@ -5,7 +5,17 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+    Request,
+)
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -49,7 +59,17 @@ from app.schemas.loan import (
     LoanWorkflowStageUpdateRequest,
 )
 from app.schemas.settings import MfaEnforcementAction
-from app.services import authz, loan_applications, loan_exports, loan_payment_status, loan_queue, loan_repayments, loan_schedules, loan_workflow, stock_summary
+from app.services import (
+    authz,
+    loan_applications,
+    loan_exports,
+    loan_payment_status,
+    loan_queue,
+    loan_repayments,
+    loan_schedules,
+    loan_workflow,
+    stock_summary,
+)
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.local_uploads import (
     loan_documents_subdir,
@@ -140,7 +160,16 @@ def _build_applicant_summary(membership, user, department) -> LoanApplicantSumma
 
 
 def _build_admin_summary(row) -> LoanApplicationSummaryDTO:
-    application, membership, user, department, stage_type, stage_status, assigned_user, assigned_at = row
+    (
+        application,
+        membership,
+        user,
+        department,
+        stage_type,
+        stage_status,
+        assigned_user,
+        assigned_at,
+    ) = row
     applicant = _build_applicant_summary(membership, user, department)
     assignee = None
     if assigned_user is not None:
@@ -175,7 +204,9 @@ def _build_admin_summary(row) -> LoanApplicationSummaryDTO:
     )
 
 
-async def _fetch_applicant_summary(db: AsyncSession, ctx: deps.TenantContext, application) -> LoanApplicantSummaryDTO | None:
+async def _fetch_applicant_summary(
+    db: AsyncSession, ctx: deps.TenantContext, application
+) -> LoanApplicantSummaryDTO | None:
     membership_bundle = await loan_applications.get_membership_with_user(
         db, ctx, application.org_membership_id
     )
@@ -244,7 +275,10 @@ async def list_loans(
             detail={
                 "code": "invalid_date_range",
                 "message": "created_from must be earlier than created_to",
-                "details": {"created_from": created_from.isoformat(), "created_to": created_to.isoformat()},
+                "details": {
+                    "created_from": created_from.isoformat(),
+                    "created_to": created_to.isoformat(),
+                },
             },
         )
 
@@ -277,16 +311,20 @@ async def activate_loan_backlog(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanActivationMaintenanceResponse:
-    checked, activated, activated_ids, post_issuance_completed_ids = await loan_workflow.activate_backlog(
-        db,
-        ctx,
-        loan_id=str(loan_id) if loan_id else None,
-        limit=limit,
-        offset=offset,
-        actor_id=current_user.id,
+    checked, activated, activated_ids, post_issuance_completed_ids = (
+        await loan_workflow.activate_backlog(
+            db,
+            ctx,
+            loan_id=str(loan_id) if loan_id else None,
+            limit=limit,
+            offset=offset,
+            actor_id=current_user.id,
+        )
     )
     if loan_id and checked == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     return LoanActivationMaintenanceResponse(
         checked=checked,
         activated=activated,
@@ -310,12 +348,16 @@ async def get_loan(
 ) -> LoanApplicationDTO:
     application = await loan_applications.get_application_with_related(db, ctx, loan_id)
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     activated = await loan_workflow.try_activate_loan(db, ctx, application)
     if activated:
         await db.commit()
         await db.refresh(application)
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        application
+    )
     applicant = await _fetch_applicant_summary(db, ctx, application)
     payment_fields = await _payment_status_fields(db, ctx, application)
     return LoanApplicationDTO.model_validate(application).model_copy(
@@ -341,10 +383,15 @@ async def list_loan_documents(
     db: AsyncSession = Depends(get_db),
 ) -> LoanDocumentListResponse:
     await _get_application_or_404(db, ctx, loan_id)
-    stmt = select(LoanDocument).options(selectinload(LoanDocument.uploaded_by_user)).where(
-        LoanDocument.org_id == ctx.org_id,
-        LoanDocument.loan_application_id == loan_id,
-    ).order_by(LoanDocument.uploaded_at.desc())
+    stmt = (
+        select(LoanDocument)
+        .options(selectinload(LoanDocument.uploaded_by_user))
+        .where(
+            LoanDocument.org_id == ctx.org_id,
+            LoanDocument.loan_application_id == loan_id,
+        )
+        .order_by(LoanDocument.uploaded_at.desc())
+    )
     documents = (await db.execute(stmt)).scalars().all()
 
     grouped: dict[str, list[LoanDocumentDTO]] = {}
@@ -434,7 +481,10 @@ async def record_loan_repayment_with_evidence(
     principal_total = scheduled_principal + extra_principal
     interest_total = scheduled_interest + extra_interest
     amount_total = principal_total + interest_total
-    if status_snapshot.principal_remaining is not None and principal_total > status_snapshot.principal_remaining:
+    if (
+        status_snapshot.principal_remaining is not None
+        and principal_total > status_snapshot.principal_remaining
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -443,7 +493,10 @@ async def record_loan_repayment_with_evidence(
                 "details": {"remaining_principal": str(status_snapshot.principal_remaining)},
             },
         )
-    if status_snapshot.interest_remaining is not None and interest_total > status_snapshot.interest_remaining:
+    if (
+        status_snapshot.interest_remaining is not None
+        and interest_total > status_snapshot.interest_remaining
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -575,7 +628,9 @@ async def download_loan_document(
             },
         )
     try:
-        file_path = resolve_local_path(Path(settings.local_upload_dir), document.storage_path_or_url)
+        file_path = resolve_local_path(
+            Path(settings.local_upload_dir), document.storage_path_or_url
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -594,7 +649,9 @@ async def download_loan_document(
                 "details": {"storage_path_or_url": document.storage_path_or_url},
             },
         )
-    return FileResponse(file_path, filename=document.file_name, media_type="application/octet-stream")
+    return FileResponse(
+        file_path, filename=document.file_name, media_type="application/octet-stream"
+    )
 
 
 @router.get(
@@ -668,7 +725,9 @@ async def get_loan_schedule_what_if(
 )
 async def export_loan_schedule(
     loan_id: UUID,
-    as_of: date | None = Query(default=None, description="As-of date for remaining schedule export"),
+    as_of: date | None = Query(
+        default=None, description="As-of date for remaining schedule export"
+    ),
     include_paid: bool = Query(default=False, description="Include fully paid schedule entries"),
     _: object = Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_SCHEDULE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
@@ -724,7 +783,10 @@ async def update_loan(
                 "details": {"field": "status"},
             },
         )
-    if payload.status == LoanApplicationStatus.REJECTED and not (payload.decision_reason or "").strip():
+    if (
+        payload.status == LoanApplicationStatus.REJECTED
+        and not (payload.decision_reason or "").strip()
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -736,7 +798,9 @@ async def update_loan(
 
     application = await loan_applications.get_application_with_related(db, ctx, loan_id)
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
 
     try:
         updated = await loan_applications.update_admin_application(
@@ -753,7 +817,9 @@ async def update_loan(
             detail={"code": "invalid_status_transition", "message": str(exc), "details": {}},
         ) from exc
 
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(updated)
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        updated
+    )
     applicant = await _fetch_applicant_summary(db, ctx, updated)
     payment_fields = await _payment_status_fields(db, ctx, updated)
     return LoanApplicationDTO.model_validate(updated).model_copy(
@@ -963,7 +1029,9 @@ async def assign_workflow_stage(
     )
     membership_result = await db.execute(membership_stmt)
     if membership_result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee membership not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Assignee membership not found"
+        )
 
     assignee_allowed = await authz.check_permission(assignee, ctx, required_permission, db)
     if not assignee_allowed:
@@ -988,7 +1056,9 @@ async def assign_workflow_stage(
     stage_result = await db.execute(stage_stmt)
     stage = stage_result.scalar_one_or_none()
     if not stage:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow stage not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow stage not found"
+        )
     if stage.status == LoanWorkflowStageStatus.COMPLETED.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1027,7 +1097,9 @@ async def _get_application_or_404(
 ):
     application = await loan_applications.get_application_with_related(db, ctx, loan_id)
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     return application
 
 
@@ -1044,7 +1116,9 @@ async def _get_hr_stage_or_404(
     result = await db.execute(stmt)
     stage = result.scalar_one_or_none()
     if not stage:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="HR workflow stage not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="HR workflow stage not found"
+        )
     return stage
 
 
@@ -1061,7 +1135,9 @@ async def _get_finance_stage_or_404(
     result = await db.execute(stmt)
     stage = result.scalar_one_or_none()
     if not stage:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finance workflow stage not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Finance workflow stage not found"
+        )
     return stage
 
 
@@ -1078,7 +1154,9 @@ async def _get_legal_stage_or_404(
     result = await db.execute(stmt)
     stage = result.scalar_one_or_none()
     if not stage:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Legal workflow stage not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Legal workflow stage not found"
+        )
     return stage
 
 
@@ -1105,7 +1183,9 @@ async def get_hr_review(
         if stage.stage_type == "HR_REVIEW":
             hr_stage = stage
             break
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        application
+    )
     applicant = await _fetch_applicant_summary(db, ctx, application)
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
@@ -1140,7 +1220,10 @@ async def update_hr_stage(
     stage = await _get_hr_stage_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
     old_snapshot = model_snapshot(stage)
-    if payload.status not in {LoanWorkflowStageStatus.IN_PROGRESS, LoanWorkflowStageStatus.COMPLETED}:
+    if payload.status not in {
+        LoanWorkflowStageStatus.IN_PROGRESS,
+        LoanWorkflowStageStatus.COMPLETED,
+    }:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -1315,7 +1398,9 @@ async def get_finance_review(
         if stage.stage_type == "FINANCE_PROCESSING":
             finance_stage = stage
             break
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        application
+    )
     applicant = await _fetch_applicant_summary(db, ctx, application)
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
@@ -1349,7 +1434,10 @@ async def update_finance_stage(
     stage = await _get_finance_stage_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
     old_snapshot = model_snapshot(stage)
-    if payload.status not in {LoanWorkflowStageStatus.IN_PROGRESS, LoanWorkflowStageStatus.COMPLETED}:
+    if payload.status not in {
+        LoanWorkflowStageStatus.IN_PROGRESS,
+        LoanWorkflowStageStatus.COMPLETED,
+    }:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -1518,7 +1606,9 @@ async def get_legal_review(
         if stage.stage_type == "LEGAL_EXECUTION":
             legal_stage = stage
             break
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(application)
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        application
+    )
     applicant = await _fetch_applicant_summary(db, ctx, application)
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
@@ -1553,7 +1643,10 @@ async def update_legal_stage(
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
     old_snapshot = model_snapshot(stage)
-    if payload.status not in {LoanWorkflowStageStatus.IN_PROGRESS, LoanWorkflowStageStatus.COMPLETED}:
+    if payload.status not in {
+        LoanWorkflowStageStatus.IN_PROGRESS,
+        LoanWorkflowStageStatus.COMPLETED,
+    }:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -1727,7 +1820,9 @@ async def upload_legal_issuance_document(
     loan_id: UUID,
     payload: LoanDocumentCreateRequest,
     request: Request,
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_POST_ISSUANCE_MANAGE)),
+    current_user=Depends(
+        deps.require_permission(PermissionCode.LOAN_WORKFLOW_POST_ISSUANCE_MANAGE)
+    ),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanDocumentDTO:

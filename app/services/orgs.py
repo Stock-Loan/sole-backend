@@ -73,5 +73,7 @@ async def create_org(
 
     await ensure_audit_partitions(db, org.id)
     await authz.seed_system_roles(db, org.id)
-    await settings_service.get_org_settings(db, deps.TenantContext(org_id=org.id), create_if_missing=True)
+    await settings_service.get_org_settings(
+        db, deps.TenantContext(org_id=org.id), create_if_missing=True
+    )
     return org

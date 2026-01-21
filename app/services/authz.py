@@ -18,9 +18,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-async def _load_permissions_from_db(
-    db: AsyncSession, user_id, org_id: str
-) -> Set[str]:
+
+async def _load_permissions_from_db(db: AsyncSession, user_id, org_id: str) -> Set[str]:
     stmt = (
         select(Role.permissions)
         .join(UserRole, UserRole.role_id == Role.id)
@@ -39,9 +38,8 @@ async def _load_permissions_from_db(
                 permissions.add(code.value)
     return permissions
 
-async def _get_cached_permissions(
-    redis: Redis, user_id: str, org_id: str
-) -> Set[str] | None:
+
+async def _get_cached_permissions(redis: Redis, user_id: str, org_id: str) -> Set[str] | None:
     key = f"permissions:{org_id}:{user_id}"
     try:
         data = await redis.get(key)
@@ -51,18 +49,18 @@ async def _get_cached_permissions(
         logger.error(f"Redis error reading permissions: {e}")
     return None
 
+
 async def _cache_permissions(
     redis: Redis, user_id: str, org_id: str, permissions: Set[str]
 ) -> None:
     key = f"permissions:{org_id}:{user_id}"
     try:
-        await redis.setex(key, 3600, json.dumps(list(permissions))) # 1 hour TTL
+        await redis.setex(key, 3600, json.dumps(list(permissions)))  # 1 hour TTL
     except Exception as e:
         logger.error(f"Redis error caching permissions: {e}")
 
-async def invalidate_permission_cache(
-    user_id: str, org_id: str
-) -> None:
+
+async def invalidate_permission_cache(user_id: str, org_id: str) -> None:
     redis = get_redis_client()
     key = f"permissions:{org_id}:{user_id}"
     try:
@@ -117,21 +115,45 @@ async def check_permission(
     """Compute effective permissions from role buckets plus optional resource-scoped ACL entries."""
     if user.is_superuser:
         return True
-    
-    target = permission_code.value if isinstance(permission_code, PermissionCode) else str(permission_code)
-    
+
+    target = (
+        permission_code.value
+        if isinstance(permission_code, PermissionCode)
+        else str(permission_code)
+    )
+
     # Try Redis cache first
     redis = get_redis_client()
     permission_set = await _get_cached_permissions(redis, str(user.id), ctx.org_id)
-    
+
     if permission_set is None:
         # Cache miss, load from DB and cache
         permission_set = await _load_permissions_from_db(db, user.id, ctx.org_id)
         await _cache_permissions(redis, str(user.id), ctx.org_id, permission_set)
 
     if resource_type and resource_id:
-        permission_set.update(await _load_acl_permissions(db, user.id, ctx.org_id, resource_type, resource_id))
+        permission_set.update(
+            await _load_acl_permissions(db, user.id, ctx.org_id, resource_type, resource_id)
+        )
     return target in permission_set
+
+
+async def has_sensitive_permissions(db: AsyncSession, user: User, org_id: str) -> bool:
+    """Check if the user has any sensitive permissions."""
+    if user.is_superuser:
+        return True
+
+    redis = get_redis_client()
+    permission_set = await _get_cached_permissions(redis, str(user.id), org_id)
+
+    if permission_set is None:
+        permission_set = await _load_permissions_from_db(db, user.id, org_id)
+        await _cache_permissions(redis, str(user.id), org_id, permission_set)
+
+    from app.core.permissions import SENSITIVE_PERMISSIONS
+
+    sensitive_values = {p.value for p in SENSITIVE_PERMISSIONS}
+    return bool(permission_set & sensitive_values)
 
 
 EMPLOYEE_DEFAULT_PERMISSIONS = PermissionCode.normalize(
@@ -271,7 +293,9 @@ async def ensure_user_in_role(db: AsyncSession, org_id: str, user_id, role: Role
     await db.commit()
 
 
-async def ensure_org_admin_for_seed_user(db: AsyncSession, seed_user_id, org_ids: list[str]) -> None:
+async def ensure_org_admin_for_seed_user(
+    db: AsyncSession, seed_user_id, org_ids: list[str]
+) -> None:
     """
     For the seed user, ensure ORG_ADMIN in each provided org_id (creating roles if needed).
     """

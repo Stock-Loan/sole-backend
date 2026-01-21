@@ -51,7 +51,9 @@ async def _get_application_or_404(
     result = await db.execute(stmt)
     application = result.scalar_one_or_none()
     if not application:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     return application
 
 
@@ -71,10 +73,15 @@ async def list_borrower_documents(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     await _get_application_or_404(db, ctx, loan_id, membership.id)
 
-    stmt = select(LoanDocument).options(selectinload(LoanDocument.uploaded_by_user)).where(
-        LoanDocument.org_id == ctx.org_id,
-        LoanDocument.loan_application_id == loan_id,
-    ).order_by(LoanDocument.uploaded_at.desc())
+    stmt = (
+        select(LoanDocument)
+        .options(selectinload(LoanDocument.uploaded_by_user))
+        .where(
+            LoanDocument.org_id == ctx.org_id,
+            LoanDocument.loan_application_id == loan_id,
+        )
+        .order_by(LoanDocument.uploaded_at.desc())
+    )
     documents = (await db.execute(stmt)).scalars().all()
 
     grouped: dict[str, list[LoanDocumentDTO]] = {}
@@ -128,7 +135,9 @@ async def download_borrower_document(
             },
         )
     try:
-        file_path = resolve_local_path(Path(settings.local_upload_dir), document.storage_path_or_url)
+        file_path = resolve_local_path(
+            Path(settings.local_upload_dir), document.storage_path_or_url
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -147,7 +156,9 @@ async def download_borrower_document(
                 "details": {"storage_path_or_url": document.storage_path_or_url},
             },
         )
-    return FileResponse(file_path, filename=document.file_name, media_type="application/octet-stream")
+    return FileResponse(
+        file_path, filename=document.file_name, media_type="application/octet-stream"
+    )
 
 
 @router.get(
@@ -250,7 +261,9 @@ async def get_borrower_schedule_what_if(
 )
 async def export_borrower_loan(
     loan_id: UUID,
-    as_of: date | None = Query(default=None, description="As-of date for remaining schedule export"),
+    as_of: date | None = Query(
+        default=None, description="As-of date for remaining schedule export"
+    ),
     include_paid: bool = Query(default=False, description="Include fully paid schedule entries"),
     current_user=Depends(deps.require_permission(PermissionCode.LOAN_EXPORT_SELF)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),

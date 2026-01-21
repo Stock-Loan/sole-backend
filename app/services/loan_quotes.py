@@ -19,7 +19,13 @@ from app.schemas.loan import (
     LoanShareAllocation,
 )
 from app.schemas.settings import LoanInterestType, LoanRepaymentMethod
-from app.services import eligibility, pbgc_rates, settings as settings_service, stock_reservations, vesting_engine
+from app.services import (
+    eligibility,
+    pbgc_rates,
+    settings as settings_service,
+    stock_reservations,
+    vesting_engine,
+)
 
 
 @dataclass(frozen=True)
@@ -46,7 +52,9 @@ def _monthly_rate(annual_rate_percent: Decimal) -> Decimal:
     return annual_rate_percent / Decimal("1200")
 
 
-def _payment_principal_and_interest(principal: Decimal, annual_rate_percent: Decimal, term_months: int) -> Decimal:
+def _payment_principal_and_interest(
+    principal: Decimal, annual_rate_percent: Decimal, term_months: int
+) -> Decimal:
     if term_months <= 0:
         return Decimal("0")
     rate = _monthly_rate(annual_rate_percent)
@@ -73,7 +81,9 @@ def _loan_quote_option(
 ) -> LoanQuoteOption:
     if repayment_method == LoanRepaymentMethod.PRINCIPAL_AND_INTEREST:
         monthly_payment = _payment_principal_and_interest(principal, annual_rate, term_months)
-        total_payable = (monthly_payment * Decimal(term_months)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+        total_payable = (monthly_payment * Decimal(term_months)).quantize(
+            TWOPLACES, rounding=ROUND_HALF_UP
+        )
     else:
         monthly_payment = _payment_interest_only(principal, annual_rate)
         total_payable = (monthly_payment * Decimal(term_months) + principal).quantize(
@@ -136,7 +146,10 @@ def _resolve_shares_to_exercise(
         raise LoanQuoteError(
             code="no_exercisable_shares",
             message="No exercisable shares are available",
-            details={"field": "selection_value", "total_exercisable_shares": total_exercisable_shares},
+            details={
+                "field": "selection_value",
+                "total_exercisable_shares": total_exercisable_shares,
+            },
         )
     if selection_mode == LoanSelectionMode.PERCENT:
         if selection_value <= 0 or selection_value > 100:
@@ -150,9 +163,9 @@ def _resolve_shares_to_exercise(
                 },
             )
         shares = int(
-            (Decimal(total_exercisable_shares) * selection_value / Decimal("100")).to_integral_value(
-                rounding=ROUND_FLOOR
-            )
+            (
+                Decimal(total_exercisable_shares) * selection_value / Decimal("100")
+            ).to_integral_value(rounding=ROUND_FLOOR)
         )
     else:
         if selection_value <= 0:
@@ -275,10 +288,16 @@ def build_loan_quote_from_data(
         )
     else:
         down_payment_amount = Decimal("0")
-    loan_principal = (purchase_price - down_payment_amount).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+    loan_principal = (purchase_price - down_payment_amount).quantize(
+        TWOPLACES, rounding=ROUND_HALF_UP
+    )
 
-    allowed_interest_types = [LoanInterestType(value) for value in (org_settings.allowed_interest_types or [])]
-    allowed_repayment_methods = [LoanRepaymentMethod(value) for value in (org_settings.allowed_repayment_methods or [])]
+    allowed_interest_types = [
+        LoanInterestType(value) for value in (org_settings.allowed_interest_types or [])
+    ]
+    allowed_repayment_methods = [
+        LoanRepaymentMethod(value) for value in (org_settings.allowed_repayment_methods or [])
+    ]
 
     if desired_interest_type and desired_interest_type not in allowed_interest_types:
         raise LoanQuoteError(
@@ -314,7 +333,9 @@ def build_loan_quote_from_data(
         )
 
     interest_types = [desired_interest_type] if desired_interest_type else allowed_interest_types
-    repayment_methods = [desired_repayment_method] if desired_repayment_method else allowed_repayment_methods
+    repayment_methods = (
+        [desired_repayment_method] if desired_repayment_method else allowed_repayment_methods
+    )
 
     options: list[LoanQuoteOption] = []
     for interest_type in interest_types:

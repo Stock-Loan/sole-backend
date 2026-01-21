@@ -101,7 +101,11 @@ def test_org_settings_defaults_include_stock_rules():
     assert data["min_service_duration_years"] is None
     assert data["enforce_min_vested_to_exercise"] is False
     assert data["min_vested_shares_to_exercise"] is None
-    assert data["allowed_repayment_methods"] == ["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"]
+    assert data["allowed_repayment_methods"] == [
+        "INTEREST_ONLY",
+        "BALLOON",
+        "PRINCIPAL_AND_INTEREST",
+    ]
     assert data["min_loan_term_months"] == 6
     assert data["max_loan_term_months"] == 60
     assert data["allowed_interest_types"] == ["FIXED", "VARIABLE"]
@@ -149,7 +153,10 @@ def test_org_settings_validation_rejects_empty_repayment_methods():
         json={"allowed_repayment_methods": []},
     )
     assert resp.status_code == 400
-    assert "allowed_repayment_methods must include at least one repayment method" in resp.json()["message"]
+    assert (
+        "allowed_repayment_methods must include at least one repayment method"
+        in resp.json()["message"]
+    )
 
 
 def test_org_settings_validation_requires_down_payment_percent():

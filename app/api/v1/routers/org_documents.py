@@ -79,7 +79,9 @@ async def update_folder(
     if not folder:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
     if folder.is_system:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System folders cannot be renamed")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="System folders cannot be renamed"
+        )
     updated = await org_documents.update_folder(db, ctx, folder, payload.name)
     return OrgDocumentFolderDTO.model_validate(updated)
 
@@ -99,7 +101,9 @@ async def delete_folder(
     if not folder:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
     if folder.is_system:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System folders cannot be deleted")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="System folders cannot be deleted"
+        )
     try:
         await org_documents.delete_folder(db, ctx, folder)
     except ValueError as exc:
@@ -196,18 +200,30 @@ async def download_template(
             },
         )
     try:
-        file_path = resolve_local_path(Path(settings.local_upload_dir), template.storage_path_or_url)
+        file_path = resolve_local_path(
+            Path(settings.local_upload_dir), template.storage_path_or_url
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "invalid_document_path", "message": "Template path is invalid", "details": {}},
+            detail={
+                "code": "invalid_document_path",
+                "message": "Template path is invalid",
+                "details": {},
+            },
         ) from exc
     if not file_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "document_missing", "message": "Template file does not exist", "details": {}},
+            detail={
+                "code": "document_missing",
+                "message": "Template file does not exist",
+                "details": {},
+            },
         )
-    return FileResponse(file_path, filename=template.file_name, media_type="application/octet-stream")
+    return FileResponse(
+        file_path, filename=template.file_name, media_type="application/octet-stream"
+    )
 
 
 @router.delete(
