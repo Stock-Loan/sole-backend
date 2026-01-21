@@ -880,6 +880,9 @@ async def verify_step_up_mfa(
     to this endpoint to receive a short-lived step-up token that authorizes
     the specific action.
     """
+    # Rate limit step-up verification attempts
+    await enforce_mfa_rate_limit(payload.challenge_token)
+
     try:
         challenge_data = decode_step_up_challenge_token(payload.challenge_token)
     except ValueError as exc:
