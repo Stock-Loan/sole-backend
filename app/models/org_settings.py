@@ -19,6 +19,7 @@ class OrgSettings(Base):
         server_default=text("'[]'::jsonb"),
     )
     remember_device_days = Column(Integer, nullable=False, default=30, server_default="30")
+    session_timeout_minutes = Column(Integer, nullable=False, default=5, server_default="5")
     audit_log_retention_days = Column(Integer, nullable=False, default=180, server_default="180")
     inactive_user_retention_days = Column(Integer, nullable=False, default=180, server_default="180")
     enforce_service_duration_rule = Column(Boolean, nullable=False, default=False, server_default="false")

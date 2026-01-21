@@ -197,6 +197,7 @@ async def get_org_settings(
         audit_log_retention_days=DEFAULT_SETTINGS.audit_log_retention_days,
         inactive_user_retention_days=DEFAULT_SETTINGS.inactive_user_retention_days,
         remember_device_days=DEFAULT_SETTINGS.remember_device_days,
+        session_timeout_minutes=DEFAULT_SETTINGS.session_timeout_minutes,
         enforce_service_duration_rule=DEFAULT_SETTINGS.enforce_service_duration_rule,
         min_service_duration_years=DEFAULT_SETTINGS.min_service_duration_years,
         enforce_min_vested_to_exercise=DEFAULT_SETTINGS.enforce_min_vested_to_exercise,

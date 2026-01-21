@@ -48,10 +48,14 @@ async def get_self_context(
             except ValueError:
                 continue
 
+    # Get org settings for session timeout
+    org_settings = await settings_service.get_org_settings(db, ctx)
+
     return SelfContextResponse(
         org=OrgSummary.model_validate(org),
         roles=[RoleSummary.model_validate(r) for r in roles],
         permissions=sorted(perm_set),
+        session_timeout_minutes=org_settings.session_timeout_minutes,
     )
 
 

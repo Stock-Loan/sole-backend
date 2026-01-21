@@ -35,6 +35,7 @@ class OrgSettingsBase(BaseModel):
     require_two_factor: bool = Field(default=False)
     mfa_required_actions: list[MfaEnforcementAction] = Field(default_factory=list)
     remember_device_days: int = Field(default=30, ge=0)
+    session_timeout_minutes: int = Field(default=5, ge=1, le=60)
     audit_log_retention_days: int = Field(default=180, ge=0)
     inactive_user_retention_days: int = Field(default=180, ge=0)
     enforce_service_duration_rule: bool = Field(default=False)
@@ -89,6 +90,7 @@ class OrgPolicyResponse(BaseModel):
     require_two_factor: bool
     mfa_required_actions: list[MfaEnforcementAction] = Field(default_factory=list)
     remember_device_days: int
+    session_timeout_minutes: int
     enforce_service_duration_rule: bool
     min_service_duration_years: Decimal | None = None
     enforce_min_vested_to_exercise: bool
@@ -112,6 +114,7 @@ class OrgSettingsUpdate(BaseModel):
     require_two_factor: bool | None = None
     mfa_required_actions: list[MfaEnforcementAction] | None = None
     remember_device_days: int | None = Field(default=None, ge=0)
+    session_timeout_minutes: int | None = Field(default=None, ge=1, le=60)
     audit_log_retention_days: int | None = Field(default=None, ge=0)
     inactive_user_retention_days: int | None = Field(default=None, ge=0)
     enforce_service_duration_rule: bool | None = None

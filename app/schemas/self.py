@@ -30,3 +30,4 @@ class SelfContextResponse(BaseModel):
     org: OrgSummary
     roles: list[RoleSummary]
     permissions: list[str]
+    session_timeout_minutes: int = 5
