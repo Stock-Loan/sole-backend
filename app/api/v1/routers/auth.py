@@ -59,8 +59,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 )
 async def discover_orgs_by_email(
     payload: OrgDiscoveryRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> OrgDiscoveryResponse:
+    # Rate limit org discovery to prevent enumeration attacks
+    client_ip = request.client.host if request.client else "unknown"
+    await enforce_login_limits(client_ip, payload.email)
+
     stmt = (
         select(Org)
         .join(User, User.org_id == Org.id)
