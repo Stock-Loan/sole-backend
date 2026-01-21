@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -31,3 +32,4 @@ class SelfContextResponse(BaseModel):
     roles: list[RoleSummary]
     permissions: list[str]
     session_timeout_minutes: int = 5
+    tenancy_mode: Literal["single", "multi"] = "single"

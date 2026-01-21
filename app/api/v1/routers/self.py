@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import PermissionCode
+from app.core.settings import settings
 from app.db.session import get_db
 from app.models.department import Department
 from app.models.org import Org
@@ -56,6 +57,7 @@ async def get_self_context(
         roles=[RoleSummary.model_validate(r) for r in roles],
         permissions=sorted(perm_set),
         session_timeout_minutes=org_settings.session_timeout_minutes,
+        tenancy_mode=settings.tenancy_mode,
     )
 
 
