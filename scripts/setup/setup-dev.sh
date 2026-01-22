@@ -6,6 +6,9 @@ ENV_FILE="${ROOT_DIR}/.env"
 SECRETS_DIR="${ROOT_DIR}/secrets"
 PRIVATE_KEY_PATH="${SECRETS_DIR}/dev-jwt-private.pem"
 PUBLIC_KEY_PATH="${SECRETS_DIR}/dev-jwt-public.pem"
+PRIVATE_KEY_ENV_PATH="./secrets/dev-jwt-private.pem"
+PUBLIC_KEY_ENV_PATH="./secrets/dev-jwt-public.pem"
+NEW_ENV_CREATED=0
 
 # --- Formatting Helpers ---
 msg() { printf "\033[1;32m[setup-dev]\033[0m %s\n" "$*"; }
@@ -20,15 +23,20 @@ require_cmd() {
 
 ensure_env_file() {
   if [[ ! -f "${ENV_FILE}" ]]; then
-    if [[ -f "${ROOT_DIR}/.env.example" ]]; then
-      cp "${ROOT_DIR}/.env.example" "${ENV_FILE}"
-      msg "Created .env from .env.example"
-    else
-      err ".env.example not found; cannot scaffold environment."
-    fi
+    : > "${ENV_FILE}"
+    NEW_ENV_CREATED=1
+    msg "Created empty .env"
   else
     msg "Found existing .env file."
   fi
+}
+
+add_section() {
+  local section_name="$1"
+  echo "" >> "${ENV_FILE}"
+  echo "# ==========================================" >> "${ENV_FILE}"
+  echo "# ${section_name}" >> "${ENV_FILE}"
+  echo "# ==========================================" >> "${ENV_FILE}"
 }
 
 ensure_env_var() {
@@ -105,14 +113,14 @@ prompt_input() {
 
 format_origins_as_json() {
     local input="$1"
-    python3 - "$input" <<'PY'
+  python3 - "$input" <<'PY'
 import sys, json
 origins_input = sys.argv[1].strip()
 if origins_input.startswith('['):
-    print(origins_input)
+  print(origins_input)
 else:
-    origins = [o.strip() for o in origins_input.split(',') if o.strip()]
-    print(json.dumps(origins))
+  origins = [o.strip() for o in origins_input.split(',') if o.strip()]
+  print(json.dumps(origins))
 PY
 }
 
@@ -195,16 +203,29 @@ configure_tenancy() {
         prompt_input "DEFAULT_ORG_SLUG" \
             "Default Organization Slug (URL-safe, e.g., sole-llc):" \
             "sole-llc"
+    else
+      ensure_env_var "DEFAULT_ORG_ID" "sole-llc"
+      ensure_env_var "DEFAULT_ORG_NAME" "Sole LLC"
+      ensure_env_var "DEFAULT_ORG_SLUG" "sole-llc"
     fi
 }
 
 configure_app_settings() {
     msg "--- Application Settings ---"
+
+  prompt_input "ENVIRONMENT" \
+    "Environment (development/staging/production):" \
+    "development" \
+    "^(development|staging|production)$" \
+    "Must be one of: development, staging, production."
     
     # Handle ALLOWED_ORIGINS with conversion to JSON
     local current_origins
     current_origins="$(grep -E "^ALLOWED_ORIGINS=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"' || true)"
     local suggestion_origins="${current_origins:-http://localhost:5173}"
+    if [[ "$suggestion_origins" == *'${input}'* ]]; then
+      suggestion_origins="http://localhost:5173"
+    fi
     
     while true; do
         printf "\nFrontend Origins (CORS Allowed Hosts):\n"
@@ -370,12 +391,96 @@ main() {
   msg "All values must be provided. Defaults are pre-filled and can be overridden."
   ensure_env_file
 
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Database Configuration"
+  fi
   configure_database
-  configure_tenancy
+
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Docker Compose Services (not read by app)"
+  fi
+  msg "--- Docker Compose Configuration ---"
+  prompt_input "POSTGRES_USER" \
+      "PostgreSQL username:" \
+      "sole"
+  prompt_input "POSTGRES_PASSWORD" \
+      "PostgreSQL password:" \
+      "sole"
+  prompt_input "POSTGRES_DB" \
+      "PostgreSQL database name:" \
+      "sole"
+
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Application Settings"
+  fi
   configure_app_settings
+
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Tenancy Configuration"
+  fi
+  configure_tenancy
+
+  msg ""
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Authentication & Security"
+  fi
+  msg "--- Security Keys ---"
+  generate_secret_key
+  generate_rsa_keys
+  ensure_env_var "JWT_PRIVATE_KEY_PATH" "${PRIVATE_KEY_ENV_PATH}"
+  ensure_env_var "JWT_PUBLIC_KEY_PATH" "${PUBLIC_KEY_ENV_PATH}"
+  ensure_env_var "JWT_ALGORITHM" "RS256"
+
+  msg ""
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Token & Session Configuration"
+  fi
+  msg "--- Token & Session Configuration ---"
+  prompt_input "SESSION_TIMEOUT_MINUTES" \
+      "Session timeout (in minutes):" \
+      "30" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "ACCESS_TOKEN_EXPIRE_MINUTES" \
+      "Access token expiration (in minutes):" \
+      "15" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "REFRESH_TOKEN_EXPIRE_MINUTES" \
+      "Refresh token expiration (in minutes):" \
+      "10080" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "DEFAULT_PASSWORD_MIN_LENGTH" \
+      "Minimum password length:" \
+      "12" \
+      "^[0-9]+$" \
+      "Must be a number."
+
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Rate Limiting & Protection"
+  fi
+  prompt_input "RATE_LIMIT_PER_MINUTE" \
+      "Rate limit (requests per minute):" \
+      "60" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "LOGIN_ATTEMPT_LIMIT" \
+      "Login attempt limit before lockout:" \
+      "5" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "LOGIN_LOCKOUT_MINUTES" \
+      "Login lockout duration (in minutes):" \
+      "15" \
+      "^[0-9]+$" \
+      "Must be a number."
   configure_proxy_settings
 
   msg ""
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "Seed Admin Credentials"
+  fi
   msg "--- Seed Admin Configuration ---"
   
   # SEED_ADMIN_EMAIL - format as lowercase
@@ -431,55 +536,16 @@ main() {
     break
   done
 
-  msg ""
-  msg "--- Security Keys ---"
-  generate_secret_key
-  generate_rsa_keys
-  ensure_env_var "JWT_PRIVATE_KEY_PATH" "${PRIVATE_KEY_PATH}"
-  ensure_env_var "JWT_PUBLIC_KEY_PATH" "${PUBLIC_KEY_PATH}"
-  ensure_env_var "JWT_ALGORITHM" "RS256"
-
-  msg ""
-  msg "--- Additional Configuration ---"
-  prompt_input "SESSION_TIMEOUT_MINUTES" \
-      "Session timeout (in minutes):" \
-      "30" \
-      "^[0-9]+$" \
-      "Must be a number."
-  prompt_input "ACCESS_TOKEN_EXPIRE_MINUTES" \
-      "Access token expiration (in minutes):" \
-      "15" \
-      "^[0-9]+$" \
-      "Must be a number."
-  prompt_input "REFRESH_TOKEN_EXPIRE_MINUTES" \
-      "Refresh token expiration (in minutes):" \
-      "10080" \
-      "^[0-9]+$" \
-      "Must be a number."
-  prompt_input "DEFAULT_PASSWORD_MIN_LENGTH" \
-      "Minimum password length:" \
-      "12" \
-      "^[0-9]+$" \
-      "Must be a number."
-  prompt_input "RATE_LIMIT_PER_MINUTE" \
-      "Rate limit (requests per minute):" \
-      "60" \
-      "^[0-9]+$" \
-      "Must be a number."
-  prompt_input "LOGIN_ATTEMPT_LIMIT" \
-      "Login attempt limit before lockout:" \
-      "5" \
-      "^[0-9]+$" \
-      "Must be a number."
-  prompt_input "LOGIN_LOCKOUT_MINUTES" \
-      "Login lockout duration (in minutes):" \
-      "15" \
-      "^[0-9]+$" \
-      "Must be a number."
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "File Upload Configuration"
+  fi
   prompt_input "LOCAL_UPLOAD_DIR" \
       "Local upload directory:" \
       "local_uploads"
   
+  if [[ "${NEW_ENV_CREATED}" == "1" ]]; then
+    add_section "PBGC Rate Scraping Configuration"
+  fi
   # PBGC_RATE_SCRAPE_ENABLED - format as lowercase boolean
   local current_pbgc
   current_pbgc="$(grep -E "^PBGC_RATE_SCRAPE_ENABLED=" "${ENV_FILE}" | cut -d= -f2- || true)"
@@ -521,18 +587,6 @@ main() {
       "0" \
       "^([0-9]|[1-5][0-9])$" \
       "Must be a minute (0-59)."
-
-  msg ""
-  msg "--- Docker Compose Configuration ---"
-  prompt_input "POSTGRES_USER" \
-      "PostgreSQL username:" \
-      "sole"
-  prompt_input "POSTGRES_PASSWORD" \
-      "PostgreSQL password:" \
-      "sole"
-  prompt_input "POSTGRES_DB" \
-      "PostgreSQL database name:" \
-      "sole"
 
   normalize_database_url
 
