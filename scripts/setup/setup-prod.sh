@@ -134,10 +134,27 @@ configure_database() {
 
 configure_tenancy() {
     msg "--- Tenancy Configuration ---"
-    prompt_required "TENANCY_MODE" \
-        "Tenancy Mode (single/multi):" \
-        "^(single|multi)$" \
-        "Mode must be 'single' or 'multi'."
+    
+    # TENANCY_MODE - format as lowercase
+    while true; do
+        printf "\nTenancy Mode (single/multi):\n"
+        read -r -p "Value: " mode_input
+        
+        if [[ -z "$mode_input" ]]; then
+            warn "Value cannot be empty. This field is required."
+            continue
+        fi
+        
+        if ! [[ "$mode_input" =~ ^(single|multi)$ ]] && ! [[ "$mode_input" =~ ^(SINGLE|MULTI)$ ]]; then
+            warn "Mode must be 'single' or 'multi'."
+            continue
+        fi
+        
+        local formatted_mode
+        formatted_mode="$(format_lowercase "$mode_input")"
+        write_env_var "TENANCY_MODE" "$formatted_mode"
+        break
+    done
 
     local mode
     mode="$(grep -E "^TENANCY_MODE=" "${ENV_FILE}" | cut -d= -f2-)"
@@ -237,10 +254,26 @@ configure_security() {
         generate_secret_key
     fi
     
-    prompt_required "JWT_ALGORITHM" \
-        "JWT Algorithm (RS256 recommended):" \
-        "^RS256$" \
-        "Only 'RS256' is supported."
+    # JWT_ALGORITHM - format as uppercase
+    while true; do
+        printf "\nJWT Algorithm (RS256 recommended, or HS256):\n"
+        read -r -p "Value: " algo_input
+        
+        if [[ -z "$algo_input" ]]; then
+            warn "Value cannot be empty. This field is required."
+            continue
+        fi
+        
+        if ! [[ "$algo_input" =~ ^(RS256|HS256)$ ]] && ! [[ "$algo_input" =~ ^(rs256|hs256)$ ]]; then
+            warn "Only 'RS256' or 'HS256' are supported."
+            continue
+        fi
+        
+        local formatted_algo
+        formatted_algo="$(format_uppercase "$algo_input")"
+        write_env_var "JWT_ALGORITHM" "$formatted_algo"
+        break
+    done
     
     # Ask about key generation
     msg ""
@@ -315,10 +348,26 @@ configure_advanced() {
     prompt_required "LOCAL_UPLOAD_DIR" \
         "Local upload directory (absolute path recommended):"
     
-    prompt_required "PBGC_RATE_SCRAPE_ENABLED" \
-        "Enable PBGC rate scraping (true/false):" \
-        "^(true|false)$" \
-        "Must be 'true' or 'false'."
+    # PBGC_RATE_SCRAPE_ENABLED - format as lowercase boolean
+    while true; do
+        printf "\nEnable PBGC rate scraping? (true/false):\n"
+        read -r -p "Value: " pbgc_input
+        
+        if [[ -z "$pbgc_input" ]]; then
+            warn "Value cannot be empty. This field is required."
+            continue
+        fi
+        
+        if ! [[ "$pbgc_input" =~ ^(true|false|yes|no|1|0|on|off)$ ]]; then
+            warn "Must be 'true' or 'false'."
+            continue
+        fi
+        
+        local formatted_pbgc
+        formatted_pbgc="$(format_boolean "$pbgc_input")"
+        write_env_var "PBGC_RATE_SCRAPE_ENABLED" "$formatted_pbgc"
+        break
+    done
     
     prompt_required "PBGC_RATE_SCRAPE_DAY" \
         "PBGC scrape day of month (0-31):" \
@@ -374,51 +423,50 @@ generate_rsa_keys() {
   rm -f "$temp_private" "$temp_public"
 }
 
-configure_advanced() {
-    msg "--- Advanced Configuration ---"
-    prompt_required "ALLOWED_TENANT_HOSTS" \
-        "Allowed tenant hostnames for subdomain resolution (JSON format, e.g., [\"api.example.com\"]):" \
-        "^\\\[" \
-        "Must be valid JSON format."
-    
-    prompt_required "LOCAL_UPLOAD_DIR" \
-        "Local upload directory (absolute path recommended):"
-    
-    prompt_required "PBGC_RATE_SCRAPE_ENABLED" \
-        "Enable PBGC rate scraping (true/false):" \
-        "^(true|false)$" \
-        "Must be 'true' or 'false'."
-    
-    prompt_required "PBGC_RATE_SCRAPE_DAY" \
-        "PBGC scrape day of month (0-31):" \
-        "^(0|[1-9]|[12][0-9]|3[01])$" \
-        "Must be a day (0-31)."
-    
-    prompt_required "PBGC_RATE_SCRAPE_HOUR" \
-        "PBGC scrape hour (0-23):" \
-        "^([0-9]|1[0-9]|2[0-3])$" \
-        "Must be an hour (0-23)."
-    
-    prompt_required "PBGC_RATE_SCRAPE_MINUTE" \
-        "PBGC scrape minute (0-59):" \
-        "^([0-9]|[1-5][0-9])$" \
-        "Must be a minute (0-59)."
-}
-
 configure_seed_admin() {
     msg "--- Seed Admin Credentials ---"
-    prompt_required "SEED_ADMIN_EMAIL" \
-        "Seed admin email address:" \
-        "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" \
-        "Invalid email address."
+    
+    # SEED_ADMIN_EMAIL - format as lowercase
+    while true; do
+        printf "\nSeed admin email address:\n"
+        read -r -p "Value: " email_input
+        
+        if [[ -z "$email_input" ]]; then
+            warn "Email cannot be empty. This field is required."
+            continue
+        fi
+        
+        if ! [[ "$email_input" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            warn "Invalid email address."
+            continue
+        fi
+        
+        local formatted_email
+        formatted_email="$(format_lowercase "$email_input")"
+        write_env_var "SEED_ADMIN_EMAIL" "$formatted_email"
+        break
+    done
     
     prompt_required "SEED_ADMIN_PASSWORD" \
         "Seed admin password (min 12 chars for production):" \
         "^.{12,}$" \
         "Password must be at least 12 characters for production."
     
-    prompt_required "SEED_ADMIN_FULL_NAME" \
-        "Seed admin full name:"
+    # SEED_ADMIN_FULL_NAME - format as title case
+    while true; do
+        printf "\nSeed admin full name:\n"
+        read -r -p "Value: " fullname_input
+        
+        if [[ -z "$fullname_input" ]]; then
+            warn "Full name cannot be empty. This field is required."
+            continue
+        fi
+        
+        local formatted_fullname
+        formatted_fullname="$(format_title_case "$fullname_input")"
+        write_env_var "SEED_ADMIN_FULL_NAME" "$formatted_fullname"
+        break
+    done
 }
 
 # --- Main ---
