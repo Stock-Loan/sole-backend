@@ -84,13 +84,64 @@ prompt_input() {
         read -r -p "Value [${suggestion}]: " input
         local value="${input:-$suggestion}"
 
+        # Check if value is empty
+        if [[ -z "$value" ]]; then
+            warn "Value cannot be empty. Please provide a value or accept the default."
+            continue
+        fi
+
+        # Check validation regex if provided
         if [[ -n "$validation_regex" && ! "$value" =~ $validation_regex ]]; then
              warn "$error_msg"
-        else
-             ensure_env_var "$var_name" "$value"
-             break
+             continue
         fi
+
+        ensure_env_var "$var_name" "$value"
+        break
     done
+}
+
+# --- Helper Functions ---
+
+format_origins_as_json() {
+    local input="$1"
+    python3 - "$input" <<'PY'
+import sys, json
+origins_input = sys.argv[1].strip()
+if origins_input.startswith('['):
+    print(origins_input)
+else:
+    origins = [o.strip() for o in origins_input.split(',') if o.strip()]
+    print(json.dumps(origins))
+PY
+}
+
+format_boolean() {
+    local input="$1"
+    python3 - "$input" <<'PY'
+import sys
+val = sys.argv[1].strip().lower()
+print("true" if val in ("true", "yes", "1", "on") else "false")
+PY
+}
+
+format_uppercase() {
+    local input="$1"
+    echo "$input" | tr '[:lower:]' '[:upper:]'
+}
+
+format_lowercase() {
+    local input="$1"
+    echo "$input" | tr '[:upper:]' '[:lower:]'
+}
+
+format_title_case() {
+    local input="$1"
+    python3 - "$input" <<'PY'
+import sys
+text = sys.argv[1]
+print(' '.join(word.capitalize() for word in text.split()))
+PY
 }
 
 configure_database() {
@@ -106,36 +157,126 @@ configure_database() {
 
 configure_tenancy() {
     msg "--- Tenancy Configuration ---"
-    prompt_input "TENANCY_MODE" \
-        "App Mode (single/multi):" \
-        "single" \
-        "^(single|multi)$" \
-        "Mode must be 'single' or 'multi'."
+    
+    local current_mode
+    current_mode="$(grep -E "^TENANCY_MODE=" "${ENV_FILE}" | cut -d= -f2- || true)"
+    local suggestion_mode="${current_mode:-multi}"
+    
+    while true; do
+        printf "\nApp Mode (single/multi):\n"
+        read -r -p "Value [${suggestion_mode}]: " mode_input
+        local mode_value="${mode_input:-$suggestion_mode}"
+        
+        if [[ -z "$mode_value" ]]; then
+            warn "Value cannot be empty."
+            continue
+        fi
+        
+        if ! [[ "$mode_value" =~ ^(single|multi)$ ]]; then
+            warn "Mode must be 'single' or 'multi'."
+            continue
+        fi
+        
+        local formatted_mode
+        formatted_mode="$(format_lowercase "$mode_value")"
+        ensure_env_var "TENANCY_MODE" "$formatted_mode"
+        break
+    done
 
     local mode
     mode="$(grep -E "^TENANCY_MODE=" "${ENV_FILE}" | cut -d= -f2-)"
     if [[ "$mode" == "single" ]]; then
         prompt_input "DEFAULT_ORG_ID" \
             "Default Organization ID (for single tenancy):" \
-            "default"
+            "sole-llc"
+        prompt_input "DEFAULT_ORG_NAME" \
+            "Default Organization Name (for single tenancy):" \
+            "Sole LLC"
+        prompt_input "DEFAULT_ORG_SLUG" \
+            "Default Organization Slug (URL-safe, e.g., sole-llc):" \
+            "sole-llc"
     fi
 }
 
 configure_app_settings() {
     msg "--- Application Settings ---"
-    prompt_input "ALLOWED_ORIGINS" \
-        "Frontend Origin (CORS Allowed Hosts, format: [\"url\"]):" \
-        '["http://localhost:3000"]'
-    prompt_input "ENABLE_HSTS" \
-        "Enable HSTS (Strict-Transport-Security)? (true/false):" \
-        "false" \
-        "^(true|false)$" \
-        "Must be 'true' or 'false'."
-    prompt_input "LOG_LEVEL" \
-        "Log Level (DEBUG/INFO/WARNING/ERROR):" \
-        "INFO" \
-        "^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$" \
-        "Invalid log level."
+    
+    # Handle ALLOWED_ORIGINS with conversion to JSON
+    local current_origins
+    current_origins="$(grep -E "^ALLOWED_ORIGINS=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"' || true)"
+    local suggestion_origins="${current_origins:-http://localhost:5173}"
+    
+    while true; do
+        printf "\nFrontend Origins (CORS Allowed Hosts):\n"
+        printf "  - Single: http://localhost:5173\n"
+        printf "  - Multiple: http://localhost:5173, https://app.example.com\n"
+        printf "  - Or JSON: [\"http://localhost:5173\"]\n"
+        read -r -p "Value [${suggestion_origins}]: " origins_input
+        local origins_value="${origins_input:-$suggestion_origins}"
+        
+        if [[ -z "$origins_value" ]]; then
+            warn "Value cannot be empty."
+            continue
+        fi
+        
+        # Convert to JSON format
+        local json_origins
+        json_origins="$(format_origins_as_json "$origins_value")"
+        ensure_env_var "ALLOWED_ORIGINS" "$json_origins"
+        break
+    done
+    
+    # ENABLE_HSTS - format as lowercase boolean
+    local current_hsts
+    current_hsts="$(grep -E "^ENABLE_HSTS=" "${ENV_FILE}" | cut -d= -f2- || true)"
+    local suggestion_hsts="${current_hsts:-true}"
+    
+    while true; do
+        printf "\nEnable HSTS (Strict-Transport-Security)? (true/false):\n"
+        read -r -p "Value [${suggestion_hsts}]: " hsts_input
+        local hsts_value="${hsts_input:-$suggestion_hsts}"
+        
+        if [[ -z "$hsts_value" ]]; then
+            warn "Value cannot be empty."
+            continue
+        fi
+        
+        if ! [[ "$hsts_value" =~ ^(true|false|yes|no|1|0|on|off)$ ]]; then
+            warn "Must be 'true' or 'false'."
+            continue
+        fi
+        
+        local formatted_hsts
+        formatted_hsts="$(format_boolean "$hsts_value")"
+        ensure_env_var "ENABLE_HSTS" "$formatted_hsts"
+        break
+    done
+    
+    # LOG_LEVEL - format as uppercase
+    local current_log_level
+    current_log_level="$(grep -E "^LOG_LEVEL=" "${ENV_FILE}" | cut -d= -f2- || true)"
+    local suggestion_log_level="${current_log_level:-INFO}"
+    
+    while true; do
+        printf "\nLog Level (DEBUG/INFO/WARNING/ERROR):\n"
+        read -r -p "Value [${suggestion_log_level}]: " log_input
+        local log_value="${log_input:-$suggestion_log_level}"
+        
+        if [[ -z "$log_value" ]]; then
+            warn "Value cannot be empty."
+            continue
+        fi
+        
+        if ! [[ "$log_value" =~ ^(DEBUG|INFO|WARNING|ERROR|CRITICAL|debug|info|warning|error|critical)$ ]]; then
+            warn "Invalid log level."
+            continue
+        fi
+        
+        local formatted_log
+        formatted_log="$(format_uppercase "$log_value")"
+        ensure_env_var "LOG_LEVEL" "$formatted_log"
+        break
+    done
 }
 
 configure_proxy_settings() {
@@ -226,13 +367,69 @@ main() {
   msg "========================================"
   msg " SOLE Backend Setup (Development)"
   msg "========================================"
-  msg "Press [Enter] to accept default values."
+  msg "All values must be provided. Defaults are pre-filled and can be overridden."
   ensure_env_file
 
   configure_database
   configure_tenancy
   configure_app_settings
   configure_proxy_settings
+
+  msg ""
+  msg "--- Seed Admin Configuration ---"
+  
+  # SEED_ADMIN_EMAIL - format as lowercase
+  local current_email
+  current_email="$(grep -E "^SEED_ADMIN_EMAIL=" "${ENV_FILE}" | cut -d= -f2- || true)"
+  local suggestion_email="${current_email:-admin@example.com}"
+  
+  while true; do
+    printf "\nSeed admin email address:\n"
+    read -r -p "Value [${suggestion_email}]: " email_input
+    local email_value="${email_input:-$suggestion_email}"
+    
+    if [[ -z "$email_value" ]]; then
+      warn "Email cannot be empty."
+      continue
+    fi
+    
+    if ! [[ "$email_value" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+      warn "Invalid email address."
+      continue
+    fi
+    
+    local formatted_email
+    formatted_email="$(format_lowercase "$email_value")"
+    ensure_env_var "SEED_ADMIN_EMAIL" "$formatted_email"
+    break
+  done
+  
+  prompt_input "SEED_ADMIN_PASSWORD" \
+      "Seed admin password (min 8 chars):" \
+      "ChangeMe123!" \
+      "^.{8,}$" \
+      "Password must be at least 8 characters."
+  
+  # SEED_ADMIN_FULL_NAME - format as title case
+  local current_full_name
+  current_full_name="$(grep -E "^SEED_ADMIN_FULL_NAME=" "${ENV_FILE}" | cut -d= -f2- || true)"
+  local suggestion_full_name="${current_full_name:-Admin User}"
+  
+  while true; do
+    printf "\nSeed admin full name:\n"
+    read -r -p "Value [${suggestion_full_name}]: " fullname_input
+    local fullname_value="${fullname_input:-$suggestion_full_name}"
+    
+    if [[ -z "$fullname_value" ]]; then
+      warn "Full name cannot be empty."
+      continue
+    fi
+    
+    local formatted_fullname
+    formatted_fullname="$(format_title_case "$fullname_value")"
+    ensure_env_var "SEED_ADMIN_FULL_NAME" "$formatted_fullname"
+    break
+  done
 
   msg ""
   msg "--- Security Keys ---"
@@ -242,17 +439,100 @@ main() {
   ensure_env_var "JWT_PUBLIC_KEY_PATH" "${PUBLIC_KEY_PATH}"
   ensure_env_var "JWT_ALGORITHM" "RS256"
 
-  ensure_default "SESSION_TIMEOUT_MINUTES" "30"
-  ensure_default "ACCESS_TOKEN_EXPIRE_MINUTES" "15"
-  ensure_default "REFRESH_TOKEN_EXPIRE_MINUTES" "10080"
-  ensure_default "ALLOWED_TENANT_HOSTS" "[]"
-  ensure_default "RATE_LIMIT_PER_MINUTE" "60"
-  ensure_default "LOGIN_ATTEMPT_LIMIT" "5"
-  ensure_default "LOGIN_LOCKOUT_MINUTES" "15"
-  ensure_default "DEFAULT_PASSWORD_MIN_LENGTH" "12"
-  ensure_default "POSTGRES_USER" "sole"
-  ensure_default "POSTGRES_PASSWORD" "sole"
-  ensure_default "POSTGRES_DB" "sole"
+  msg ""
+  msg "--- Additional Configuration ---"
+  prompt_input "SESSION_TIMEOUT_MINUTES" \
+      "Session timeout (in minutes):" \
+      "30" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "ACCESS_TOKEN_EXPIRE_MINUTES" \
+      "Access token expiration (in minutes):" \
+      "15" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "REFRESH_TOKEN_EXPIRE_MINUTES" \
+      "Refresh token expiration (in minutes):" \
+      "10080" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "DEFAULT_PASSWORD_MIN_LENGTH" \
+      "Minimum password length:" \
+      "12" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "RATE_LIMIT_PER_MINUTE" \
+      "Rate limit (requests per minute):" \
+      "60" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "LOGIN_ATTEMPT_LIMIT" \
+      "Login attempt limit before lockout:" \
+      "5" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "LOGIN_LOCKOUT_MINUTES" \
+      "Login lockout duration (in minutes):" \
+      "15" \
+      "^[0-9]+$" \
+      "Must be a number."
+  prompt_input "LOCAL_UPLOAD_DIR" \
+      "Local upload directory:" \
+      "local_uploads"
+  
+  # PBGC_RATE_SCRAPE_ENABLED - format as lowercase boolean
+  local current_pbgc
+  current_pbgc="$(grep -E "^PBGC_RATE_SCRAPE_ENABLED=" "${ENV_FILE}" | cut -d= -f2- || true)"
+  local suggestion_pbgc="${current_pbgc:-true}"
+  
+  while true; do
+    printf "\nEnable PBGC rate scraping? (true/false):\n"
+    read -r -p "Value [${suggestion_pbgc}]: " pbgc_input
+    local pbgc_value="${pbgc_input:-$suggestion_pbgc}"
+    
+    if [[ -z "$pbgc_value" ]]; then
+      warn "Value cannot be empty."
+      continue
+    fi
+    
+    if ! [[ "$pbgc_value" =~ ^(true|false|yes|no|1|0|on|off)$ ]]; then
+      warn "Must be 'true' or 'false'."
+      continue
+    fi
+    
+    local formatted_pbgc
+    formatted_pbgc="$(format_boolean "$pbgc_value")"
+    ensure_env_var "PBGC_RATE_SCRAPE_ENABLED" "$formatted_pbgc"
+    break
+  done
+  
+  prompt_input "PBGC_RATE_SCRAPE_DAY" \
+      "PBGC scrape day of month:" \
+      "30" \
+      "^(0|[1-9]|[12][0-9]|3[01])$" \
+      "Must be a day (0-31)."
+  prompt_input "PBGC_RATE_SCRAPE_HOUR" \
+      "PBGC scrape hour (0-23):" \
+      "0" \
+      "^([0-9]|1[0-9]|2[0-3])$" \
+      "Must be an hour (0-23)."
+  prompt_input "PBGC_RATE_SCRAPE_MINUTE" \
+      "PBGC scrape minute (0-59):" \
+      "0" \
+      "^([0-9]|[1-5][0-9])$" \
+      "Must be a minute (0-59)."
+
+  msg ""
+  msg "--- Docker Compose Configuration ---"
+  prompt_input "POSTGRES_USER" \
+      "PostgreSQL username:" \
+      "sole"
+  prompt_input "POSTGRES_PASSWORD" \
+      "PostgreSQL password:" \
+      "sole"
+  prompt_input "POSTGRES_DB" \
+      "PostgreSQL database name:" \
+      "sole"
 
   normalize_database_url
 
