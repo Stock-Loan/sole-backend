@@ -15,6 +15,7 @@ FastAPI backend scaffold for the SOLE platform, aligned with the provided direct
 4. `make logs` — follow application logs.
 5. `make test` — run the test suite.
 6. `make down` — stop and remove containers/volumes.
+7. `make clean` — remove all containers, volumes, and images.
 
 The API listens on http://localhost:8000 with a health check at `/api/v1/health`.
 
@@ -83,3 +84,18 @@ Environment defaults will be created automatically if you **run `make setup-env`
 - Security headers middleware (HSTS optional via `ENABLE_HSTS`), CORS configured from `ALLOWED_ORIGINS`.
 - Structured JSON logging with request/tenant IDs, with separate handlers for transactional vs. audit logs.
 - JWTs signed with RS256 using provided private/public keys.
+
+## MFA Notes
+
+- MFA secrets are encrypted at rest using a Fernet key derived from `SECRET_KEY`.
+- Changing `SECRET_KEY` invalidates existing MFA secrets and will break verification until users re-enroll.
+- For consistent MFA behavior across environments, keep `SECRET_KEY` stable between restarts.
+- Org-level MFA settings live in `org_settings` and are configured via the org settings endpoints.
+- `require_two_factor` enforces MFA for users in the org.
+- `mfa_required_actions` controls which actions require a fresh MFA check (e.g., login, org settings changes).
+- `remember_device_days` controls how long a remembered device can bypass MFA prompts.
+- MFA enrollment and verification use TOTP (e.g., Google Authenticator, Authy).
+- Users can remember devices for a configurable period to reduce MFA prompts.
+- Users can disable MFA from their profile, which removes the MFA secret.
+- Users must have MFA enabled to perform actions requiring MFA.
+- Users with admin roles must enroll MFA on login.
