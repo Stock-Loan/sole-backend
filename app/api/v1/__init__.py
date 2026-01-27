@@ -25,6 +25,7 @@ from app.api.v1.routers import (
     org_documents,
     audit_logs,
     orgs,
+    assets,
 )
 
 api_router = APIRouter()
@@ -52,5 +53,6 @@ api_router.include_router(user_dashboard.router)
 api_router.include_router(org_documents.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(orgs.router)
+api_router.include_router(assets.router)
 
 __all__ = ["api_router"]

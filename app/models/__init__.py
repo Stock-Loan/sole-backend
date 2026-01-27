@@ -21,6 +21,8 @@ from app.models.vesting_event import VestingEvent
 from app.models.org_document_folder import OrgDocumentFolder
 from app.models.org_document_template import OrgDocumentTemplate
 from app.models.pbgc_mid_term_rate import PbgcMidTermRate
+from app.models.asset import Asset
+from app.models.storage_backend_config import StorageBackendConfig
 
 __all__ = [
     "AuditLog",
@@ -47,4 +49,6 @@ __all__ = [
     "OrgDocumentFolder",
     "OrgDocumentTemplate",
     "PbgcMidTermRate",
+    "Asset",
+    "StorageBackendConfig",
 ]

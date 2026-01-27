@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import uuid
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from passlib.context import CryptContext
@@ -47,8 +48,17 @@ def _load_public_key() -> str:
     raise JWTKeyError("JWT public key not configured")
 
 
+def _resolve_key_path(path: str) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    project_root = Path(__file__).resolve().parents[2]
+    return (project_root / candidate).resolve()
+
+
 def _read_key(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as key_file:
+    resolved_path = _resolve_key_path(path)
+    with open(resolved_path, "r", encoding="utf-8") as key_file:
         return key_file.read()
 
 
