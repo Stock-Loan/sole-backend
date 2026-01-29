@@ -1,4 +1,5 @@
 from typing import Iterable, Set, TYPE_CHECKING
+from datetime import datetime, timezone
 import json
 import logging
 
@@ -11,6 +12,7 @@ from app.models.access_control_list import AccessControlList
 from app.models.role import Role
 from app.models.user_role import UserRole
 from app.models.user import User
+from app.models.user_permission import UserPermission
 from app.utils.redis_client import get_redis_client
 
 if TYPE_CHECKING:
@@ -36,6 +38,29 @@ async def _load_permissions_from_db(db: AsyncSession, user_id, org_id: str) -> S
                 except ValueError:
                     continue
                 permissions.add(code.value)
+    user_perm_stmt = select(
+        UserPermission.permissions,
+        UserPermission.effect,
+        UserPermission.expires_at,
+    ).where(
+        UserPermission.org_id == org_id,
+        UserPermission.user_id == user_id,
+    )
+    user_perm_row = (await db.execute(user_perm_stmt)).first()
+    if user_perm_row:
+        perms, effect, expires_at = user_perm_row
+        if not expires_at or expires_at > datetime.now(timezone.utc):
+            perm_set: set[str] = set()
+            for value in perms or []:
+                try:
+                    code = PermissionCode(value)
+                except ValueError:
+                    continue
+                perm_set.add(code.value)
+            if effect == "deny":
+                permissions.difference_update(perm_set)
+            else:
+                permissions.update(perm_set)
     return permissions
 
 
@@ -83,25 +108,37 @@ async def invalidate_permission_cache_for_org(org_id: str) -> int:
 
 async def _load_acl_permissions(
     db: AsyncSession, user_id, org_id: str, resource_type: str, resource_id: str
-) -> Set[str]:
-    stmt = select(AccessControlList.permissions).where(
+) -> tuple[Set[str], Set[str]]:
+    stmt = select(
+        AccessControlList.permissions,
+        AccessControlList.effect,
+        AccessControlList.expires_at,
+    ).where(
         AccessControlList.org_id == org_id,
         AccessControlList.user_id == user_id,
         AccessControlList.resource_type == resource_type,
         AccessControlList.resource_id == resource_id,
     )
     result = await db.execute(stmt)
-    permissions: set[str] = set()
-    for row in result.all():
-        raw = row[0] or []
-        if isinstance(raw, Iterable):
-            for value in raw:
-                try:
-                    code = PermissionCode(value)
-                except ValueError:
-                    continue
-                permissions.add(code.value)
-    return permissions
+    allow_set: set[str] = set()
+    deny_set: set[str] = set()
+    now = datetime.now(timezone.utc)
+    for permissions, effect, expires_at in result.all():
+        if expires_at and expires_at <= now:
+            continue
+        raw = permissions or []
+        if not isinstance(raw, Iterable):
+            continue
+        for value in raw:
+            try:
+                code = PermissionCode(value)
+            except ValueError:
+                continue
+            if effect == "deny":
+                deny_set.add(code.value)
+            else:
+                allow_set.add(code.value)
+    return allow_set, deny_set
 
 
 async def check_permission(
@@ -132,9 +169,11 @@ async def check_permission(
         await _cache_permissions(redis, str(user.id), ctx.org_id, permission_set)
 
     if resource_type and resource_id:
-        permission_set.update(
-            await _load_acl_permissions(db, user.id, ctx.org_id, resource_type, resource_id)
+        allow_acl, deny_acl = await _load_acl_permissions(
+            db, user.id, ctx.org_id, resource_type, resource_id
         )
+        permission_set.update(allow_acl)
+        permission_set.difference_update(deny_acl)
     return target in permission_set
 
 

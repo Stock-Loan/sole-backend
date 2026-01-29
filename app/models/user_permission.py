@@ -6,25 +6,15 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from app.db.base import Base
 
 
-class AccessControlList(Base):
-    __tablename__ = "access_control_list"
+class UserPermission(Base):
+    __tablename__ = "user_permissions"
     __table_args__ = (
-        UniqueConstraint(
-            "org_id",
-            "user_id",
-            "resource_type",
-            "resource_id",
-            name="uq_acl_org_user_resource",
-        ),
+        UniqueConstraint("org_id", "user_id", name="uq_user_permissions_org_user"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    resource_type = Column(String(100), nullable=False)
-    resource_id = Column(String(255), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     permissions = Column(JSONB, nullable=False, default=list)
     effect = Column(String(10), nullable=False, server_default="allow")
     expires_at = Column(DateTime(timezone=True), nullable=True)

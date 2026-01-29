@@ -7,6 +7,7 @@ from app.models.department import Department
 from app.models.access_control_list import AccessControlList
 from app.models.role import Role
 from app.models.user import User
+from app.models.user_permission import UserPermission
 from app.models.user_role import UserRole
 from app.models.user_mfa_device import UserMfaDevice
 from app.models.user_mfa_recovery_code import UserMfaRecoveryCode
@@ -35,6 +36,7 @@ __all__ = [
     "User",
     "Role",
     "UserRole",
+    "UserPermission",
     "UserMfaDevice",
     "UserMfaRecoveryCode",
     "AccessControlList",

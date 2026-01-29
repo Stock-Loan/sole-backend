@@ -11,8 +11,16 @@ from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.access_control_list import AccessControlList
 from app.models.user import User
-from app.schemas.acl import ACLCreate, ACLListResponse, ACLOut
+from app.models.user_permission import UserPermission
+from app.schemas.acl import ACLCreate, ACLListResponse, ACLOut, ACLUpdate
+from app.schemas.user_permissions import (
+    UserPermissionAssignmentCreate,
+    UserPermissionAssignmentList,
+    UserPermissionAssignmentOut,
+    UserPermissionAssignmentUpdate,
+)
 from app.services.audit import model_snapshot, record_audit_log
+from app.services.authz import invalidate_permission_cache
 
 router = APIRouter(prefix="/acls", tags=["acls"])
 logger = logging.getLogger(__name__)
@@ -43,6 +51,8 @@ async def create_acl(
         resource_type=payload.resource_type,
         resource_id=payload.resource_id,
         permissions=payload.permissions,
+        effect=payload.effect,
+        expires_at=payload.expires_at,
     )
     db.add(acl)
     try:
@@ -71,6 +81,41 @@ async def create_acl(
         resource_type="acl",
         resource_id=str(acl.id),
         old_value=None,
+        new_value=model_snapshot(acl),
+    )
+    await db.commit()
+    return acl
+
+
+@router.patch("/{acl_id}", response_model=ACLOut, summary="Update an ACL entry")
+async def update_acl(
+    acl_id: UUID,
+    payload: ACLUpdate,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> ACLOut:
+    stmt = select(AccessControlList).where(
+        AccessControlList.id == acl_id, AccessControlList.org_id == ctx.org_id
+    )
+    result = await db.execute(stmt)
+    acl = result.scalar_one_or_none()
+    if not acl:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ACL not found")
+    old_snapshot = model_snapshot(acl)
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(acl, field, value)
+    await db.commit()
+    await db.refresh(acl)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="acl.updated",
+        resource_type="acl",
+        resource_id=str(acl.id),
+        old_value=old_snapshot,
         new_value=model_snapshot(acl),
     )
     await db.commit()
@@ -113,4 +158,185 @@ async def delete_acl(
             "resource_id": acl.resource_id,
         },
     )
+    return None
+
+
+@router.get(
+    "/assignments",
+    response_model=UserPermissionAssignmentList,
+    summary="List direct permission assignments for the org",
+)
+async def list_user_permission_assignments(
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> UserPermissionAssignmentList:
+    stmt = (
+        select(UserPermission, User.full_name, User.email)
+        .join(User, User.id == UserPermission.user_id)
+        .where(UserPermission.org_id == ctx.org_id)
+        .order_by(User.full_name.asc())
+    )
+    result = await db.execute(stmt)
+    items: list[UserPermissionAssignmentOut] = []
+    for row in result.all():
+        assignment, full_name, email = row
+        items.append(
+            UserPermissionAssignmentOut(
+                id=assignment.id,
+                org_id=assignment.org_id,
+                user_id=assignment.user_id,
+                full_name=full_name,
+                email=email,
+                permissions=assignment.permissions,
+                effect=assignment.effect,
+                expires_at=assignment.expires_at,
+                created_at=assignment.created_at,
+                updated_at=assignment.updated_at,
+            )
+        )
+    return UserPermissionAssignmentList(items=items)
+
+
+@router.post(
+    "/assignments",
+    response_model=UserPermissionAssignmentOut,
+    status_code=201,
+    summary="Create a direct permission assignment for a user",
+)
+async def create_user_permission_assignment(
+    payload: UserPermissionAssignmentCreate,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> UserPermissionAssignmentOut:
+    assignment = UserPermission(
+        org_id=ctx.org_id,
+        user_id=payload.user_id,
+        permissions=payload.permissions,
+        effect=payload.effect,
+        expires_at=payload.expires_at,
+    )
+    db.add(assignment)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Direct permission assignment already exists for this user",
+        ) from exc
+    await db.refresh(assignment)
+    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user_permissions.created",
+        resource_type="user_permissions",
+        resource_id=str(assignment.user_id),
+        old_value=None,
+        new_value=model_snapshot(assignment),
+    )
+    await db.commit()
+    user_row = await db.execute(select(User.full_name, User.email).where(User.id == assignment.user_id))
+    full_name, email = user_row.one()
+    return UserPermissionAssignmentOut(
+        id=assignment.id,
+        org_id=assignment.org_id,
+        user_id=assignment.user_id,
+        full_name=full_name,
+        email=email,
+        permissions=assignment.permissions,
+        effect=assignment.effect,
+        expires_at=assignment.expires_at,
+        created_at=assignment.created_at,
+        updated_at=assignment.updated_at,
+    )
+
+
+@router.patch(
+    "/assignments/{assignment_id}",
+    response_model=UserPermissionAssignmentOut,
+    summary="Update a direct permission assignment",
+)
+async def update_user_permission_assignment(
+    assignment_id: UUID,
+    payload: UserPermissionAssignmentUpdate,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> UserPermissionAssignmentOut:
+    stmt = select(UserPermission).where(
+        UserPermission.id == assignment_id, UserPermission.org_id == ctx.org_id
+    )
+    assignment = (await db.execute(stmt)).scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+    old_snapshot = model_snapshot(assignment)
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(assignment, field, value)
+    await db.commit()
+    await db.refresh(assignment)
+    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user_permissions.updated",
+        resource_type="user_permissions",
+        resource_id=str(assignment.user_id),
+        old_value=old_snapshot,
+        new_value=model_snapshot(assignment),
+    )
+    await db.commit()
+    user_row = await db.execute(select(User.full_name, User.email).where(User.id == assignment.user_id))
+    full_name, email = user_row.one()
+    return UserPermissionAssignmentOut(
+        id=assignment.id,
+        org_id=assignment.org_id,
+        user_id=assignment.user_id,
+        full_name=full_name,
+        email=email,
+        permissions=assignment.permissions,
+        effect=assignment.effect,
+        expires_at=assignment.expires_at,
+        created_at=assignment.created_at,
+        updated_at=assignment.updated_at,
+    )
+
+
+@router.delete(
+    "/assignments/{assignment_id}",
+    status_code=204,
+    summary="Delete a direct permission assignment",
+)
+async def delete_user_permission_assignment(
+    assignment_id: UUID,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    stmt = select(UserPermission).where(
+        UserPermission.id == assignment_id, UserPermission.org_id == ctx.org_id
+    )
+    assignment = (await db.execute(stmt)).scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+    old_snapshot = model_snapshot(assignment)
+    await db.delete(assignment)
+    await db.commit()
+    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user_permissions.deleted",
+        resource_type="user_permissions",
+        resource_id=str(assignment.user_id),
+        old_value=old_snapshot,
+        new_value=None,
+    )
+    await db.commit()
     return None

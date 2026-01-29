@@ -7,10 +7,8 @@ from pydantic import BaseModel, field_validator
 from app.core.permissions import PermissionCode
 
 
-class ACLCreate(BaseModel):
+class UserPermissionAssignmentCreate(BaseModel):
     user_id: UUID
-    resource_type: str
-    resource_id: str
     permissions: list[str]
     effect: Literal["allow", "deny"] = "allow"
     expires_at: datetime | None = None
@@ -26,16 +24,8 @@ class ACLCreate(BaseModel):
                 raise ValueError(f"Unknown permission: {code}")
         return validated
 
-    @field_validator("resource_type", "resource_id")
-    @classmethod
-    def non_empty(cls, v: str) -> str:
-        value = (v or "").strip()
-        if not value:
-            raise ValueError("must not be empty")
-        return value
 
-
-class ACLUpdate(BaseModel):
+class UserPermissionAssignmentUpdate(BaseModel):
     permissions: list[str] | None = None
     effect: Literal["allow", "deny"] | None = None
     expires_at: datetime | None = None
@@ -54,12 +44,12 @@ class ACLUpdate(BaseModel):
         return validated
 
 
-class ACLOut(BaseModel):
+class UserPermissionAssignmentOut(BaseModel):
     id: UUID
     org_id: str
     user_id: UUID
-    resource_type: str
-    resource_id: str
+    full_name: str | None = None
+    email: str | None = None
     permissions: list[str]
     effect: str
     expires_at: datetime | None = None
@@ -70,5 +60,5 @@ class ACLOut(BaseModel):
         from_attributes = True
 
 
-class ACLListResponse(BaseModel):
-    items: list[ACLOut]
+class UserPermissionAssignmentList(BaseModel):
+    items: list[UserPermissionAssignmentOut]
