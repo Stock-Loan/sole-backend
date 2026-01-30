@@ -56,7 +56,7 @@ class LoanApplication(Base):
             name="ck_loan_app_interest_type",
         ),
         CheckConstraint(
-            "repayment_method IN ('INTEREST_ONLY', 'BALLOON', 'PRINCIPAL_AND_INTEREST')",
+            "repayment_method IN ('BALLOON', 'PRINCIPAL_AND_INTEREST')",
             name="ck_loan_app_repayment_method",
         ),
     )

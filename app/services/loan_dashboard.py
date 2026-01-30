@@ -122,11 +122,6 @@ async def build_dashboard_summary(
         LoanApplication.status == "ACTIVE",
         LoanApplication.interest_type == "VARIABLE",
     )
-    active_interest_only_stmt = select(func.count()).where(
-        LoanApplication.org_id == ctx.org_id,
-        LoanApplication.status == "ACTIVE",
-        LoanApplication.repayment_method == "INTEREST_ONLY",
-    )
     active_balloon_stmt = select(func.count()).where(
         LoanApplication.org_id == ctx.org_id,
         LoanApplication.status == "ACTIVE",
@@ -139,9 +134,6 @@ async def build_dashboard_summary(
     )
     active_fixed_count = int((await db.execute(active_fixed_stmt)).scalar_one() or 0)
     active_variable_count = int((await db.execute(active_variable_stmt)).scalar_one() or 0)
-    active_interest_only_count = int(
-        (await db.execute(active_interest_only_stmt)).scalar_one() or 0
-    )
     active_balloon_count = int((await db.execute(active_balloon_stmt)).scalar_one() or 0)
     active_principal_and_interest_count = int(
         (await db.execute(active_principal_and_interest_stmt)).scalar_one() or 0
@@ -169,7 +161,6 @@ async def build_dashboard_summary(
         pending_legal=pending_legal,
         active_fixed_count=active_fixed_count,
         active_variable_count=active_variable_count,
-        active_interest_only_count=active_interest_only_count,
         active_balloon_count=active_balloon_count,
         active_principal_and_interest_count=active_principal_and_interest_count,
     )

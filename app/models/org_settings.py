@@ -46,8 +46,8 @@ class OrgSettings(Base):
     allowed_repayment_methods = Column(
         JSONB,
         nullable=False,
-        default=lambda: ["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"],
-        server_default=text('\'["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"]\'::jsonb'),
+        default=lambda: ["BALLOON", "PRINCIPAL_AND_INTEREST"],
+        server_default=text('\'["BALLOON", "PRINCIPAL_AND_INTEREST"]\'::jsonb'),
     )
     min_loan_term_months = Column(Integer, nullable=False, default=6, server_default="6")
     max_loan_term_months = Column(Integer, nullable=False, default=60, server_default="60")

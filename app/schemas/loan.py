@@ -433,7 +433,6 @@ class LoanDashboardSummary(BaseModel):
     pending_legal: int
     active_fixed_count: int
     active_variable_count: int
-    active_interest_only_count: int
     active_balloon_count: int
     active_principal_and_interest_count: int
 

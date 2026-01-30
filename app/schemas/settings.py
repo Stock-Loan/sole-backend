@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class LoanRepaymentMethod(str, Enum):
-    INTEREST_ONLY = "INTEREST_ONLY"
     BALLOON = "BALLOON"
     PRINCIPAL_AND_INTEREST = "PRINCIPAL_AND_INTEREST"
 
@@ -47,7 +46,6 @@ class OrgSettingsBase(BaseModel):
     min_vested_shares_to_exercise: int | None = Field(default=None, ge=0)
     allowed_repayment_methods: list[LoanRepaymentMethod] = Field(
         default_factory=lambda: [
-            LoanRepaymentMethod.INTEREST_ONLY,
             LoanRepaymentMethod.BALLOON,
             LoanRepaymentMethod.PRINCIPAL_AND_INTEREST,
         ]
