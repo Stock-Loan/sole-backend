@@ -27,6 +27,7 @@ class MfaEnforcementAction(str, Enum):
     USER_PROFILE_EDIT = "USER_PROFILE_EDIT"
     ROLE_ASSIGNMENT = "ROLE_ASSIGNMENT"
     USER_MFA_RESET = "USER_MFA_RESET"
+    ACL_ASSIGNMENT = "ACL_ASSIGNMENT"
 
 
 class OrgSettingsBase(BaseModel):

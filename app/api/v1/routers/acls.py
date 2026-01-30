@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ from app.schemas.user_permissions import (
 )
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.authz import invalidate_permission_cache
+from app.schemas.settings import MfaEnforcementAction
 
 router = APIRouter(prefix="/acls", tags=["acls"])
 logger = logging.getLogger(__name__)
@@ -41,10 +42,18 @@ async def list_acls(
 @router.post("", response_model=ACLOut, status_code=201, summary="Create an ACL entry")
 async def create_acl(
     payload: ACLCreate,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> ACLOut:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
+    )
     acl = AccessControlList(
         org_id=ctx.org_id,
         user_id=payload.user_id,
@@ -91,10 +100,18 @@ async def create_acl(
 async def update_acl(
     acl_id: UUID,
     payload: ACLUpdate,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> ACLOut:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
+    )
     stmt = select(AccessControlList).where(
         AccessControlList.id == acl_id, AccessControlList.org_id == ctx.org_id
     )
@@ -125,10 +142,18 @@ async def update_acl(
 @router.delete("/{acl_id}", status_code=204, summary="Delete an ACL entry")
 async def delete_acl(
     acl_id: UUID,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
+    )
     stmt = select(AccessControlList).where(
         AccessControlList.id == acl_id, AccessControlList.org_id == ctx.org_id
     )
@@ -206,10 +231,18 @@ async def list_user_permission_assignments(
 )
 async def create_user_permission_assignment(
     payload: UserPermissionAssignmentCreate,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserPermissionAssignmentOut:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
+    )
     assignment = UserPermission(
         org_id=ctx.org_id,
         user_id=payload.user_id,
@@ -263,10 +296,18 @@ async def create_user_permission_assignment(
 async def update_user_permission_assignment(
     assignment_id: UUID,
     payload: UserPermissionAssignmentUpdate,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserPermissionAssignmentOut:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
+    )
     stmt = select(UserPermission).where(
         UserPermission.id == assignment_id, UserPermission.org_id == ctx.org_id
     )
@@ -314,10 +355,18 @@ async def update_user_permission_assignment(
 )
 async def delete_user_permission_assignment(
     assignment_id: UUID,
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.ACL_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    await deps.require_mfa_for_action(
+        request,
+        current_user,
+        ctx,
+        db,
+        action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
+    )
     stmt = select(UserPermission).where(
         UserPermission.id == assignment_id, UserPermission.org_id == ctx.org_id
     )
