@@ -6,7 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
-from app.models.audit_log import AuditLog
 from app.models.loan_application import LoanApplication
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
@@ -69,20 +68,19 @@ async def try_activate_loan(
         application_id=application.id,
         status=LoanApplicationStatus.ACTIVE.value,
     )
-    db.add(
-        AuditLog(
-            org_id=ctx.org_id,
-            actor_id=actor_id,
-            action="loan_application.activated",
-            resource_type="loan_application",
-            resource_id=str(application.id),
-            old_value={"status": old_status},
-            new_value={
-                "status": application.status,
-                "activation_date": application.activation_date.isoformat(),
-                "election_83b_due_date": application.election_83b_due_date.isoformat(),
-            },
-        )
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=actor_id,
+        action="loan_application.activated",
+        resource_type="loan_application",
+        resource_id=str(application.id),
+        old_value={"status": old_status},
+        new_value={
+            "status": application.status,
+            "activation_date": application.activation_date.isoformat(),
+            "election_83b_due_date": application.election_83b_due_date.isoformat(),
+        },
     )
     await _ensure_post_activation_stages(db, ctx, application)
     return True

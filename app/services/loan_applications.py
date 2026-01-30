@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, aliased
 
 from app.api import deps
-from app.models.audit_log import AuditLog
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.loan_application import LoanApplication
 from app.models.loan_document import LoanDocument
@@ -33,6 +32,7 @@ from app.services import (
     stock_reservations,
     vesting_engine,
 )
+from app.services.audit import record_audit_log
 
 
 def _snapshot_org_settings(
@@ -183,8 +183,9 @@ def _record_audit_log(
     application: LoanApplication,
     old_value: dict | None,
 ) -> None:
-    entry = AuditLog(
-        org_id=ctx.org_id,
+    record_audit_log(
+        db,
+        ctx,
         actor_id=actor_id,
         action=action,
         resource_type="loan_application",
@@ -192,7 +193,6 @@ def _record_audit_log(
         old_value=old_value,
         new_value=_application_snapshot(application),
     )
-    db.add(entry)
 
 
 def _validate_idempotency_key(value: str | None) -> str | None:

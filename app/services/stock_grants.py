@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import deps
-from app.models.audit_log import AuditLog
 from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.org_membership import OrgMembership
 from app.models.vesting_event import VestingEvent
@@ -23,6 +22,7 @@ from app.schemas.stock import (
     VestingStrategy,
 )
 from app.services import stock_dashboard, stock_summary
+from app.services.audit import record_audit_log
 
 
 def _ensure_membership_active(membership: OrgMembership) -> None:
@@ -215,14 +215,15 @@ def _grant_snapshot(grant: EmployeeStockGrant) -> dict:
 async def _record_audit_log(
     db: AsyncSession,
     *,
-    org_id: str,
+    ctx: deps.TenantContext,
     actor_id,
     action: str,
     grant: EmployeeStockGrant,
     old_value: dict | None,
 ) -> None:
-    entry = AuditLog(
-        org_id=org_id,
+    record_audit_log(
+        db,
+        ctx,
         actor_id=actor_id,
         action=action,
         resource_type="employee_stock_grant",
@@ -230,7 +231,6 @@ async def _record_audit_log(
         old_value=old_value,
         new_value=_grant_snapshot(grant),
     )
-    db.add(entry)
     await db.commit()
 
 
@@ -337,7 +337,7 @@ async def create_grant(
     _apply_vesting_summary(grant)
     await _record_audit_log(
         db,
-        org_id=ctx.org_id,
+        ctx=ctx,
         actor_id=actor_id,
         action="stock_grant.created",
         grant=grant,
@@ -407,7 +407,7 @@ async def update_grant(
     _apply_vesting_summary(grant)
     await _record_audit_log(
         db,
-        org_id=ctx.org_id,
+        ctx=ctx,
         actor_id=actor_id,
         action="stock_grant.updated",
         grant=grant,

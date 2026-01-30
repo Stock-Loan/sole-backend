@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from app.api.deps import TenantContext
-from app.models.audit_log import AuditLog
+from app.services.audit import record_audit_log
 from app.models.org_settings import OrgSettings
 from app.services import mfa as mfa_service
 from app.schemas.settings import (
@@ -318,8 +318,9 @@ async def update_org_settings(
         current_version = settings.policy_version or 1
         settings.policy_version = max(int(current_version), 1) + 1
         new_snapshot = _settings_snapshot(settings)
-    audit = AuditLog(
-        org_id=ctx.org_id,
+    record_audit_log(
+        db,
+        ctx,
         actor_id=actor_id,
         action="org_settings.updated",
         resource_type="org_settings",
@@ -327,7 +328,6 @@ async def update_org_settings(
         old_value=old_snapshot,
         new_value=new_snapshot,
     )
-    db.add(audit)
     db.add(settings)
     if (
         data.get("remember_device_days") is not None

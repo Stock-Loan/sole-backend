@@ -27,6 +27,8 @@ class AuditLogEntry(BaseModel):
     resource_id: str
     old_value: dict[str, Any] | list[Any] | None = None
     new_value: dict[str, Any] | list[Any] | None = None
+    changes: dict[str, Any] | None = None
+    summary: str | None = None
     created_at: datetime
 
 

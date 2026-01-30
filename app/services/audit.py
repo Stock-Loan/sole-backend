@@ -35,6 +35,28 @@ def model_snapshot(model: Any, *, exclude: Iterable[str] | None = None) -> dict[
     return serialize_for_audit(data)
 
 
+def _diff_values(old: Any, new: Any, prefix: str = "") -> dict[str, dict[str, Any]]:
+    changes: dict[str, dict[str, Any]] = {}
+    if isinstance(old, dict) and isinstance(new, dict):
+        keys = set(old.keys()) | set(new.keys())
+        for key in keys:
+            path = f"{prefix}.{key}" if prefix else str(key)
+            changes.update(_diff_values(old.get(key), new.get(key), path))
+        return changes
+    if old != new:
+        changes[prefix or "value"] = {"from": old, "to": new}
+    return changes
+
+
+def _build_summary(action: str, changes: dict[str, dict[str, Any]] | None) -> str:
+    if not changes:
+        return action
+    keys = list(changes.keys())
+    snippet = ", ".join(keys[:3])
+    suffix = "..." if len(keys) > 3 else ""
+    return f"{action}: {snippet}{suffix}"
+
+
 def record_audit_log(
     db: AsyncSession,
     ctx: deps.TenantContext,
@@ -46,13 +68,23 @@ def record_audit_log(
     old_value: Any | None = None,
     new_value: Any | None = None,
 ) -> None:
+    serialized_old = serialize_for_audit(old_value) if old_value is not None else None
+    serialized_new = serialize_for_audit(new_value) if new_value is not None else None
+    changes = None
+    if serialized_old is not None or serialized_new is not None:
+        changes = _diff_values(serialized_old or {}, serialized_new or {})
+        if not changes:
+            changes = None
+    summary = _build_summary(action, changes)
     entry = AuditLog(
         org_id=ctx.org_id,
         actor_id=actor_id,
         action=action,
         resource_type=resource_type,
         resource_id=resource_id,
-        old_value=serialize_for_audit(old_value) if old_value is not None else None,
-        new_value=serialize_for_audit(new_value) if new_value is not None else None,
+        old_value=serialized_old,
+        new_value=serialized_new,
+        changes=changes,
+        summary=summary,
     )
     db.add(entry)
