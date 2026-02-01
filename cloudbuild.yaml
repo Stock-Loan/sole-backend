@@ -1,0 +1,41 @@
+# Cloud Build config for building & deploying SOLE backend to Cloud Run
+# Override substitutions in trigger or at build time as needed.
+
+substitutions:
+  _SERVICE: sole-api
+  _REGION: us-central1
+  _AR_HOST: us-central1-docker.pkg.dev
+  _IMAGE_NAME: sole-api
+
+steps:
+  - id: Build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_AR_HOST}/${PROJECT_ID}/${_IMAGE_NAME}:${SHORT_SHA}
+      - .
+
+  - id: Push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_AR_HOST}/${PROJECT_ID}/${_IMAGE_NAME}:${SHORT_SHA}
+
+  - id: Deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image
+      - ${_AR_HOST}/${PROJECT_ID}/${_IMAGE_NAME}:${SHORT_SHA}
+      - --region
+      - ${_REGION}
+      - --platform
+      - managed
+      - --quiet
+
+images:
+  - ${_AR_HOST}/${PROJECT_ID}/${_IMAGE_NAME}:${SHORT_SHA}

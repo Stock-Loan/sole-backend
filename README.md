@@ -10,12 +10,14 @@ FastAPI backend scaffold for the SOLE platform, aligned with the provided direct
 ## Quickstart
 
 1. `make setup-env` — interactive bootstrap (choose dev or prod). Creates `.env` for development or `.env.prod` for production.
-2. `make up` — build and start app + Postgres + Redis.
-3. `make migrate` — run Alembic migrations.
-4. `make logs` — follow application logs.
-5. `make test` — run the test suite.
-6. `make down` — stop and remove containers/volumes.
-7. `make clean` — remove all containers, volumes, and images.
+2. `make build` — build Docker images.
+3. `make up` — build and start app + Postgres + Redis.
+4. `make migrate` — run Alembic migrations.
+5. `make seed` — (optional) seed initial data.
+6. `make logs` — follow application logs.
+7. `make test` — run the test suite.
+8. `make down` — stop and remove containers/volumes.
+9. `make clean` — remove all containers, volumes, and images.
 
 The API listens on http://localhost:8000 with a health check at `/api/v1/health`.
 
@@ -38,6 +40,77 @@ The API listens on http://localhost:8000 with a health check at `/api/v1/health`
 - Run `make setup-env` and choose **prod** to create `.env.prod`.
 - Production setup requires all values and writes inline RSA keys to `.env.prod` (no secrets are written to disk).
 - Prefer injecting secrets via environment variables or your secrets manager in production.
+
+## Deployment
+
+Below are two supported deployment paths: containerized (Docker) and non-container (systemd or process manager).
+
+### Deploy as Container (Docker)
+
+Recommended for most environments.
+
+1. **Prepare env**
+   - Run `make setup-env` and choose **prod**, or provide environment variables via your platform (Kubernetes, ECS, etc.).
+   - Ensure `DATABASE_URL` points to your production database and `REDIS_URL` to your Redis instance.
+   - Set `TENANCY_MODE`, `DEFAULT_ORG_ID`, `DEFAULT_ORG_NAME`, `DEFAULT_ORG_SLUG`, and JWT keys.
+
+2. **Build and run**
+   - Build: `make build`
+   - Start: `make up`
+
+3. **Migrate**
+   - `make migrate`
+
+4. **(Optional) Seed**
+   - `make seed`
+
+5. **Verify**
+   - Health check: `GET /api/v1/health/live`
+   - Docs: `/docs`
+
+Notes:
+- If you use `compose.yaml` in production, mount your secrets (or inject via env) and configure persistent volumes for Postgres/Redis and uploads (`LOCAL_UPLOAD_DIR`).
+- If you deploy to a container platform, you can run the same image from `Dockerfile` and set `UVICORN_WORKERS` as needed.
+
+### Deploy as a Normal App (no Docker)
+
+Use this when you want to run the API directly on a VM or server.
+
+1. **System requirements**
+   - Python 3.11+
+   - Postgres (compatible with the schema in `migrations/`)
+   - Redis
+
+2. **Set up the app**
+   ```bash
+   python -m venv venv
+   . venv/bin/activate
+   pip install -U pip
+   pip install -e .
+   ```
+
+3. **Configure environment**
+   - Create `.env` or export environment variables. Minimum required:
+     - `DATABASE_URL`, `REDIS_URL`
+     - `SECRET_KEY`
+     - `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` (or `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH`)
+     - `DEFAULT_ORG_ID`, `DEFAULT_ORG_NAME`, `DEFAULT_ORG_SLUG`
+     - `TENANCY_MODE`
+   - Optional: `ALLOWED_ORIGINS`, `LOG_LEVEL`, `ENABLE_HSTS`, `PROXIES_COUNT`, `LOCAL_UPLOAD_DIR`
+
+4. **Run migrations**
+   ```bash
+   alembic upgrade head
+   ```
+
+5. **Start the server**
+   ```bash
+   uvicorn app.main:app --host 0.0.0.0 --port 8000
+   ```
+   For production, run via systemd, supervisord, or a process manager and configure multiple workers (e.g., `--workers 2`).
+
+6. **Verify**
+   - `GET /api/v1/health/live`
 
 ## Configuration
 
