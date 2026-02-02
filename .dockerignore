@@ -1,6 +1,5 @@
 secret-prod/
 .env
-env*.yaml
 *.pyc
 .git/
 venv/

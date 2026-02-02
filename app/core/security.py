@@ -51,7 +51,12 @@ def _load_public_key() -> str:
 def _resolve_key_path(path: str) -> Path:
     candidate = Path(path).expanduser()
     if candidate.is_absolute():
-        return candidate
+        if candidate.exists():
+            return candidate
+        project_root = Path(__file__).resolve().parents[2]
+        # Fallback for host-absolute paths inside containers (e.g. /home/.../secrets/*.pem)
+        fallback = project_root / "secrets" / candidate.name
+        return fallback.resolve()
     project_root = Path(__file__).resolve().parents[2]
     return (project_root / candidate).resolve()
 

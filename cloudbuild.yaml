@@ -7,6 +7,7 @@ substitutions:
   _RUNTIME_SA: sole-runner@${PROJECT_ID}.iam.gserviceaccount.com
 
 steps:
+  # 1. Build the Container Image
   - id: Build
     name: gcr.io/cloud-builders/docker
     args:
@@ -15,12 +16,14 @@ steps:
       - ${_AR_HOST}/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${SHORT_SHA}
       - .
 
+  # 2. Push the Image to Artifact Registry
   - id: Push
     name: gcr.io/cloud-builders/docker
     args:
       - push
       - ${_AR_HOST}/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${SHORT_SHA}
 
+  # 3. Deploy to Cloud Run
   - id: Deploy
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
@@ -36,19 +39,21 @@ steps:
       - managed
       - --service-account
       - ${_RUNTIME_SA}
-      # optional: if you want it public
       - --allow-unauthenticated
-      # optional: non-secret config file committed to repo (recommended)
-      - --env-vars-file
-      - env.prod.yaml
-      # optional: secret references only (no values)
+      
+      # --- CONFIGURATION (Non-Sensitive) ---
+      # We use ^@^ as a delimiter so that commas in ALLOWED_ORIGINS don't break the list
+      - --set-env-vars
+      - ^@^TENANCY_MODE=multi@ENABLE_HSTS=true@LOG_LEVEL=DEBUG@DEFAULT_ORG_ID=sole-llc@DEFAULT_ORG_NAME=Sole LLC@DEFAULT_ORG_SLUG=sole-llc@JWT_ALGORITHM=RS256@SESSION_TIMEOUT_MINUTES=10@ACCESS_TOKEN_EXPIRE_MINUTES=15@REFRESH_TOKEN_EXPIRE_MINUTES=10@DEFAULT_PASSWORD_MIN_LENGTH=12@RATE_LIMIT_PER_MINUTE=5@LOGIN_ATTEMPT_LIMIT=5@LOGIN_LOCKOUT_MINUTES=5@SEED_ADMIN_FULL_NAME=Sole Admin@PBGC_RATE_SCRAPE_ENABLED=true@PBGC_RATE_SCRAPE_DAY=28@PBGC_RATE_SCRAPE_HOUR=1@PBGC_RATE_SCRAPE_MINUTE=59@STORAGE_PROVIDER=gcs@GCS_BUCKET=sole-486122-prod-storage@GCS_LOCATION=us-central1@ALLOWED_ORIGINS=http://localhost:5173,https://sole-frontend-three.vercel.app
+
+      # --- SECRETS (From Secret Manager) ---
       - --set-secrets
       - DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,SECRET_KEY=SECRET_KEY:latest,JWT_PRIVATE_KEY=JWT_PRIVATE_KEY:latest,JWT_PUBLIC_KEY=JWT_PUBLIC_KEY:latest,SEED_ADMIN_PASSWORD=SEED_ADMIN_PASSWORD:latest,SEED_ADMIN_EMAIL=SEED_ADMIN_EMAIL:latest
+      
       - --quiet
 
 images:
   - ${_AR_HOST}/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${SHORT_SHA}
 
-# --- ADDED TO FIX BUILD FAILURE ---
 options:
   logging: CLOUD_LOGGING_ONLY

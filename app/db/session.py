@@ -8,8 +8,14 @@ from app.core.settings import settings
 
 connect_args: dict = {}
 
-# Default to SSL in Cloud Run unless explicitly disabled
-db_ssl = os.getenv("DB_SSL", "true").lower() in ("1", "true", "yes", "on")
+# Default to SSL unless explicitly disabled.
+db_ssl_env = os.getenv("DB_SSL")
+if db_ssl_env is not None:
+    db_ssl = db_ssl_env.lower() in ("1", "true", "yes", "on")
+else:
+    db_url = settings.database_url.lower()
+    db_ssl = not ("ssl=disable" in db_url or "sslmode=disable" in db_url)
+
 if db_ssl:
     connect_args["ssl"] = ssl.create_default_context()
 
