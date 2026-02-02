@@ -1,174 +1,190 @@
 # SOLE Backend
 
-FastAPI backend scaffold for the SOLE platform, aligned with the provided directory map and tenancy/security requirements.
+FastAPI backend scaffold for the SOLE platform.
 
 ## Prerequisites
 
-- Python 3.11+
-- Docker + Docker Compose
+- **Python 3.11+**
+- **Docker + Docker Compose**
+- **Google Cloud CLI** (`gcloud`) - _Required for deployment_
 
-## Quickstart
+---
 
-1. `make setup-env` — interactive bootstrap (choose dev or prod). Creates `.env` for development or `.env.prod` for production.
-2. `make build` — build Docker images.
-3. `make up` — build and start app + Postgres + Redis.
-4. `make migrate` — run Alembic migrations.
-5. `make seed` — (optional) seed initial data.
-6. `make logs` — follow application logs.
-7. `make test` — run the test suite.
-8. `make down` — stop and remove containers/volumes.
-9. `make clean` — remove all containers, volumes, and images.
+## 🚀 Local Development (Daily Workflow)
 
-The API listens on http://localhost:8000 with a health check at `/api/v1/health`.
+We use Docker Compose to run the API, Postgres, and Redis locally with hot-reloading enabled.
 
-## Getting Started (Step-by-Step)
+### 1. Setup Environment
 
-1. Run `make setup-env` and choose **dev** when prompted.
-2. Verify `.env` was created in the project root and review values (especially `ALLOWED_ORIGINS` and `DATABASE_URL`).
-3. Start services with `make up`.
-4. Apply migrations with `make migrate`.
-5. Open docs at http://localhost:8000/docs.
+Run the interactive setup to create your local `.env` file:
 
-## Development Workflow
+```bash
+make setup-env
+# Choose 'dev' when prompted
+```
 
-- Use `make logs` to monitor API output.
-- Use `make test` for the full test suite, or `make test-unit` / `make test-integration` for smaller runs.
-- Use `make fmt`, `make lint`, and `make type` before pushing changes.
+### 2. Start the App
 
-## Production Notes
+Start the API, Database, and Redis. The API will auto-reload when you save files.
 
-- Run `make setup-env` and choose **prod** to create `.env.prod`.
-- Production setup requires all values and writes inline RSA keys to `.env.prod` (no secrets are written to disk).
-- Prefer injecting secrets via environment variables or your secrets manager in production.
+```bash
+make up
 
-## Deployment
+```
 
-Below are two supported deployment paths: containerized (Docker) and non-container (systemd or process manager).
+- **API:** http://localhost:8000
+- **Docs:** http://localhost:8000/docs
+- **Health:** http://localhost:8000/api/v1/health
 
-### Deploy as Container (Docker)
+### 3. Initialize Database
 
-Recommended for most environments.
+Since your local DB is fresh, run migrations and seed the initial admin user.
 
-1. **Prepare env**
-   - Run `make setup-env` and choose **prod**, or provide environment variables via your platform (Kubernetes, ECS, etc.).
-   - Ensure `DATABASE_URL` points to your production database and `REDIS_URL` to your Redis instance.
-   - Set `TENANCY_MODE`, `DEFAULT_ORG_ID`, `DEFAULT_ORG_NAME`, `DEFAULT_ORG_SLUG`, and JWT keys.
+```bash
+# Apply migrations
+make migrate
 
-2. **Build and run**
-   - Build: `make build`
-   - Start: `make up`
+# Seed initial data (admin user)
+make seed
 
-3. **Migrate**
-   - `make migrate`
+```
 
-4. **(Optional) Seed**
-   - `make seed`
+### Common Commands
 
-5. **Verify**
-   - Health check: `GET /api/v1/health/live`
-   - Docs: `/docs`
+| Command                     | Description                                          |
+| --------------------------- | ---------------------------------------------------- |
+| `make up`                   | Start all services (detached mode)                   |
+| `make down`                 | Stop all services                                    |
+| `make logs`                 | Tail logs for all services                           |
+| `make revision m="message"` | Create a new Alembic migration file                  |
+| `make migrate`              | Run `alembic upgrade head` locally                   |
+| `make test`                 | Run the full test suite                              |
+| `make clean`                | Nuke everything (containers, volumes) to start fresh |
 
-Notes:
-- If you use `compose.yaml` in production, mount your secrets (or inject via env) and configure persistent volumes for Postgres/Redis and uploads (`LOCAL_UPLOAD_DIR`).
-- If you deploy to a container platform, you can run the same image from `Dockerfile` and set `UVICORN_WORKERS` as needed.
+---
 
-### Deploy as a Normal App (no Docker)
+## ☁️ Production Deployment (Google Cloud Run)
 
-Use this when you want to run the API directly on a VM or server.
+Production uses **Cloud Run** for the API and **Cloud Run Jobs** for migrations/seeding.
 
-1. **System requirements**
-   - Python 3.11+
-   - Postgres (compatible with the schema in `migrations/`)
-   - Redis
+- **Service:** `sole-api` (The API server)
+- **Jobs:** `sole-db-migrate` (Runs Alembic), `sole-db-seed` (Runs initial data)
 
-2. **Set up the app**
-   ```bash
-   python -m venv venv
-   . venv/bin/activate
-   pip install -U pip
-   pip install -e .
-   ```
+### One-Command Release
 
-3. **Configure environment**
-   - Create `.env` or export environment variables. Minimum required:
-     - `DATABASE_URL`, `REDIS_URL`
-     - `SECRET_KEY`
-     - `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` (or `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH`)
-     - `DEFAULT_ORG_ID`, `DEFAULT_ORG_NAME`, `DEFAULT_ORG_SLUG`
-     - `TENANCY_MODE`
-   - Optional: `ALLOWED_ORIGINS`, `LOG_LEVEL`, `ENABLE_HSTS`, `PROXIES_COUNT`, `LOCAL_UPLOAD_DIR`
+To build, deploy, update jobs, and run migrations automatically:
 
-4. **Run migrations**
-   ```bash
-   alembic upgrade head
-   ```
+```bash
+make prod-release
 
-5. **Start the server**
-   ```bash
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
-   ```
-   For production, run via systemd, supervisord, or a process manager and configure multiple workers (e.g., `--workers 2`).
+```
 
-6. **Verify**
-   - `GET /api/v1/health/live`
+### Manual Steps
 
-## Configuration
+If you need more control, you can run steps individually:
 
-Environment defaults will be created automatically if you **run `make setup-env`** and choose **dev**. The dev setup writes `.env` from prompts, and the prod setup writes `.env.prod` with required values:
+1. **Deploy Code** (Builds and pushes image to Cloud Run Service):
 
-- `TENANCY_MODE` (`single`|`multi`)
-- `DATABASE_URL` (async driver; for docker-compose use `...@db:5432/sole`)
+```bash
+make deploy
+
+```
+
+2. **Update Jobs** (Updates the Migration/Seed jobs to use the new image):
+
+```bash
+make prod-update-jobs
+
+```
+
+3. **Run Migrations** (Executes schema changes on Cloud SQL/Neon):
+
+```bash
+make prod-migrate
+
+```
+
+### Production Logs
+
+To see errors from Cloud Run without leaving your terminal:
+
+```bash
+make prod-logs
+
+```
+
+---
+
+## 🔧 Configuration & Secrets
+
+### Local (`.env`)
+
+The `make setup-env` script creates this. It controls your local Docker environment.
+
+- **Database:** `postgresql://user:password@db:5432/sole-db`
+- **Redis:** `redis://redis:6379/0`
+- **Secrets:** Can be weak (e.g., `secret`) for local dev.
+
+### Production (Google Secret Manager)
+
+We do **not** use `.env` files in production. Secrets are injected via Google Secret Manager.
+Ensure these secrets exist in your Google Cloud Project:
+
+- `DATABASE_URL` (Connection string to Neon/Cloud SQL)
 - `REDIS_URL`
-- `SESSION_TIMEOUT_MINUTES`, `ACCESS_TOKEN_EXPIRE_MINUTES`
-- `ALLOWED_ORIGINS`, `LOG_LEVEL`, `ENABLE_HSTS`
-- `DEFAULT_ORG_ID`, `DEFAULT_ORG_NAME`, `DEFAULT_ORG_SLUG`
-- `RATE_LIMIT_PER_MINUTE`, `LOGIN_ATTEMPT_LIMIT`, `LOGIN_LOCKOUT_MINUTES`, `DEFAULT_PASSWORD_MIN_LENGTH`
 - `SECRET_KEY`
-- JWT keys: `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` inline PEM or file paths via `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH` (RS256). For dev, paths are relative to the project root (e.g., `./secrets/...`).
-- `PROXIES_COUNT` (default: `1`). Controls how many proxies are trusted for IP resolution.
-- Provide real values via environment variables; no secrets are committed.
+- `SEED_ADMIN_EMAIL`
+- `SEED_ADMIN_PASSWORD`
 
-## Common Make Targets
+---
 
-- `make up` — start services
-- `make down` — stop services
-- `make logs` — tail logs
-- `make migrate` — run migrations
-- `make revision m="message"` — create a new migration
-- `make test` — run test suite
-- `make fmt` / `make lint` / `make type` — code quality checks
+## 📂 Project Layout
 
-## Troubleshooting
+- `app/` - Main application code
+- `api/` - Routes and controllers
+- `core/` - Settings and security config
+- `db/` - Database session and base models
+- `models/` - SQLAlchemy models
 
-- If containers fail to start, run `make logs` and check for missing env values.
-- If migrations fail, ensure `DATABASE_URL` points to the running DB (`...@db:5432/sole` for Docker).
-- If CORS errors occur, ensure `ALLOWED_ORIGINS` is a comma-separated list, e.g. `http://localhost:5173,https://example.com`.
+- `migrations/` - Alembic migration scripts
+- `tests/` - Pytest suite
+- `compose.yaml` - **Local Dev** configuration (Mounts code, hot-reload)
+- `Dockerfile` - **Production** configuration (Optimized, Gunicorn)
+- `cloudbuild.yaml` - Google Cloud Build config
+- `Makefile` - Shortcuts for all commands
 
-## Project Layout
+---
 
-- `app/` — application code (api, core, db, models, services, etc.)
-- `migrations/` — Alembic migrations (async-ready scaffold)
-- `tests/` — pytest suite
-- `compose.yaml`, `Dockerfile`, `Makefile`, `pyproject.toml` — infra/tooling (Postgres 18-alpine, Redis 7). Supply environment via `.env` or your secrets manager.
+## ⛑ Troubleshooting
 
-## Security & Observability Baseline
+### "ImportError: Can't find Python file migrations/env.py" (Cloud Run)
 
-- Containers built with a multi-stage pipeline and run as non-root user; uvicorn configured with proxy headers.
-- Security headers middleware (HSTS optional via `ENABLE_HSTS`), CORS configured from `ALLOWED_ORIGINS`.
-- Structured JSON logging with request/tenant IDs, with separate handlers for transactional vs. audit logs.
-- JWTs signed with RS256 using provided private/public keys.
+**Cause:** The `migrations` folder wasn't copied into the container or was ignored.
+**Fix:**
 
-## MFA Notes
+1. Check `.gcloudignore` and remove `!migrations/**` if present.
+2. Ensure `Dockerfile` has `COPY migrations /app/migrations`.
+3. Run `make prod-release` to rebuild.
 
-- MFA secrets are encrypted at rest using a Fernet key derived from `SECRET_KEY`.
-- Changing `SECRET_KEY` invalidates existing MFA secrets and will break verification until users re-enroll.
-- For consistent MFA behavior across environments, keep `SECRET_KEY` stable between restarts.
-- Org-level MFA settings live in `org_settings` and are configured via the org settings endpoints.
-- `require_two_factor` enforces MFA for users in the org.
-- `mfa_required_actions` controls which actions require a fresh MFA check (e.g., login, org settings changes).
-- `remember_device_days` controls how long a remembered device can bypass MFA prompts.
-- MFA enrollment and verification use TOTP (e.g., Google Authenticator, Authy).
-- Users can remember devices for a configurable period to reduce MFA prompts.
-- Users can disable MFA from their profile, which removes the MFA secret.
-- Users must have MFA enabled to perform actions requiring MFA.
-- Users with admin roles must enroll MFA on login.
+### "ValidationError: Field required [SECRET_KEY]" (Cloud Run Jobs)
+
+**Cause:** Cloud Run Jobs do **not** inherit environment variables from the Service.
+**Fix:** You must set env vars explicitly on the job.
+
+```bash
+gcloud run jobs update sole-db-migrate --set-env-vars SECRET_KEY="...",REDIS_URL="..."
+
+```
+
+### "Code changes aren't showing up locally"
+
+**Cause:** You might be running the production image instead of the dev volume mount.
+**Fix:**
+
+1. Run `make down`
+2. Run `make up` (This forces `docker compose` to use the overrides in `compose.yaml`)
+
+### "Build failed: invalid argument" (Cloud Build)
+
+**Cause:** Using a custom Service Account without a configured logs bucket.
+**Fix:** Ensure `cloudbuild.yaml` has `options: { logging: CLOUD_LOGGING_ONLY }` at the end.
