@@ -5,7 +5,6 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 
 from app.core.settings import settings
-from app.db.init_db import init_db
 from app.db.session import AsyncSessionLocal
 from app.services import pbgc_rates
 
@@ -29,7 +28,6 @@ def register_event_handlers(app: FastAPI) -> None:
     @app.on_event("startup")
     async def on_startup() -> None:
         logger.info("Application startup")
-        await init_db()
         if settings.pbgc_rate_scrape_enabled:
             global _scheduler
             _scheduler = AsyncIOScheduler(timezone="UTC")
