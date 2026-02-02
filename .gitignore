@@ -3,7 +3,6 @@ __pycache__/
 *$py.class
 .cache
 
-env*
 .env*
 .env.local
 .env.*.local
@@ -31,3 +30,4 @@ backend-card.json
 
 local_uploads/
 .gemini*
+env.prod.yaml
