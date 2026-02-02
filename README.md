@@ -126,7 +126,7 @@ Environment defaults will be created automatically if you **run `make setup-env`
 - `SECRET_KEY`
 - JWT keys: `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` inline PEM or file paths via `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH` (RS256). For dev, paths are relative to the project root (e.g., `./secrets/...`).
 - `PROXIES_COUNT` (default: `1`). Controls how many proxies are trusted for IP resolution.
-- Provide real values via environment variables or mounted secrets (`/run/secrets`); no secrets are committed.
+- Provide real values via environment variables; no secrets are committed.
 
 ## Common Make Targets
 
@@ -142,7 +142,7 @@ Environment defaults will be created automatically if you **run `make setup-env`
 
 - If containers fail to start, run `make logs` and check for missing env values.
 - If migrations fail, ensure `DATABASE_URL` points to the running DB (`...@db:5432/sole` for Docker).
-- If CORS errors occur, ensure `ALLOWED_ORIGINS` is valid JSON, e.g. `["http://localhost:5173"]`.
+- If CORS errors occur, ensure `ALLOWED_ORIGINS` is a comma-separated list, e.g. `http://localhost:5173,https://example.com`.
 
 ## Project Layout
 

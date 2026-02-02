@@ -102,3 +102,5 @@ setup-env: ## Run interactive setup (choose dev or prod)
 
 health: ## Check service health
 	@curl -s http://localhost:8000/api/v1/health | python -m json.tool || echo "API not responding"
+
+

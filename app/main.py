@@ -24,9 +24,10 @@ def create_app() -> FastAPI:
     app.add_middleware(TrustedProxiesMiddleware, proxies_count=settings.proxies_count)
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(SecurityHeadersMiddleware, enable_hsts=settings.enable_hsts)
+    origins = settings.allowed_origins_list()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.allowed_origins,
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

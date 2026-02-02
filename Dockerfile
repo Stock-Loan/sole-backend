@@ -13,7 +13,7 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir --prefix=/install ".[dev]"
+    && pip install --no-cache-dir --prefix=/install ".[prod]"
 
 FROM python:3.11-slim AS runtime
 
@@ -43,4 +43,5 @@ ENV FORWARDED_ALLOW_IPS=127.0.0.1
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import os, http.client, sys; port=int(os.getenv('PORT','8080')); conn=http.client.HTTPConnection('localhost', port, timeout=3); conn.request('GET','/api/v1/health'); res=conn.getresponse(); sys.exit(0 if res.status==200 else 1)"
 
 # Production server (recommended)
-CMD ["sh", "-c", "gunicorn -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY:-2} --timeout 120 --access-logfile - --error-logfile -"]
+CMD ["sh", "-c", "gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers 1 --timeout 300 --graceful-timeout 30 --keep-alive 5 --log-level info --access-logfile - --error-logfile -"]
+
