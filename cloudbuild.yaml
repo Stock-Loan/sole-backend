@@ -48,3 +48,7 @@ steps:
 
 images:
   - ${_AR_HOST}/${PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${SHORT_SHA}
+
+# --- ADDED TO FIX BUILD FAILURE ---
+options:
+  logging: CLOUD_LOGGING_ONLY
