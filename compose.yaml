@@ -6,6 +6,7 @@ services:
       - .env
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL not set}
+      DB_SSL: "false"
       REDIS_URL: ${REDIS_URL:?REDIS_URL not set}
       TENANCY_MODE: ${TENANCY_MODE:-single}
       SESSION_TIMEOUT_MINUTES: ${SESSION_TIMEOUT_MINUTES:-30}
