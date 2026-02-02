@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -22,6 +22,12 @@ class OrgDocumentTemplate(Base):
     description = Column(Text, nullable=True)
     file_name = Column(String(255), nullable=False)
     storage_path_or_url = Column(String(1024), nullable=False)
+    storage_provider = Column(String(32), nullable=True)
+    storage_bucket = Column(String(255), nullable=True)
+    storage_object_key = Column(String(1024), nullable=True)
+    content_type = Column(String(100), nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
+    checksum = Column(String(128), nullable=True)
     uploaded_by_user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

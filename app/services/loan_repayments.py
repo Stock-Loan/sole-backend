@@ -31,7 +31,12 @@ async def record_repayment(
     actor_id,
     evidence_file_name: str | None = None,
     evidence_storage_path_or_url: str | None = None,
+    evidence_storage_provider: str | None = None,
+    evidence_storage_bucket: str | None = None,
+    evidence_storage_object_key: str | None = None,
     evidence_content_type: str | None = None,
+    evidence_size_bytes: int | None = None,
+    evidence_checksum: str | None = None,
 ) -> LoanRepayment:
     if application.status not in {
         LoanApplicationStatus.ACTIVE.value,
@@ -56,7 +61,12 @@ async def record_repayment(
         recorded_by_user_id=actor_id,
         evidence_file_name=evidence_file_name,
         evidence_storage_path_or_url=evidence_storage_path_or_url,
+        evidence_storage_provider=evidence_storage_provider,
+        evidence_storage_bucket=evidence_storage_bucket,
+        evidence_storage_object_key=evidence_storage_object_key,
         evidence_content_type=evidence_content_type,
+        evidence_size_bytes=evidence_size_bytes,
+        evidence_checksum=evidence_checksum,
     )
     db.add(repayment)
     await db.flush()

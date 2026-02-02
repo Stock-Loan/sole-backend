@@ -230,6 +230,12 @@ class LoanDocumentSelfDTO(BaseModel):
     document_type: LoanDocumentType
     file_name: str
     storage_path_or_url: str
+    storage_provider: str | None = None
+    storage_bucket: str | None = None
+    storage_object_key: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+    checksum: str | None = None
     uploaded_at: datetime | None = None
 
 
@@ -505,6 +511,12 @@ class LoanDocumentDTO(BaseModel):
     document_type: LoanDocumentType
     file_name: str
     storage_path_or_url: str
+    storage_provider: str | None = None
+    storage_bucket: str | None = None
+    storage_object_key: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+    checksum: str | None = None
     uploaded_by_name: str | None = None
     uploaded_at: datetime | None = None
     created_at: datetime | None = None
@@ -536,7 +548,12 @@ class LoanRepaymentDTO(BaseModel):
     recorded_by_name: str | None = None
     evidence_file_name: str | None = None
     evidence_storage_path_or_url: str | None = None
+    evidence_storage_provider: str | None = None
+    evidence_storage_bucket: str | None = None
+    evidence_storage_object_key: str | None = None
     evidence_content_type: str | None = None
+    evidence_size_bytes: int | None = None
+    evidence_checksum: str | None = None
     created_at: datetime | None = None
 
 
@@ -587,7 +604,46 @@ class LoanWorkflowStageAssignRequest(BaseModel):
 class LoanDocumentCreateRequest(BaseModel):
     document_type: LoanDocumentType
     file_name: str = Field(min_length=1)
-    storage_path_or_url: str = Field(min_length=1)
+    storage_path_or_url: str | None = Field(default=None)
+    storage_provider: str | None = None
+    storage_bucket: str | None = None
+    storage_key: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+    checksum: str | None = None
+
+
+class LoanDocumentUploadUrlRequest(BaseModel):
+    document_type: LoanDocumentType
+    file_name: str = Field(min_length=1)
+    content_type: str
+    size_bytes: int
+    checksum: str | None = None
+
+
+class LoanDocumentUploadUrlResponse(BaseModel):
+    upload_url: str
+    required_headers_or_fields: dict[str, str]
+    storage_provider: str
+    storage_bucket: str | None
+    storage_key: str
+    file_name: str
+
+
+class LoanRepaymentEvidenceUploadUrlRequest(BaseModel):
+    file_name: str = Field(min_length=1)
+    content_type: str
+    size_bytes: int
+    checksum: str | None = None
+
+
+class LoanRepaymentEvidenceUploadUrlResponse(BaseModel):
+    upload_url: str
+    required_headers_or_fields: dict[str, str]
+    storage_provider: str
+    storage_bucket: str | None
+    storage_key: str
+    file_name: str
 
 
 class LoanAdminUpdateRequest(BaseModel):

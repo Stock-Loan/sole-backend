@@ -80,3 +80,16 @@ def loan_repayments_subdir(org_id: str, loan_id: UUID) -> Path:
 
 def profile_pictures_subdir(org_id: str, user_id: UUID) -> Path:
     return Path("orgs") / org_id / "display-pictures" / str(user_id)
+
+
+def generate_storage_key(subdir: Path, filename: str | None) -> tuple[str, str]:
+    original_name = _safe_filename(filename, "upload.bin")
+    ext = Path(original_name).suffix.lower()
+    dest_name = f"{uuid4().hex}{ext}"
+    return (subdir / dest_name).as_posix(), original_name
+
+
+def ensure_org_scoped_key(org_id: str, object_key: str) -> None:
+    expected_prefix = f"orgs/{org_id}/"
+    if not object_key.startswith(expected_prefix):
+        raise ValueError("Storage key is not scoped to org")

@@ -2,7 +2,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -14,11 +14,20 @@ from app.schemas.org_documents import (
     OrgDocumentFolderDTO,
     OrgDocumentFolderListResponse,
     OrgDocumentFolderUpdate,
+    OrgDocumentTemplateCreate,
     OrgDocumentTemplateDTO,
     OrgDocumentTemplateListResponse,
+    OrgDocumentTemplateUploadUrlRequest,
+    OrgDocumentTemplateUploadUrlResponse,
 )
 from app.services import org_documents
-from app.services.local_uploads import resolve_local_path
+from app.services.local_uploads import (
+    ensure_org_scoped_key,
+    generate_storage_key,
+    org_templates_subdir,
+    resolve_local_path,
+)
+from app.services.storage.service import get_storage_adapter
 
 
 router = APIRouter(prefix="/org/documents", tags=["org-documents"])
@@ -159,6 +168,110 @@ async def upload_template(
     return OrgDocumentTemplateDTO.model_validate(template)
 
 
+@router.post(
+    "/templates/upload-url",
+    response_model=OrgDocumentTemplateUploadUrlResponse,
+    summary="Create a signed upload URL for a document template",
+)
+async def create_template_upload_url(
+    payload: OrgDocumentTemplateUploadUrlRequest,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: object = Depends(deps.require_permission(PermissionCode.ORG_DOCUMENT_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> OrgDocumentTemplateUploadUrlResponse:
+    if payload.folder_id:
+        folder = await org_documents.get_folder(db, ctx, payload.folder_id)
+        if not folder:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+    storage_key, original_name = generate_storage_key(
+        org_templates_subdir(ctx.org_id, payload.folder_id),
+        payload.file_name,
+    )
+    try:
+        adapter = get_storage_adapter()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "storage_not_configured", "message": str(exc), "details": {}},
+        ) from exc
+    upload_info = adapter.generate_upload_url(
+        storage_key, payload.content_type, payload.size_bytes
+    )
+    return OrgDocumentTemplateUploadUrlResponse(
+        upload_url=upload_info["upload_url"],
+        required_headers_or_fields=upload_info.get("headers", {}),
+        storage_provider=adapter.provider,
+        storage_bucket=adapter.bucket,
+        storage_key=storage_key,
+        file_name=original_name,
+    )
+
+
+@router.post(
+    "/templates",
+    response_model=OrgDocumentTemplateDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an org document template from storage",
+)
+async def create_template(
+    payload: OrgDocumentTemplateCreate,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: object = Depends(deps.require_permission(PermissionCode.ORG_DOCUMENT_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> OrgDocumentTemplateDTO:
+    if payload.folder_id:
+        folder = await org_documents.get_folder(db, ctx, payload.folder_id)
+        if not folder:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+    if payload.storage_key.startswith("http"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_storage_key",
+                "message": "storage_key must be an object key, not a URL",
+                "details": {},
+            },
+        )
+    try:
+        ensure_org_scoped_key(ctx.org_id, payload.storage_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_storage_key",
+                "message": "storage_key is not scoped to org",
+                "details": {},
+            },
+        ) from exc
+    storage_provider = payload.storage_provider or settings.storage_provider
+    storage_bucket = payload.storage_bucket or settings.gcs_bucket
+    if storage_provider == "gcs" and not storage_bucket:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "missing_storage_bucket",
+                "message": "storage_bucket is required for GCS uploads",
+                "details": {},
+            },
+        )
+    template = await org_documents.create_template_from_storage(
+        db,
+        ctx,
+        folder_id=payload.folder_id,
+        name=payload.name,
+        description=payload.description,
+        file_name=payload.file_name,
+        storage_key=payload.storage_key,
+        storage_provider=storage_provider,
+        storage_bucket=storage_bucket,
+        content_type=payload.content_type,
+        size_bytes=payload.size_bytes,
+        checksum=payload.checksum,
+        actor_id=current_user.id,
+    )
+    return OrgDocumentTemplateDTO.model_validate(template)
+
+
 @router.get(
     "/templates/{template_id}",
     response_model=OrgDocumentTemplateDTO,
@@ -190,6 +303,13 @@ async def download_template(
     template = await org_documents.get_template(db, ctx, template_id)
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+    if template.storage_provider == "gcs":
+        adapter = get_storage_adapter(bucket_override=template.storage_bucket)
+        download_url = adapter.generate_download_url(
+            template.storage_object_key or template.storage_path_or_url,
+            expires_in=settings.gcs_signed_url_expiry_seconds,
+        )
+        return RedirectResponse(download_url)
     if template.storage_path_or_url.startswith("http"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

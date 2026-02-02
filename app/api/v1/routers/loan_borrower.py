@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,8 @@ from app.schemas.loan import (
     LoanDocumentGroup,
     LoanDocumentListResponse,
     LoanDocumentType,
+    LoanDocumentUploadUrlRequest,
+    LoanDocumentUploadUrlResponse,
     LoanRepaymentDTO,
     LoanRepaymentListResponse,
     LoanScheduleResponse,
@@ -31,7 +33,13 @@ from app.schemas.loan import (
 )
 from app.services import loan_applications, loan_exports, loan_repayments, loan_schedules
 from app.services.audit import model_snapshot, record_audit_log
-from app.services.local_uploads import resolve_local_path
+from app.services.local_uploads import (
+    ensure_org_scoped_key,
+    generate_storage_key,
+    loan_documents_subdir,
+    resolve_local_path,
+)
+from app.services.storage.service import get_storage_adapter
 
 
 router = APIRouter(prefix="/me/loans", tags=["loan-borrower"])
@@ -125,6 +133,13 @@ async def download_borrower_document(
     document = (await db.execute(stmt)).scalar_one_or_none()
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan document not found")
+    if document.storage_provider == "gcs":
+        adapter = get_storage_adapter(bucket_override=document.storage_bucket)
+        download_url = adapter.generate_download_url(
+            document.storage_object_key or document.storage_path_or_url,
+            expires_in=settings.gcs_signed_url_expiry_seconds,
+        )
+        return RedirectResponse(download_url)
     if document.storage_path_or_url.startswith("http"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -355,13 +370,60 @@ async def upload_83b_document(
         db.add(stage)
 
     old_stage = model_snapshot(stage)
+    storage_key = payload.storage_key or payload.storage_path_or_url
+    if not storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "missing_storage_key",
+                "message": "storage_key is required for uploads",
+                "details": {},
+            },
+        )
+    if storage_key.startswith("http"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_storage_key",
+                "message": "storage_key must be an object key, not a URL",
+                "details": {},
+            },
+        )
+    try:
+        ensure_org_scoped_key(ctx.org_id, storage_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_storage_key",
+                "message": "storage_key is not scoped to org",
+                "details": {},
+            },
+        ) from exc
+    storage_provider = payload.storage_provider or settings.storage_provider
+    storage_bucket = payload.storage_bucket or settings.gcs_bucket
+    if storage_provider == "gcs" and not storage_bucket:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "missing_storage_bucket",
+                "message": "storage_bucket is required for GCS uploads",
+                "details": {},
+            },
+        )
     document = LoanDocument(
         org_id=ctx.org_id,
         loan_application_id=loan_id,
         stage_type="BORROWER_83B_ELECTION",
         document_type=payload.document_type.value,
         file_name=payload.file_name,
-        storage_path_or_url=payload.storage_path_or_url,
+        storage_path_or_url=storage_key,
+        storage_provider=storage_provider,
+        storage_bucket=storage_bucket,
+        storage_object_key=storage_key,
+        content_type=payload.content_type,
+        size_bytes=payload.size_bytes,
+        checksum=payload.checksum,
         uploaded_by_user_id=current_user.id,
     )
     db.add(document)
@@ -393,3 +455,70 @@ async def upload_83b_document(
     await db.commit()
     await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)
+
+
+@router.post(
+    "/{loan_id}/documents/83b/upload-url",
+    response_model=LoanDocumentUploadUrlResponse,
+    summary="Create a signed upload URL for borrower 83(b) document",
+)
+async def create_83b_upload_url(
+    loan_id: UUID,
+    payload: LoanDocumentUploadUrlRequest,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_SELF_UPLOAD_83B)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentUploadUrlResponse:
+    membership = await loan_applications.get_membership_for_user(db, ctx, current_user.id)
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    application = await _get_application_or_404(db, ctx, loan_id, membership.id)
+    if application.status != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_status",
+                "message": "Loan must be ACTIVE before uploading 83(b) documents",
+                "details": {"status": application.status},
+            },
+        )
+    if payload.document_type != LoanDocumentType.SECTION_83B_ELECTION:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_type",
+                "message": "Borrower documents must be SECTION_83B_ELECTION",
+                "details": {"document_type": payload.document_type},
+            },
+        )
+    ext = Path(payload.file_name).suffix.lower()
+    if ext and ext not in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_file_type",
+                "message": "File type not allowed",
+                "details": {"extension": ext},
+            },
+        )
+    storage_key, original_name = generate_storage_key(
+        loan_documents_subdir(ctx.org_id, loan_id), payload.file_name
+    )
+    try:
+        adapter = get_storage_adapter()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "storage_not_configured", "message": str(exc), "details": {}},
+        ) from exc
+    upload_info = adapter.generate_upload_url(
+        storage_key, payload.content_type, payload.size_bytes
+    )
+    return LoanDocumentUploadUrlResponse(
+        upload_url=upload_info["upload_url"],
+        required_headers_or_fields=upload_info.get("headers", {}),
+        storage_provider=adapter.provider,
+        storage_bucket=adapter.bucket,
+        storage_key=storage_key,
+        file_name=original_name,
+    )

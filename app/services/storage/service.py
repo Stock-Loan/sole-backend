@@ -4,16 +4,32 @@ from app.models.asset import Asset
 from app.models.storage_backend_config import StorageBackendConfig
 from app.schemas.assets import UploadSessionRequest, UploadSessionResponse
 from app.services.storage.key_generator import KeyGenerator
-from app.services.storage.adapter import StorageAdapter, LocalFileSystemAdapter
+from app.services.storage.adapter import StorageAdapter, LocalFileSystemAdapter, GCSStorageAdapter
 from app.core.settings import settings
 from datetime import datetime, timezone
 
 
 # Simple factory for now
-def get_storage_adapter(config: StorageBackendConfig = None) -> StorageAdapter:
-    # In a real app, we'd switch on config.provider
-    # For now, force Local
-    base_url = "http://localhost:8000"  # TODO: get from settings
+def get_storage_adapter(
+    config: StorageBackendConfig | None = None,
+    *,
+    bucket_override: str | None = None,
+) -> StorageAdapter:
+    # In a real app, we'd resolve org-specific config. For now, rely on settings.
+    provider = settings.storage_provider
+    if config and config.provider:
+        provider = config.provider
+
+    if provider == "gcs":
+        bucket = bucket_override or (config.bucket if config else None) or settings.gcs_bucket
+        if not bucket:
+            raise ValueError("GCS bucket is not configured")
+        return GCSStorageAdapter(
+            bucket=bucket,
+            signed_url_expiry_seconds=settings.gcs_signed_url_expiry_seconds,
+        )
+
+    base_url = settings.public_base_url
     return LocalFileSystemAdapter(base_path=settings.local_upload_dir, base_url=base_url)
 
 
@@ -47,8 +63,10 @@ class AssetService:
             filename=req.filename,
             content_type=req.content_type,
             size_bytes=req.size_bytes,
+            checksum=req.checksum,
             status="pending",
-            bucket="local",  # Adapter-specific
+            provider=adapter.provider,
+            bucket=adapter.bucket,
             object_key=object_key,
         )
         self.db.add(asset)
@@ -63,6 +81,9 @@ class AssetService:
         return UploadSessionResponse(
             asset_id=asset.id,
             upload_url=upload_info["upload_url"],
+            storage_provider=adapter.provider,
+            storage_bucket=adapter.bucket,
+            object_key=object_key,
             required_headers_or_fields=upload_info.get("headers", {}),
         )
 
@@ -71,7 +92,7 @@ class AssetService:
         if not asset:
             raise ValueError("Asset not found")
 
-        adapter = get_storage_adapter()
+        adapter = get_storage_adapter(bucket_override=asset.bucket)
         if not adapter.object_exists(asset.object_key):
             # For local dev, maybe the client calls the local-content endpoint which writes it?
             # If using S3, we check HEAD.
@@ -90,5 +111,7 @@ class AssetService:
         if not asset or asset.status != "uploaded":
             raise ValueError("Asset not found or not uploaded")
 
-        adapter = get_storage_adapter()
-        return adapter.generate_download_url(asset.object_key)
+        adapter = get_storage_adapter(bucket_override=asset.bucket)
+        return adapter.generate_download_url(
+            asset.object_key, expires_in=settings.gcs_signed_url_expiry_seconds
+        )

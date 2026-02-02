@@ -25,6 +25,7 @@ class Asset(Base):
     storage_backend_id = Column(
         UUID(as_uuid=True), ForeignKey("storage_backend_configs.id"), nullable=True
     )
+    provider = Column(String(32), nullable=True)
     bucket = Column(String, nullable=True)
     object_key = Column(String, nullable=False)
     external_url = Column(String, nullable=True)

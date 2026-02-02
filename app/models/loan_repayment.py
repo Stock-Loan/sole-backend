@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Column,
     Date,
@@ -45,7 +46,12 @@ class LoanRepayment(Base):
     )
     evidence_file_name = Column(String(255), nullable=True)
     evidence_storage_path_or_url = Column(String(1024), nullable=True)
+    evidence_storage_provider = Column(String(32), nullable=True)
+    evidence_storage_bucket = Column(String(255), nullable=True)
+    evidence_storage_object_key = Column(String(1024), nullable=True)
     evidence_content_type = Column(String(100), nullable=True)
+    evidence_size_bytes = Column(BigInteger, nullable=True)
+    evidence_checksum = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     loan_application = relationship("LoanApplication", back_populates="repayments")

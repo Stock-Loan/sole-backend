@@ -183,6 +183,49 @@ async def create_template_from_upload(
         description=description,
         file_name=original_name,
         storage_path_or_url=relative_path,
+        storage_provider="local",
+        storage_bucket=None,
+        storage_object_key=relative_path,
+        content_type=file.content_type,
+        size_bytes=getattr(file, "size", None),
+        checksum=None,
+        uploaded_by_user_id=actor_id,
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+    return template
+
+
+async def create_template_from_storage(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    *,
+    folder_id: UUID | None,
+    name: str | None,
+    description: str | None,
+    file_name: str,
+    storage_key: str,
+    storage_provider: str | None,
+    storage_bucket: str | None,
+    content_type: str | None,
+    size_bytes: int | None,
+    checksum: str | None,
+    actor_id: UUID,
+) -> OrgDocumentTemplate:
+    template = OrgDocumentTemplate(
+        org_id=ctx.org_id,
+        folder_id=folder_id,
+        name=name or file_name,
+        description=description,
+        file_name=file_name,
+        storage_path_or_url=storage_key,
+        storage_provider=storage_provider,
+        storage_bucket=storage_bucket,
+        storage_object_key=storage_key,
+        content_type=content_type,
+        size_bytes=size_bytes,
+        checksum=checksum,
         uploaded_by_user_id=actor_id,
     )
     db.add(template)

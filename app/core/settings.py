@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     seed_admin_password: str = Field(alias="SEED_ADMIN_PASSWORD")
     seed_admin_full_name: str = Field(default="Admin User", alias="SEED_ADMIN_FULL_NAME")
     local_upload_dir: str = Field(default="local_uploads", alias="LOCAL_UPLOAD_DIR")
+    public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
+    storage_provider: Literal["local", "gcs"] = Field(default="local", alias="STORAGE_PROVIDER")
+    gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
+    gcs_signed_url_expiry_seconds: int = Field(
+        default=900, alias="GCS_SIGNED_URL_EXPIRY_SECONDS"
+    )
     pbgc_mid_term_rates_url: str = Field(
         default="https://www.pbgc.gov/employers-practitioners/interest-rates/historical-applicable-mid-term",
         alias="PBGC_MID_TERM_RATES_URL",

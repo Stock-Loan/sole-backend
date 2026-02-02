@@ -16,7 +16,7 @@ from fastapi import (
     status,
     Request,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,11 +39,15 @@ from app.schemas.loan import (
     LoanStageAssigneeSummaryDTO,
     LoanApplicationStatus,
     LoanDocumentCreateRequest,
+    LoanDocumentUploadUrlRequest,
+    LoanDocumentUploadUrlResponse,
     LoanDocumentGroup,
     LoanDocumentListResponse,
     LoanDocumentDTO,
     LoanDocumentType,
     LoanRepaymentCreateRequest,
+    LoanRepaymentEvidenceUploadUrlRequest,
+    LoanRepaymentEvidenceUploadUrlResponse,
     LoanRepaymentDTO,
     LoanRepaymentListResponse,
     LoanRepaymentRecordResponse,
@@ -72,11 +76,14 @@ from app.services import (
 )
 from app.services.audit import model_snapshot, record_audit_log
 from app.services.local_uploads import (
+    ensure_org_scoped_key,
+    generate_storage_key,
     loan_documents_subdir,
     loan_repayments_subdir,
     resolve_local_path,
     save_upload,
 )
+from app.services.storage.service import get_storage_adapter
 
 
 router = APIRouter(prefix="/org/loans", tags=["loan-admin"])
@@ -125,6 +132,99 @@ async def _save_local_document(
         document_type=document_type.value,
         file_name=original_name,
         storage_path_or_url=relative_path,
+        storage_provider="local",
+        storage_bucket=None,
+        storage_object_key=relative_path,
+        content_type=file.content_type,
+        size_bytes=getattr(file, "size", None),
+        checksum=None,
+        uploaded_by_user_id=actor_id,
+    )
+    db.add(document)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=actor_id,
+        action="loan_document.created",
+        resource_type="loan_document",
+        resource_id=str(document.id),
+        old_value=None,
+        new_value=model_snapshot(document),
+    )
+    await db.commit()
+    await db.refresh(document)
+    return document
+
+
+def _normalize_storage_key(payload: LoanDocumentCreateRequest) -> str:
+    if payload.storage_key:
+        return payload.storage_key
+    if payload.storage_path_or_url:
+        return payload.storage_path_or_url
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "code": "missing_storage_key",
+            "message": "storage_key is required for non-file uploads",
+            "details": {},
+        },
+    )
+
+
+async def _create_document_from_storage(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    loan_id: UUID,
+    document_type: LoanDocumentType,
+    stage_type: str,
+    payload: LoanDocumentCreateRequest,
+    actor_id: UUID,
+) -> LoanDocument:
+    storage_key = _normalize_storage_key(payload)
+    if storage_key.startswith("http"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_storage_key",
+                "message": "storage_key must be an object key, not a URL",
+                "details": {},
+            },
+        )
+    try:
+        ensure_org_scoped_key(ctx.org_id, storage_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_storage_key",
+                "message": "storage_key is not scoped to org",
+                "details": {},
+            },
+        ) from exc
+    storage_provider = payload.storage_provider or settings.storage_provider
+    storage_bucket = payload.storage_bucket or settings.gcs_bucket
+    if storage_provider == "gcs" and not storage_bucket:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "missing_storage_bucket",
+                "message": "storage_bucket is required for GCS uploads",
+                "details": {},
+            },
+        )
+    document = LoanDocument(
+        org_id=ctx.org_id,
+        loan_application_id=loan_id,
+        stage_type=stage_type,
+        document_type=document_type.value,
+        file_name=payload.file_name,
+        storage_path_or_url=storage_key,
+        storage_provider=storage_provider,
+        storage_bucket=storage_bucket,
+        storage_object_key=storage_key,
+        content_type=payload.content_type,
+        size_bytes=payload.size_bytes,
+        checksum=payload.checksum,
         uploaded_by_user_id=actor_id,
     )
     db.add(document)
@@ -150,6 +250,44 @@ def _stage_manage_permission(stage_type: LoanWorkflowStageType) -> PermissionCod
         return PermissionCode.LOAN_WORKFLOW_FINANCE_MANAGE
     if stage_type == LoanWorkflowStageType.LEGAL_EXECUTION:
         return PermissionCode.LOAN_WORKFLOW_LEGAL_MANAGE
+    raise ValueError(f"Unsupported stage type: {stage_type}")
+
+
+def _stage_for_document_type(doc_type: LoanDocumentType) -> LoanWorkflowStageType:
+    if doc_type in {
+        LoanDocumentType.NOTICE_OF_STOCK_OPTION_GRANT,
+        LoanDocumentType.SPOUSE_PARTNER_CONSENT,
+    }:
+        return LoanWorkflowStageType.HR_REVIEW
+    if doc_type in {
+        LoanDocumentType.PAYMENT_INSTRUCTIONS,
+        LoanDocumentType.PAYMENT_CONFIRMATION,
+    }:
+        return LoanWorkflowStageType.FINANCE_PROCESSING
+    if doc_type in {
+        LoanDocumentType.STOCK_OPTION_EXERCISE_AND_LOAN_AGREEMENT,
+        LoanDocumentType.SECURED_PROMISSORY_NOTE,
+        LoanDocumentType.STOCK_POWER_AND_ASSIGNMENT,
+        LoanDocumentType.INVESTMENT_REPRESENTATION_STATEMENT,
+    }:
+        return LoanWorkflowStageType.LEGAL_EXECUTION
+    if doc_type == LoanDocumentType.SHARE_CERTIFICATE:
+        return LoanWorkflowStageType.LEGAL_POST_ISSUANCE
+    if doc_type == LoanDocumentType.SECTION_83B_ELECTION:
+        return LoanWorkflowStageType.BORROWER_83B_ELECTION
+    raise ValueError(f"Unsupported document type: {doc_type}")
+
+
+def _document_manage_permission(stage_type: LoanWorkflowStageType) -> PermissionCode:
+    if stage_type == LoanWorkflowStageType.HR_REVIEW:
+        return PermissionCode.LOAN_DOCUMENT_MANAGE_HR
+    if stage_type == LoanWorkflowStageType.FINANCE_PROCESSING:
+        return PermissionCode.LOAN_DOCUMENT_MANAGE_FINANCE
+    if stage_type in {
+        LoanWorkflowStageType.LEGAL_EXECUTION,
+        LoanWorkflowStageType.LEGAL_POST_ISSUANCE,
+    }:
+        return PermissionCode.LOAN_DOCUMENT_MANAGE_LEGAL
     raise ValueError(f"Unsupported stage type: {stage_type}")
 
 
@@ -415,6 +553,95 @@ async def list_loan_documents(
     )
 
 
+@router.post(
+    "/{loan_id}/documents/upload-url",
+    response_model=LoanDocumentUploadUrlResponse,
+    summary="Create a signed upload URL for a loan document",
+)
+async def create_loan_document_upload_url(
+    loan_id: UUID,
+    payload: LoanDocumentUploadUrlRequest,
+    current_user=Depends(deps.require_authenticated_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanDocumentUploadUrlResponse:
+    application = await _get_application_or_404(db, ctx, loan_id)
+    try:
+        stage_type = _stage_for_document_type(payload.document_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_type",
+                "message": str(exc),
+                "details": {"document_type": payload.document_type},
+            },
+        ) from exc
+    if stage_type == LoanWorkflowStageType.BORROWER_83B_ELECTION:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_document_type",
+                "message": "Borrower documents must be uploaded via self-service endpoint",
+                "details": {"document_type": payload.document_type},
+            },
+        )
+    if stage_type == LoanWorkflowStageType.LEGAL_POST_ISSUANCE and application.status != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_status",
+                "message": "Loan must be ACTIVE before uploading share certificates",
+                "details": {"status": application.status},
+            },
+        )
+    try:
+        required_permission = _document_manage_permission(stage_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_stage_type", "message": str(exc), "details": {}},
+        ) from exc
+    allowed = await authz.check_permission(current_user, ctx, required_permission, db)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Missing permission: {required_permission.value}",
+        )
+
+    ext = Path(payload.file_name).suffix.lower()
+    if ext and ext not in SAFE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_file_type",
+                "message": "File type not allowed",
+                "details": {"extension": ext},
+            },
+        )
+    storage_key, original_name = generate_storage_key(
+        loan_documents_subdir(ctx.org_id, loan_id), payload.file_name
+    )
+    try:
+        adapter = get_storage_adapter()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "storage_not_configured", "message": str(exc), "details": {}},
+        ) from exc
+    upload_info = adapter.generate_upload_url(
+        storage_key, payload.content_type, payload.size_bytes
+    )
+    return LoanDocumentUploadUrlResponse(
+        upload_url=upload_info["upload_url"],
+        required_headers_or_fields=upload_info.get("headers", {}),
+        storage_provider=adapter.provider,
+        storage_bucket=adapter.bucket,
+        storage_key=storage_key,
+        file_name=original_name,
+    )
+
+
 @router.get(
     "/{loan_id}/repayments",
     response_model=LoanRepaymentListResponse,
@@ -450,6 +677,13 @@ async def record_loan_repayment_with_evidence(
     extra_interest_amount: str | None = Form(default=None),
     payment_date: date = Form(...),
     evidence_file: UploadFile | None = File(default=None),
+    evidence_file_name: str | None = Form(default=None),
+    evidence_storage_key: str | None = Form(default=None),
+    evidence_storage_provider: str | None = Form(default=None),
+    evidence_storage_bucket: str | None = Form(default=None),
+    evidence_size_bytes: int | None = Form(default=None),
+    evidence_checksum: str | None = Form(default=None),
+    evidence_content_type: str | None = Form(default=None),
     current_user=Depends(
         deps.require_permission_with_mfa(
             PermissionCode.LOAN_PAYMENT_RECORD,
@@ -460,6 +694,15 @@ async def record_loan_repayment_with_evidence(
     db: AsyncSession = Depends(get_db),
 ) -> LoanRepaymentRecordResponse:
     application = await _get_application_or_404(db, ctx, loan_id)
+    if evidence_file and evidence_storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_evidence_input",
+                "message": "Provide either evidence_file or evidence_storage_key, not both",
+                "details": {},
+            },
+        )
     extra_principal = Decimal(extra_principal_amount or "0")
     extra_interest = Decimal(extra_interest_amount or "0")
     existing_repayments = await loan_repayments.list_repayments_up_to(
@@ -547,9 +790,14 @@ async def record_loan_repayment_with_evidence(
         payment_date=payment_date,
     )
 
-    evidence_file_name = None
+    evidence_name = evidence_file_name
     evidence_storage_path = None
-    evidence_content_type = None
+    evidence_provider = None
+    evidence_bucket = None
+    evidence_object_key = None
+    evidence_content_type_value = None
+    evidence_size_value = None
+    evidence_checksum_value = None
     if evidence_file:
         if evidence_file.content_type not in ALLOWED_REPAYMENT_EVIDENCE_TYPES:
             raise HTTPException(
@@ -569,9 +817,70 @@ async def record_loan_repayment_with_evidence(
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        evidence_file_name = original_name
+        evidence_name = original_name
         evidence_storage_path = relative_path
-        evidence_content_type = evidence_file.content_type
+        evidence_provider = "local"
+        evidence_bucket = None
+        evidence_object_key = relative_path
+        evidence_content_type_value = evidence_file.content_type
+        evidence_size_value = getattr(evidence_file, "size", None)
+        evidence_checksum_value = None
+    elif evidence_storage_key:
+        if evidence_storage_key.startswith("http"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "invalid_storage_key",
+                    "message": "evidence_storage_key must be an object key, not a URL",
+                    "details": {},
+                },
+            )
+        try:
+            ensure_org_scoped_key(ctx.org_id, evidence_storage_key)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "invalid_storage_key",
+                    "message": "evidence_storage_key is not scoped to org",
+                    "details": {},
+                },
+            ) from exc
+        if not evidence_content_type:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "missing_evidence_content_type",
+                    "message": "evidence_content_type is required for external uploads",
+                    "details": {},
+                },
+            )
+        if evidence_content_type not in ALLOWED_REPAYMENT_EVIDENCE_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "invalid_evidence_type",
+                    "message": "Evidence must be a PDF or image",
+                    "details": {"content_type": evidence_content_type},
+                },
+            )
+        evidence_name = evidence_name or Path(evidence_storage_key).name
+        evidence_storage_path = evidence_storage_key
+        evidence_provider = evidence_storage_provider or settings.storage_provider
+        evidence_bucket = evidence_storage_bucket or settings.gcs_bucket
+        if evidence_provider == "gcs" and not evidence_bucket:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "missing_storage_bucket",
+                    "message": "evidence_storage_bucket is required for GCS uploads",
+                    "details": {},
+                },
+            )
+        evidence_object_key = evidence_storage_key
+        evidence_content_type_value = evidence_content_type
+        evidence_size_value = evidence_size_bytes
+        evidence_checksum_value = evidence_checksum
 
     try:
         repayment = await loan_repayments.record_repayment(
@@ -580,9 +889,14 @@ async def record_loan_repayment_with_evidence(
             application,
             payload,
             actor_id=current_user.id,
-            evidence_file_name=evidence_file_name,
+            evidence_file_name=evidence_name,
             evidence_storage_path_or_url=evidence_storage_path,
-            evidence_content_type=evidence_content_type,
+            evidence_storage_provider=evidence_provider,
+            evidence_storage_bucket=evidence_bucket,
+            evidence_storage_object_key=evidence_object_key,
+            evidence_content_type=evidence_content_type_value,
+            evidence_size_bytes=evidence_size_value,
+            evidence_checksum=evidence_checksum_value,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -610,6 +924,66 @@ async def record_loan_repayment_with_evidence(
     )
 
 
+@router.post(
+    "/{loan_id}/repayments/upload-url",
+    response_model=LoanRepaymentEvidenceUploadUrlResponse,
+    summary="Create a signed upload URL for repayment evidence",
+)
+async def create_repayment_evidence_upload_url(
+    loan_id: UUID,
+    payload: LoanRepaymentEvidenceUploadUrlRequest,
+    current_user=Depends(
+        deps.require_permission_with_mfa(
+            PermissionCode.LOAN_PAYMENT_RECORD,
+            action=MfaEnforcementAction.LOAN_PAYMENT_RECORD.value,
+        )
+    ),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanRepaymentEvidenceUploadUrlResponse:
+    await _get_application_or_404(db, ctx, loan_id)
+    if payload.content_type not in ALLOWED_REPAYMENT_EVIDENCE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_evidence_type",
+                "message": "Evidence must be a PDF or image",
+                "details": {"content_type": payload.content_type},
+            },
+        )
+    ext = Path(payload.file_name).suffix.lower()
+    if ext and ext not in SAFE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_file_type",
+                "message": "File type not allowed",
+                "details": {"extension": ext},
+            },
+        )
+    storage_key, original_name = generate_storage_key(
+        loan_repayments_subdir(ctx.org_id, loan_id), payload.file_name
+    )
+    try:
+        adapter = get_storage_adapter()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "storage_not_configured", "message": str(exc), "details": {}},
+        ) from exc
+    upload_info = adapter.generate_upload_url(
+        storage_key, payload.content_type, payload.size_bytes
+    )
+    return LoanRepaymentEvidenceUploadUrlResponse(
+        upload_url=upload_info["upload_url"],
+        required_headers_or_fields=upload_info.get("headers", {}),
+        storage_provider=adapter.provider,
+        storage_bucket=adapter.bucket,
+        storage_key=storage_key,
+        file_name=original_name,
+    )
+
+
 @router.get(
     "/documents/{document_id}/download",
     response_class=FileResponse,
@@ -628,6 +1002,13 @@ async def download_loan_document(
     document = (await db.execute(stmt)).scalar_one_or_none()
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan document not found")
+    if document.storage_provider == "gcs":
+        adapter = get_storage_adapter(bucket_override=document.storage_bucket)
+        download_url = adapter.generate_download_url(
+            document.storage_object_key or document.storage_path_or_url,
+            expires_in=settings.gcs_signed_url_expiry_seconds,
+        )
+        return RedirectResponse(download_url)
     if document.storage_path_or_url.startswith("http"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1326,28 +1707,15 @@ async def upload_hr_document(
                 "details": {"document_type": payload.document_type},
             },
         )
-    document = LoanDocument(
-        org_id=ctx.org_id,
-        loan_application_id=loan_id,
+    document = await _create_document_from_storage(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=payload.document_type,
         stage_type="HR_REVIEW",
-        document_type=payload.document_type.value,
-        file_name=payload.file_name,
-        storage_path_or_url=payload.storage_path_or_url,
-        uploaded_by_user_id=current_user.id,
-    )
-    db.add(document)
-    record_audit_log(
-        db,
-        ctx,
+        payload=payload,
         actor_id=current_user.id,
-        action="loan_document.created",
-        resource_type="loan_document",
-        resource_id=str(document.id),
-        old_value=None,
-        new_value=model_snapshot(document),
     )
-    await db.commit()
-    await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)
 
 
@@ -1534,28 +1902,15 @@ async def upload_finance_document(
                 "details": {"document_type": payload.document_type},
             },
         )
-    document = LoanDocument(
-        org_id=ctx.org_id,
-        loan_application_id=loan_id,
+    document = await _create_document_from_storage(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=payload.document_type,
         stage_type="FINANCE_PROCESSING",
-        document_type=payload.document_type.value,
-        file_name=payload.file_name,
-        storage_path_or_url=payload.storage_path_or_url,
-        uploaded_by_user_id=current_user.id,
-    )
-    db.add(document)
-    record_audit_log(
-        db,
-        ctx,
+        payload=payload,
         actor_id=current_user.id,
-        action="loan_document.created",
-        resource_type="loan_document",
-        resource_id=str(document.id),
-        old_value=None,
-        new_value=model_snapshot(document),
     )
-    await db.commit()
-    await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)
 
 
@@ -1753,28 +2108,15 @@ async def upload_legal_document(
                 "details": {"document_type": payload.document_type},
             },
         )
-    document = LoanDocument(
-        org_id=ctx.org_id,
-        loan_application_id=loan_id,
+    document = await _create_document_from_storage(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=payload.document_type,
         stage_type="LEGAL_EXECUTION",
-        document_type=payload.document_type.value,
-        file_name=payload.file_name,
-        storage_path_or_url=payload.storage_path_or_url,
-        uploaded_by_user_id=current_user.id,
-    )
-    db.add(document)
-    record_audit_log(
-        db,
-        ctx,
+        payload=payload,
         actor_id=current_user.id,
-        action="loan_document.created",
-        resource_type="loan_document",
-        resource_id=str(document.id),
-        old_value=None,
-        new_value=model_snapshot(document),
     )
-    await db.commit()
-    await db.refresh(document)
     return LoanDocumentDTO.model_validate(document)
 
 
@@ -1874,16 +2216,15 @@ async def upload_legal_issuance_document(
         db.add(stage)
 
     old_stage = model_snapshot(stage)
-    document = LoanDocument(
-        org_id=ctx.org_id,
-        loan_application_id=loan_id,
+    document = await _create_document_from_storage(
+        db=db,
+        ctx=ctx,
+        loan_id=loan_id,
+        document_type=payload.document_type,
         stage_type="LEGAL_POST_ISSUANCE",
-        document_type=payload.document_type.value,
-        file_name=payload.file_name,
-        storage_path_or_url=payload.storage_path_or_url,
-        uploaded_by_user_id=current_user.id,
+        payload=payload,
+        actor_id=current_user.id,
     )
-    db.add(document)
     await deps.require_mfa_for_action(
         request,
         current_user,
@@ -1904,16 +2245,6 @@ async def upload_legal_issuance_document(
         resource_id=str(stage.id),
         old_value=old_stage,
         new_value=model_snapshot(stage),
-    )
-    record_audit_log(
-        db,
-        ctx,
-        actor_id=current_user.id,
-        action="loan_document.created",
-        resource_type="loan_document",
-        resource_id=str(document.id),
-        old_value=None,
-        new_value=model_snapshot(document),
     )
     await db.commit()
     await db.refresh(document)
