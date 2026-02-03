@@ -651,6 +651,10 @@ class LoanAdminUpdateRequest(BaseModel):
     decision_reason: str | None = None
 
 
+class LoanAdminEditRequest(LoanApplicationDraftUpdate):
+    note: str = Field(min_length=3, max_length=500)
+
+
 class LoanHRReviewResponse(BaseModel):
     loan_application: LoanApplicationDTO
     stock_summary: StockSummaryResponse

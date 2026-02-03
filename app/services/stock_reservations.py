@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -113,3 +114,16 @@ async def set_reservation_status_for_application(
     for reservation in reservations:
         reservation.status = status
         db.add(reservation)
+
+
+async def delete_reservations_for_application(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    *,
+    application_id: UUID,
+) -> None:
+    stmt = delete(StockGrantReservation).where(
+        StockGrantReservation.org_id == ctx.org_id,
+        StockGrantReservation.loan_application_id == application_id,
+    )
+    await db.execute(stmt)

@@ -1,4 +1,5 @@
 from datetime import date
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.org_membership import OrgMembership
 from app.models.user import User
-from app.schemas.stock import StockGrantListResponse, StockSummaryResponse
+from app.schemas.stock import EmployeeStockGrantOut, StockGrantListResponse, StockSummaryResponse
 from app.services import stock_grants, stock_summary
 
 router = APIRouter(prefix="/me", tags=["stock-self"])
@@ -69,3 +70,28 @@ async def list_my_stock_grants(
         db, ctx, membership.id, offset=offset, limit=page_size
     )
     return StockGrantListResponse(items=grants, total=total)
+
+
+@router.get(
+    "/stock/grants/{grant_id}",
+    response_model=EmployeeStockGrantOut,
+    summary="Get a stock grant for the current user",
+)
+async def get_my_stock_grant(
+    grant_id: UUID,
+    current_user: User = Depends(deps.require_permission(PermissionCode.STOCK_SELF_VIEW)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> EmployeeStockGrantOut:
+    stmt = select(OrgMembership).where(
+        OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == current_user.id
+    )
+    result = await db.execute(stmt)
+    membership = result.scalar_one_or_none()
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+
+    grant = await stock_grants.get_grant(db, ctx, grant_id)
+    if not grant or grant.org_membership_id != membership.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grant not found")
+    return EmployeeStockGrantOut.model_validate(grant)

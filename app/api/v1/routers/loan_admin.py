@@ -31,6 +31,7 @@ from app.models.org_membership import OrgMembership
 from app.models.user import User
 from app.schemas.loan import (
     LoanAdminUpdateRequest,
+    LoanAdminEditRequest,
     LoanApplicationDTO,
     LoanApplicationListResponse,
     LoanApplicationSummaryDTO,
@@ -68,6 +69,7 @@ from app.services import (
     loan_applications,
     loan_exports,
     loan_payment_status,
+    loan_quotes,
     loan_queue,
     loan_repayments,
     loan_schedules,
@@ -1206,6 +1208,69 @@ async def update_loan(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_status_transition", "message": str(exc), "details": {}},
+        ) from exc
+
+    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
+        updated
+    )
+    applicant = await _fetch_applicant_summary(db, ctx, updated)
+    payment_fields = await _payment_status_fields(db, ctx, updated)
+    return LoanApplicationDTO.model_validate(updated).model_copy(
+        update={
+            "has_share_certificate": has_share_certificate,
+            "has_83b_election": has_83b_election,
+            "days_until_83b_due": days_until,
+            "applicant": applicant,
+            **payment_fields,
+        }
+    )
+
+
+@router.patch(
+    "/{loan_id}/edit",
+    response_model=LoanApplicationDTO,
+    summary="Edit loan application values (admin)",
+)
+async def edit_loan_application(
+    loan_id: UUID,
+    payload: LoanAdminEditRequest,
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_MANAGE)),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> LoanApplicationDTO:
+    if not payload.note or not payload.note.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "edit_note_required",
+                "message": "note is required for loan edits",
+                "details": {"field": "note"},
+            },
+        )
+
+    application = await loan_applications.get_application_with_related(db, ctx, loan_id)
+    if not application:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
+
+    try:
+        updated = await loan_applications.update_admin_application_fields(
+            db,
+            ctx,
+            application,
+            payload,
+            actor_id=current_user.id,
+        )
+    except loan_quotes.LoanQuoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_edit", "message": str(exc), "details": {}},
         ) from exc
 
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(

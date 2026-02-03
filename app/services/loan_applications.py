@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from uuid import UUID
 from decimal import Decimal
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, aliased
@@ -19,6 +20,7 @@ from app.models.stock_grant_reservation import StockGrantReservation
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.schemas.common import MaritalStatus, normalize_marital_status
 from app.schemas.loan import (
+    LoanAdminEditRequest,
     LoanApplicationDraftCreate,
     LoanApplicationDraftUpdate,
     LoanApplicationStatus,
@@ -604,6 +606,166 @@ def _validate_admin_status_transition(current_status: str, next_status: str) -> 
             raise ValueError("Only SUBMITTED or IN_REVIEW loans can be rejected")
         return
     raise ValueError("Only IN_REVIEW or REJECTED status updates are supported")
+
+
+async def update_admin_application_fields(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    application: LoanApplication,
+    payload: LoanAdminEditRequest,
+    *,
+    actor_id,
+) -> LoanApplication:
+    editable_statuses = {
+        LoanApplicationStatus.DRAFT.value,
+        LoanApplicationStatus.SUBMITTED.value,
+        LoanApplicationStatus.IN_REVIEW.value,
+    }
+    if application.status not in editable_statuses:
+        raise loan_quotes.LoanQuoteError(
+            code="invalid_status",
+            message="Only DRAFT, SUBMITTED, or IN_REVIEW applications can be edited",
+            details={"status": application.status},
+        )
+
+    membership = await get_membership_by_id(db, ctx, application.org_membership_id)
+    if not membership:
+        raise loan_quotes.LoanQuoteError(
+            code="membership_not_found",
+            message="Membership not found",
+            details={"membership_id": str(application.org_membership_id)},
+        )
+
+    old_snapshot = _application_snapshot(application)
+
+    recalc_fields = {
+        "selection_mode",
+        "selection_value",
+        "as_of_date",
+        "desired_interest_type",
+        "desired_repayment_method",
+        "desired_term_months",
+    }
+    recalc = any(getattr(payload, field) is not None for field in recalc_fields)
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    variable_base_rate = await pbgc_rates.get_latest_annual_rate(db)
+    current_policy_version = _current_policy_version(org_settings)
+    if not recalc and _policy_version_mismatch(application, current_policy_version):
+        raise loan_quotes.LoanQuoteError(
+            code="policy_out_of_date",
+            message="Loan policy changed. Please refresh the quote before editing.",
+            details={
+                "policy_version": current_policy_version,
+                "policy_version_snapshot": application.policy_version_snapshot,
+            },
+        )
+    workflow_reset = False
+    documents_deleted = 0
+    if recalc:
+        if application.status != LoanApplicationStatus.DRAFT.value:
+            application.status = LoanApplicationStatus.IN_REVIEW.value
+            workflow_reset = True
+        selection_mode = payload.selection_mode or LoanSelectionMode(application.selection_mode)
+        selection_value = (
+            payload.selection_value
+            if payload.selection_value is not None
+            else _selection_value_from_application(application)
+        )
+        quote_request = LoanQuoteRequest(
+            selection_mode=selection_mode,
+            selection_value=selection_value,
+            as_of_date=payload.as_of_date or application.as_of_date,
+            desired_interest_type=payload.desired_interest_type or application.interest_type,
+            desired_repayment_method=payload.desired_repayment_method
+            or application.repayment_method,
+            desired_term_months=payload.desired_term_months or application.term_months,
+        )
+        quote = await loan_quotes.calculate_loan_quote(db, ctx, membership, quote_request)
+        _apply_quote(
+            application,
+            quote=quote,
+            quote_request=quote_request,
+            selection_mode=selection_mode,
+            org_settings=org_settings,
+            variable_base_rate_annual_percent=variable_base_rate,
+        )
+        if application.status in {
+            LoanApplicationStatus.SUBMITTED.value,
+            LoanApplicationStatus.IN_REVIEW.value,
+        } or workflow_reset:
+            await stock_reservations.delete_reservations_for_application(
+                db, ctx, application_id=application.id
+            )
+            if workflow_reset:
+                documents_deleted = await _reset_workflow_and_documents(db, ctx, application.id)
+            await db.flush()
+            await _reserve_shares_for_application(
+                db,
+                ctx,
+                membership,
+                application,
+                allocation=quote.allocation,
+                as_of_date=date.today(),
+            )
+
+    for field in [
+        "marital_status_snapshot",
+        "spouse_first_name",
+        "spouse_middle_name",
+        "spouse_last_name",
+        "spouse_email",
+        "spouse_phone",
+        "spouse_address",
+    ]:
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(application, field, value)
+
+    db.add(application)
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=actor_id,
+        action="loan_application.admin_edit",
+        resource_type="loan_application",
+        resource_id=str(application.id),
+        old_value=old_snapshot,
+        new_value={
+            **_application_snapshot(application),
+            "edit_note": payload.note,
+            "workflow_reset": workflow_reset,
+            "documents_deleted": documents_deleted,
+        },
+    )
+    await db.commit()
+    await db.refresh(application)
+    return application
+
+
+async def _reset_workflow_and_documents(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    loan_id: UUID,
+) -> int:
+    doc_count_stmt = select(func.count(LoanDocument.id)).where(
+        LoanDocument.org_id == ctx.org_id,
+        LoanDocument.loan_application_id == loan_id,
+    )
+    documents_deleted = (await db.execute(doc_count_stmt)).scalar_one()
+    await db.execute(
+        delete(LoanDocument).where(
+            LoanDocument.org_id == ctx.org_id,
+            LoanDocument.loan_application_id == loan_id,
+        )
+    )
+    await db.execute(
+        delete(LoanWorkflowStage).where(
+            LoanWorkflowStage.org_id == ctx.org_id,
+            LoanWorkflowStage.loan_application_id == loan_id,
+        )
+    )
+    await _ensure_core_workflow_stages(db, ctx, LoanApplication(id=loan_id, org_id=ctx.org_id))
+    return int(documents_deleted or 0)
 
 
 async def update_admin_application(

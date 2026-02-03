@@ -30,7 +30,7 @@ async def create_org(
             detail="Org creation is disabled in single-tenant mode",
         )
     try:
-        org = await org_service.create_org(db, payload=payload)
+        org = await org_service.create_org(db, payload=payload, creator=current_user)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return OrgDTO.model_validate(org)

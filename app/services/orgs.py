@@ -1,10 +1,14 @@
 import re
 
+from datetime import datetime, timezone
+
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.settings import settings
+from app.models.org_membership import OrgMembership
+from app.models.user import User
 from app.models.org import Org
 from app.schemas.orgs import OrgCreateRequest
 from app.services import authz, settings as settings_service
@@ -52,6 +56,7 @@ async def create_org(
     db: AsyncSession,
     *,
     payload: OrgCreateRequest,
+    creator: User | None = None,
 ) -> Org:
     if settings.tenancy_mode != "multi":
         raise ValueError("Org creation is disabled in single-tenant mode")
@@ -72,8 +77,77 @@ async def create_org(
     await db.refresh(org)
 
     await ensure_audit_partitions(db, org.id)
-    await authz.seed_system_roles(db, org.id)
+    roles = await authz.seed_system_roles(db, org.id)
     await settings_service.get_org_settings(
         db, deps.TenantContext(org_id=org.id), create_if_missing=True
     )
+    if creator:
+        await _bootstrap_creator(db, org_id=org.id, creator=creator, roles=roles)
     return org
+
+
+async def _bootstrap_creator(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    creator: User,
+    roles,
+) -> None:
+    # Ensure a user record exists for the creator in the new org.
+    stmt = select(User).where(User.org_id == org_id, User.email == creator.email)
+    existing_user = (await db.execute(stmt)).scalar_one_or_none()
+    if existing_user:
+        user = existing_user
+    else:
+        user = User(
+            org_id=org_id,
+            email=creator.email,
+            hashed_password=creator.hashed_password,
+            is_active=True,
+            is_superuser=False,
+            token_version=creator.token_version,
+            full_name=creator.full_name,
+            first_name=creator.first_name,
+            middle_name=creator.middle_name,
+            last_name=creator.last_name,
+            preferred_name=creator.preferred_name,
+            timezone=creator.timezone,
+            phone_number=creator.phone_number,
+            marital_status=creator.marital_status,
+            country=creator.country,
+            state=creator.state,
+            address_line1=creator.address_line1,
+            address_line2=creator.address_line2,
+            postal_code=creator.postal_code,
+            must_change_password=False,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    admin_role = roles.get("ORG_ADMIN")
+    if admin_role:
+        await authz.ensure_user_in_role(db, org_id, user.id, admin_role)
+    employee_role = roles.get("EMPLOYEE")
+    if employee_role:
+        await authz.ensure_user_in_role(db, org_id, user.id, employee_role)
+
+    # Ensure org membership for permissions and directory lists.
+    mem_stmt = select(OrgMembership).where(
+        OrgMembership.org_id == org_id, OrgMembership.user_id == user.id
+    )
+    membership = (await db.execute(mem_stmt)).scalar_one_or_none()
+    if not membership:
+        now = datetime.now(timezone.utc)
+        membership = OrgMembership(
+            org_id=org_id,
+            user_id=user.id,
+            employee_id=f"admin-{user.id}",
+            employment_status="ACTIVE",
+            platform_status="ACTIVE",
+            invitation_status="ACCEPTED",
+            invited_at=now,
+            accepted_at=now,
+        )
+        db.add(membership)
+        await db.commit()
