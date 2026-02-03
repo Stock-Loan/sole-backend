@@ -1,7 +1,10 @@
+import asyncio
+import json
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,11 +20,34 @@ from app.schemas.announcements import (
     AnnouncementUpdate,
 )
 from app.services import announcements as announcement_service
+from app.services import announcement_stream
 from app.services.audit import model_snapshot, record_audit_log
 from app.services import authz
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
 logger = logging.getLogger(__name__)
+
+
+def _announcement_event_payload(announcement: Announcement) -> dict:
+    return {
+        "type": "announcement.published",
+        "id": str(announcement.id),
+        "org_id": announcement.org_id,
+        "title": announcement.title,
+        "announcement_type": announcement.type,
+        "status": announcement.status,
+        "published_at": (
+            announcement.published_at.isoformat() if announcement.published_at else None
+        ),
+    }
+
+
+async def _maybe_publish_announcement(announcement: Announcement) -> None:
+    if announcement.status != "PUBLISHED":
+        return
+    await announcement_stream.publish_announcement(
+        announcement.org_id, _announcement_event_payload(announcement)
+    )
 
 
 async def _get_announcement_or_404(
@@ -63,6 +89,37 @@ async def list_announcements(
         announcement.read_count = read_counts.get(str(announcement.id), 0)
         announcement.target_count = target_count
     return AnnouncementListResponse(items=announcements, total=total)
+
+
+@router.get(
+    "/stream",
+    summary="Stream published announcements (SSE)",
+)
+async def stream_announcements(
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    _: User = Depends(deps.require_authenticated_user),
+):
+    channel = announcement_stream.channel_for_org(ctx.org_id)
+    pubsub = await announcement_stream.subscribe(channel)
+
+    async def event_generator():
+        try:
+            yield ": connected\n\n"
+            while True:
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=15.0
+                )
+                if message and message.get("data"):
+                    yield "event: announcement.published\n"
+                    yield f"data: {message['data']}\n\n"
+                else:
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(0)
+        finally:
+            await announcement_stream.unsubscribe(pubsub, channel)
+
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
 
 @router.get(
@@ -204,6 +261,7 @@ async def create_announcement(
         new_value=model_snapshot(announcement),
     )
     await db.commit()
+    await _maybe_publish_announcement(announcement)
     return announcement
 
 
@@ -235,6 +293,7 @@ async def update_announcement(
         new_value=model_snapshot(announcement),
     )
     await db.commit()
+    await _maybe_publish_announcement(announcement)
     return announcement
 
 
