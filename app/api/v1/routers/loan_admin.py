@@ -25,6 +25,7 @@ from app.api import deps
 from app.core.permissions import PermissionCode
 from app.core.settings import settings
 from app.db.session import get_db
+from app.models.audit_log import AuditLog
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.org_membership import OrgMembership
@@ -350,6 +351,26 @@ def _build_admin_summary(row) -> LoanApplicationSummaryDTO:
     )
 
 
+def _current_stage_from_workflow(stages: list[LoanWorkflowStage] | None):
+    if not stages:
+        return None, None, None, None
+    ordered = sorted(
+        stages,
+        key=lambda stage: stage.created_at or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    for stage in ordered:
+        if str(stage.status) != LoanWorkflowStageStatus.COMPLETED.value:
+            assignee = None
+            if getattr(stage, "assigned_to_user", None) is not None:
+                assignee = LoanStageAssigneeSummaryDTO(
+                    user_id=stage.assigned_to_user.id,
+                    full_name=stage.assigned_to_user.full_name,
+                    email=stage.assigned_to_user.email,
+                )
+            return stage.stage_type, stage.status, assignee, stage.assigned_at
+    return None, None, None, None
+
+
 async def _fetch_applicant_summary(
     db: AsyncSession, ctx: deps.TenantContext, application
 ) -> LoanApplicantSummaryDTO | None:
@@ -360,6 +381,38 @@ async def _fetch_applicant_summary(
         return None
     membership, user, department = membership_bundle
     return _build_applicant_summary(membership, user, department)
+
+
+async def _fetch_last_edit_note(
+    db: AsyncSession, ctx: deps.TenantContext, loan_id: UUID
+) -> tuple[str | None, datetime | None, LoanStageAssigneeSummaryDTO | None]:
+    stmt = (
+        select(AuditLog, User)
+        .outerjoin(User, User.id == AuditLog.actor_id)
+        .where(
+            AuditLog.org_id == ctx.org_id,
+            AuditLog.resource_type == "loan_application",
+            AuditLog.resource_id == str(loan_id),
+            AuditLog.action == "loan_application.admin_edit",
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return None, None, None
+    audit, actor = row
+    note = None
+    if isinstance(audit.new_value, dict):
+        note = audit.new_value.get("edit_note")
+    editor = None
+    if actor is not None:
+        editor = LoanStageAssigneeSummaryDTO(
+            user_id=actor.id,
+            full_name=actor.full_name,
+            email=actor.email,
+        )
+    return note, audit.created_at, editor
 
 
 async def _payment_status_fields(
@@ -504,7 +557,16 @@ async def get_loan(
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
         application
     )
+    (
+        current_stage_type,
+        current_stage_status,
+        current_stage_assignee,
+        current_stage_assigned_at,
+    ) = _current_stage_from_workflow(application.workflow_stages or [])
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
+        db, ctx, loan_id
+    )
     payment_fields = await _payment_status_fields(db, ctx, application)
     return LoanApplicationDTO.model_validate(application).model_copy(
         update={
@@ -512,6 +574,13 @@ async def get_loan(
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            "current_stage_type": current_stage_type,
+            "current_stage_status": current_stage_status,
+            "current_stage_assignee": current_stage_assignee,
+            "current_stage_assigned_at": current_stage_assigned_at,
+            "last_edit_note": last_edit_note,
+            "last_edited_at": last_edited_at,
+            "last_edited_by": last_edited_by,
             **payment_fields,
         }
     )
@@ -1273,17 +1342,36 @@ async def edit_loan_application(
             detail={"code": "invalid_edit", "message": str(exc), "details": {}},
         ) from exc
 
+    refreshed = await loan_applications.get_application_with_related(db, ctx, updated.id)
+    if refreshed is None:
+        refreshed = updated
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
-        updated
+        refreshed
     )
-    applicant = await _fetch_applicant_summary(db, ctx, updated)
-    payment_fields = await _payment_status_fields(db, ctx, updated)
-    return LoanApplicationDTO.model_validate(updated).model_copy(
+    (
+        current_stage_type,
+        current_stage_status,
+        current_stage_assignee,
+        current_stage_assigned_at,
+    ) = _current_stage_from_workflow(refreshed.workflow_stages or [])
+    applicant = await _fetch_applicant_summary(db, ctx, refreshed)
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
+        db, ctx, refreshed.id
+    )
+    payment_fields = await _payment_status_fields(db, ctx, refreshed)
+    return LoanApplicationDTO.model_validate(refreshed).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            "current_stage_type": current_stage_type,
+            "current_stage_status": current_stage_status,
+            "current_stage_assignee": current_stage_assignee,
+            "current_stage_assigned_at": current_stage_assigned_at,
+            "last_edit_note": last_edit_note,
+            "last_edited_at": last_edited_at,
+            "last_edited_by": last_edited_by,
             **payment_fields,
         }
     )

@@ -266,6 +266,9 @@ class LoanApplicationSummaryDTO(BaseModel):
     current_stage_status: LoanWorkflowStageStatus | None = None
     current_stage_assignee: LoanStageAssigneeSummaryDTO | None = None
     current_stage_assigned_at: datetime | None = None
+    last_edit_note: str | None = None
+    last_edited_at: datetime | None = None
+    last_edited_by: LoanStageAssigneeSummaryDTO | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -385,6 +388,9 @@ class LoanApplicationSelfDTO(BaseModel):
     eligibility_result_snapshot: dict
     current_stage_type: LoanWorkflowStageType | None = None
     current_stage_status: LoanWorkflowStageStatus | None = None
+    last_edit_note: str | None = None
+    last_edited_at: datetime | None = None
+    last_edited_by: LoanStageAssigneeSummaryDTO | None = None
     workflow_stages: list[LoanWorkflowStageSelfDTO] | None = None
     documents: list[LoanDocumentSelfDTO] | None = None
     has_share_certificate: bool | None = None
@@ -653,6 +659,8 @@ class LoanAdminUpdateRequest(BaseModel):
 
 class LoanAdminEditRequest(LoanApplicationDraftUpdate):
     note: str = Field(min_length=3, max_length=500)
+    reset_workflow: bool = False
+    delete_documents: bool = False
 
 
 class LoanHRReviewResponse(BaseModel):

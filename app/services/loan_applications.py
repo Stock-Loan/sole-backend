@@ -35,6 +35,8 @@ from app.services import (
     vesting_engine,
 )
 from app.services.audit import record_audit_log
+from app.services.storage.adapter import GCSStorageAdapter, LocalFileSystemAdapter
+from app.core.settings import settings
 
 
 def _snapshot_org_settings(
@@ -616,6 +618,7 @@ async def update_admin_application_fields(
     *,
     actor_id,
 ) -> LoanApplication:
+    original_status = application.status
     editable_statuses = {
         LoanApplicationStatus.DRAFT.value,
         LoanApplicationStatus.SUBMITTED.value,
@@ -662,8 +665,10 @@ async def update_admin_application_fields(
     workflow_reset = False
     documents_deleted = 0
     if recalc:
-        if application.status != LoanApplicationStatus.DRAFT.value:
-            application.status = LoanApplicationStatus.IN_REVIEW.value
+        target_status = original_status
+        if payload.reset_workflow and application.status != LoanApplicationStatus.DRAFT.value:
+            target_status = LoanApplicationStatus.IN_REVIEW.value
+        if payload.reset_workflow:
             workflow_reset = True
         selection_mode = payload.selection_mode or LoanSelectionMode(application.selection_mode)
         selection_value = (
@@ -689,15 +694,20 @@ async def update_admin_application_fields(
             org_settings=org_settings,
             variable_base_rate_annual_percent=variable_base_rate,
         )
-        if application.status in {
+        application.status = target_status
+        if original_status in {
             LoanApplicationStatus.SUBMITTED.value,
             LoanApplicationStatus.IN_REVIEW.value,
         } or workflow_reset:
             await stock_reservations.delete_reservations_for_application(
                 db, ctx, application_id=application.id
             )
-            if workflow_reset:
-                documents_deleted = await _reset_workflow_and_documents(db, ctx, application.id)
+            if payload.delete_documents:
+                documents_deleted = await _delete_loan_documents(db, ctx, application.id)
+            if payload.reset_workflow:
+                await _reset_workflow_stages(db, ctx, application.id)
+            if payload.delete_documents or payload.reset_workflow:
+                db.expire(application, ["documents", "workflow_stages"])
             await db.flush()
             await _reserve_shares_for_application(
                 db,
@@ -707,6 +717,16 @@ async def update_admin_application_fields(
                 allocation=quote.allocation,
                 as_of_date=date.today(),
             )
+    else:
+        if payload.delete_documents:
+            documents_deleted = await _delete_loan_documents(db, ctx, application.id)
+            db.expire(application, ["documents"])
+        if payload.reset_workflow:
+            if application.status != LoanApplicationStatus.DRAFT.value:
+                application.status = LoanApplicationStatus.IN_REVIEW.value
+            workflow_reset = True
+            await _reset_workflow_stages(db, ctx, application.id)
+            db.expire(application, ["workflow_stages"])
 
     for field in [
         "marital_status_snapshot",
@@ -721,7 +741,18 @@ async def update_admin_application_fields(
         if value is not None:
             setattr(application, field, value)
 
-    db.add(application)
+    await db.flush()
+    await db.refresh(application)
+    new_snapshot = _application_snapshot(application)
+    new_snapshot.update(
+        {
+            "edit_note": payload.note,
+            "workflow_reset": workflow_reset,
+            "documents_deleted": documents_deleted,
+            "delete_documents": payload.delete_documents,
+            "reset_workflow": payload.reset_workflow,
+        }
+    )
     record_audit_log(
         db,
         ctx,
@@ -730,42 +761,76 @@ async def update_admin_application_fields(
         resource_type="loan_application",
         resource_id=str(application.id),
         old_value=old_snapshot,
-        new_value={
-            **_application_snapshot(application),
-            "edit_note": payload.note,
-            "workflow_reset": workflow_reset,
-            "documents_deleted": documents_deleted,
-        },
+        new_value=new_snapshot,
     )
     await db.commit()
     await db.refresh(application)
     return application
 
 
-async def _reset_workflow_and_documents(
+def _adapter_for_document(provider: str | None, bucket: str | None):
+    if (provider or "").lower() == "gcs":
+        resolved_bucket = bucket or settings.gcs_bucket
+        if not resolved_bucket:
+            return None
+        return GCSStorageAdapter(
+            bucket=resolved_bucket,
+            signed_url_expiry_seconds=settings.gcs_signed_url_expiry_seconds,
+        )
+    return LocalFileSystemAdapter(
+        base_path=settings.local_upload_dir, base_url=settings.public_base_url
+    )
+
+
+async def _delete_loan_documents(
     db: AsyncSession,
     ctx: deps.TenantContext,
     loan_id: UUID,
 ) -> int:
-    doc_count_stmt = select(func.count(LoanDocument.id)).where(
+    doc_stmt = select(LoanDocument).where(
         LoanDocument.org_id == ctx.org_id,
         LoanDocument.loan_application_id == loan_id,
     )
-    documents_deleted = (await db.execute(doc_count_stmt)).scalar_one()
+    documents = (await db.execute(doc_stmt)).scalars().all()
+    deleted = 0
+    for doc in documents:
+        object_key = doc.storage_key or doc.storage_path_or_url
+        if object_key and "://" not in object_key:
+            try:
+                adapter = _adapter_for_document(doc.storage_provider, doc.storage_bucket)
+                if adapter:
+                    adapter.delete_object(object_key)
+            except Exception:
+                # Best effort cleanup; keep going so edits are not blocked.
+                pass
+        deleted += 1
+
     await db.execute(
-        delete(LoanDocument).where(
+        delete(LoanDocument)
+        .where(
             LoanDocument.org_id == ctx.org_id,
             LoanDocument.loan_application_id == loan_id,
         )
+        .execution_options(synchronize_session=False)
     )
+    return int(deleted or 0)
+
+
+async def _reset_workflow_stages(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    loan_id: UUID,
+) -> None:
     await db.execute(
-        delete(LoanWorkflowStage).where(
+        delete(LoanWorkflowStage)
+        .where(
             LoanWorkflowStage.org_id == ctx.org_id,
             LoanWorkflowStage.loan_application_id == loan_id,
         )
+        .execution_options(synchronize_session=False)
     )
     await _ensure_core_workflow_stages(db, ctx, LoanApplication(id=loan_id, org_id=ctx.org_id))
-    return int(documents_deleted or 0)
+    return None
 
 
 async def update_admin_application(

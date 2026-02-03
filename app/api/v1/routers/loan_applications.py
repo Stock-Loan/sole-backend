@@ -10,6 +10,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from app.api import deps
 from app.core.permissions import PermissionCode
 from app.db.session import get_db
+from app.models.audit_log import AuditLog
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.loan_application import LoanApplication
 from app.models.user import User
@@ -20,6 +21,7 @@ from app.schemas.loan import (
     LoanApplicationSelfListResponse,
     LoanApplicationSelfSummaryDTO,
     LoanApplicationStatus,
+    LoanStageAssigneeSummaryDTO,
     LoanWorkflowStageStatus,
 )
 from app.schemas.settings import MfaEnforcementAction
@@ -44,7 +46,13 @@ def _current_stage_from_workflow(stages):
     return None, None
 
 
-def _build_self_payload(application: LoanApplication) -> LoanApplicationSelfDTO:
+def _build_self_payload(
+    application: LoanApplication,
+    *,
+    last_edit_note: str | None = None,
+    last_edited_at: datetime | None = None,
+    last_edited_by: LoanStageAssigneeSummaryDTO | None = None,
+) -> LoanApplicationSelfDTO:
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
         application
     )
@@ -58,6 +66,9 @@ def _build_self_payload(application: LoanApplication) -> LoanApplicationSelfDTO:
             "days_until_83b_due": days_until,
             "current_stage_type": current_stage_type,
             "current_stage_status": current_stage_status,
+            "last_edit_note": last_edit_note,
+            "last_edited_at": last_edited_at,
+            "last_edited_by": last_edited_by,
             "workflow_stages": [
                 {
                     "stage_type": stage.stage_type,
@@ -79,6 +90,40 @@ def _build_self_payload(application: LoanApplication) -> LoanApplicationSelfDTO:
             ],
         }
     )
+
+
+async def _fetch_last_edit_note(
+    db: AsyncSession,
+    ctx: deps.TenantContext,
+    application_id: UUID,
+) -> tuple[str | None, datetime | None, LoanStageAssigneeSummaryDTO | None]:
+    stmt = (
+        select(AuditLog, User)
+        .outerjoin(User, User.id == AuditLog.actor_id)
+        .where(
+            AuditLog.org_id == ctx.org_id,
+            AuditLog.resource_type == "loan_application",
+            AuditLog.resource_id == str(application_id),
+            AuditLog.action == "loan_application.admin_edit",
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return None, None, None
+    audit, actor = row
+    note = None
+    if isinstance(audit.new_value, dict):
+        note = audit.new_value.get("edit_note")
+    editor = None
+    if actor is not None:
+        editor = LoanStageAssigneeSummaryDTO(
+            user_id=actor.id,
+            full_name=actor.full_name,
+            email=actor.email,
+        )
+    return note, audit.created_at, editor
 
 
 @router.get(
@@ -189,13 +234,15 @@ async def get_loan_application(
     if activated:
         await db.commit()
         await db.refresh(application)
-    has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
-        application
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
+        db, ctx, application.id
     )
-    current_stage_type, current_stage_status = _current_stage_from_workflow(
-        application.workflow_stages or []
+    return _build_self_payload(
+        application,
+        last_edit_note=last_edit_note,
+        last_edited_at=last_edited_at,
+        last_edited_by=last_edited_by,
     )
-    return _build_self_payload(application)
 
 
 @router.post(
