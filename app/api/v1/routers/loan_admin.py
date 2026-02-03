@@ -1731,6 +1731,9 @@ async def get_hr_review(
         application
     )
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
+        db, ctx, loan_id
+    )
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
@@ -1738,6 +1741,9 @@ async def get_hr_review(
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            "last_edit_note": last_edit_note,
+            "last_edited_at": last_edited_at,
+            "last_edited_by": last_edited_by,
             **payment_fields,
         }
     )
@@ -1933,6 +1939,9 @@ async def get_finance_review(
         application
     )
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
+        db, ctx, loan_id
+    )
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
@@ -1940,6 +1949,9 @@ async def get_finance_review(
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            "last_edit_note": last_edit_note,
+            "last_edited_at": last_edited_at,
+            "last_edited_by": last_edited_by,
             **payment_fields,
         }
     )
@@ -2128,6 +2140,9 @@ async def get_legal_review(
         application
     )
     applicant = await _fetch_applicant_summary(db, ctx, application)
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
+        db, ctx, loan_id
+    )
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
@@ -2135,6 +2150,9 @@ async def get_legal_review(
             "has_83b_election": has_83b_election,
             "days_until_83b_due": days_until,
             "applicant": applicant,
+            "last_edit_note": last_edit_note,
+            "last_edited_at": last_edited_at,
+            "last_edited_by": last_edited_by,
             **payment_fields,
         }
     )
