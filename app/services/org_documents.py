@@ -13,6 +13,8 @@ from app.api import deps
 from app.models.org_document_folder import OrgDocumentFolder
 from app.models.org_document_template import OrgDocumentTemplate
 from app.services.local_uploads import org_templates_subdir, save_upload
+from app.services.storage.adapter import GCSStorageAdapter, LocalFileSystemAdapter
+from app.core.settings import settings
 
 
 DEFAULT_FOLDERS = [
@@ -239,5 +241,27 @@ async def delete_template(
     ctx: deps.TenantContext,
     template: OrgDocumentTemplate,
 ) -> None:
+    if template.storage_object_key:
+        try:
+            adapter = _adapter_for_template(template.storage_provider, template.storage_bucket)
+            if adapter:
+                adapter.delete_object(template.storage_object_key)
+        except Exception:
+            # Best effort cleanup; keep going so deletes are not blocked.
+            pass
     await db.delete(template)
     await db.commit()
+
+
+def _adapter_for_template(provider: str | None, bucket: str | None):
+    if (provider or "").lower() == "gcs":
+        resolved_bucket = bucket or settings.gcs_bucket
+        if not resolved_bucket:
+            return None
+        return GCSStorageAdapter(
+            bucket=resolved_bucket,
+            signed_url_expiry_seconds=settings.gcs_signed_url_expiry_seconds,
+        )
+    return LocalFileSystemAdapter(
+        base_path=settings.local_upload_dir, base_url=settings.public_base_url
+    )
