@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
@@ -83,9 +84,15 @@ class OnboardingMembershipOut(BaseModel):
         from_attributes = True
 
 
+UserOnboardingStatus = Literal["new", "existing"]
+MembershipOnboardingStatus = Literal["created", "already_exists"]
+
+
 class OnboardingResponse(BaseModel):
     user: OnboardingUserOut
     membership: OnboardingMembershipOut
+    user_status: UserOnboardingStatus
+    membership_status: MembershipOnboardingStatus
     temporary_password: str | None = None
 
 
@@ -93,6 +100,8 @@ class BulkOnboardingRowSuccess(BaseModel):
     row_number: int
     user: OnboardingUserOut
     membership: OnboardingMembershipOut
+    user_status: UserOnboardingStatus
+    membership_status: MembershipOnboardingStatus
     temporary_password: str | None = None
 
 

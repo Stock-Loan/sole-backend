@@ -192,7 +192,7 @@ async def login_start(
     client_ip = request.client.host if request.client else "unknown"
     await enforce_login_limits(client_ip, payload.email)
 
-    stmt = select(User).where(User.email == payload.email)
+    stmt = select(User).where(User.org_id == ctx.org_id, User.email == payload.email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
@@ -795,7 +795,7 @@ async def _complete_login_flow(
         )
 
     email = challenge.get("sub")
-    stmt = select(User).where(User.email == email)
+    stmt = select(User).where(User.org_id == ctx.org_id, User.email == email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if (

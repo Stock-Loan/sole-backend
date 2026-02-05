@@ -48,13 +48,16 @@ async def init_db() -> None:
         # Ensure system roles exist for the default org
         roles = await seed_system_roles(session, settings.default_org_id)
 
-        stmt = select(User).where(User.email == settings.seed_admin_email)
+        stmt = select(User).where(
+            User.org_id == settings.default_org_id, User.email == settings.seed_admin_email
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
         if not user:
             print("Creating admin user...")
             user = User(
+                org_id=settings.default_org_id,
                 email=settings.seed_admin_email,
                 hashed_password=get_password_hash(settings.seed_admin_password),
                 is_active=True,

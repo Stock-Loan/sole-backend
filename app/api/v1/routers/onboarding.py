@@ -60,7 +60,7 @@ async def onboard_user(
     db: AsyncSession = Depends(get_db),
 ) -> OnboardingResponse:
     try:
-        user, membership, temp_password = await onboarding.onboard_single_user(db, ctx, payload)
+        result = await onboarding.onboard_single_user(db, ctx, payload)
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
@@ -70,24 +70,27 @@ async def onboard_user(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    record_audit_log(
-        db,
-        ctx,
-        actor_id=current_user.id,
-        action="user.onboarded",
-        resource_type="org_membership",
-        resource_id=str(membership.id),
-        old_value=None,
-        new_value={
-            "user": model_snapshot(user, exclude={"hashed_password"}),
-            "membership": model_snapshot(membership),
-        },
-    )
-    await db.commit()
+    if result.membership_status == "created":
+        record_audit_log(
+            db,
+            ctx,
+            actor_id=current_user.id,
+            action="user.onboarded",
+            resource_type="org_membership",
+            resource_id=str(result.membership.id),
+            old_value=None,
+            new_value={
+                "user": model_snapshot(result.user, exclude={"hashed_password"}),
+                "membership": model_snapshot(result.membership),
+            },
+        )
+        await db.commit()
     return OnboardingResponse(
-        user=_onboarding_user(user, org_id=ctx.org_id),
-        membership=membership,
-        temporary_password=temp_password,
+        user=_onboarding_user(result.user, org_id=ctx.org_id),
+        membership=result.membership,
+        user_status=result.user_status,
+        membership_status=result.membership_status,
+        temporary_password=result.temporary_password,
     )
 
 
@@ -131,10 +134,17 @@ async def bulk_onboard(
     try:
         result = await onboarding.bulk_onboard_users(db, ctx, content)
         for success in result.successes:
+            if success.membership_status != "created":
+                continue
             user_snapshot = (
                 model_snapshot(success.user, exclude={"hashed_password"})
                 if hasattr(success.user, "__table__")
                 else success.user.model_dump()
+            )
+            membership_snapshot = (
+                model_snapshot(success.membership)
+                if hasattr(success.membership, "__table__")
+                else success.membership.model_dump()
             )
             record_audit_log(
                 db,
@@ -146,7 +156,7 @@ async def bulk_onboard(
                 old_value=None,
                 new_value={
                     "user": user_snapshot,
-                    "membership": model_snapshot(success.membership),
+                    "membership": membership_snapshot,
                 },
             )
         if result.successes:

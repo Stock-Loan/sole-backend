@@ -3,8 +3,9 @@ import io
 import secrets
 import string
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Tuple
+from typing import Literal
 
 from rapidfuzz import process, fuzz
 from sqlalchemy import select
@@ -29,6 +30,19 @@ from app.schemas.onboarding import (
     OnboardingUserCreate,
 )
 from app.resources.countries import COUNTRIES, SUBDIVISIONS
+
+
+UserStatus = Literal["new", "existing"]
+MembershipStatus = Literal["created", "already_exists"]
+
+
+@dataclass(frozen=True)
+class OnboardingResult:
+    user: User
+    membership: OrgMembership
+    temporary_password: str | None
+    user_status: UserStatus
+    membership_status: MembershipStatus
 
 
 def _generate_temp_password(length: int = 16) -> str:
@@ -187,18 +201,22 @@ async def onboard_single_user(
     db: AsyncSession,
     ctx: deps.TenantContext,
     payload: OnboardingUserCreate,
-) -> Tuple[User, OrgMembership, str | None]:
+) -> OnboardingResult:
     payload = _normalize_payload(payload)
-    stmt = select(User).where(User.email == payload.email)
+    stmt = select(User).where(User.org_id == ctx.org_id, User.email == payload.email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     temporary_password: str | None = None
     now = datetime.now(timezone.utc)
+    created_user = False
+    created_membership = False
 
     if not user:
+        created_user = True
         temporary_password = payload.temporary_password or _generate_temp_password()
         full_name = f"{payload.first_name} {payload.last_name}".strip()
         user = User(
+            org_id=ctx.org_id,
             email=payload.email,
             first_name=payload.first_name,
             middle_name=payload.middle_name,
@@ -230,7 +248,16 @@ async def onboard_single_user(
     )
     membership_result = await db.execute(membership_stmt)
     membership = membership_result.scalar_one_or_none()
+    if membership and payload.employee_id and membership.employee_id != payload.employee_id:
+        raise ValueError("User already onboarded with a different employee_id")
     if not membership:
+        conflict_stmt = select(OrgMembership).where(
+            OrgMembership.org_id == ctx.org_id,
+            OrgMembership.employee_id == payload.employee_id,
+        )
+        conflict = (await db.execute(conflict_stmt)).scalar_one_or_none()
+        if conflict:
+            raise ValueError("employee_id already in use for this organization")
         membership = OrgMembership(
             org_id=ctx.org_id,
             user_id=user.id,
@@ -242,6 +269,7 @@ async def onboard_single_user(
             invited_at=now,
         )
         db.add(membership)
+        created_membership = True
 
     await db.commit()
     await db.refresh(user)
@@ -252,7 +280,15 @@ async def onboard_single_user(
     except Exception:
         # Best-effort; do not fail onboarding if role assignment fails
         pass
-    return user, membership, temporary_password
+    user_status: UserStatus = "new" if created_user else "existing"
+    membership_status: MembershipStatus = "created" if created_membership else "already_exists"
+    return OnboardingResult(
+        user=user,
+        membership=membership,
+        temporary_password=temporary_password,
+        user_status=user_status,
+        membership_status=membership_status,
+    )
 
 
 CSV_COLUMNS = [
@@ -355,38 +391,6 @@ async def bulk_onboard_users(
                 if len(val) > limit:
                     raise ValueError(f"{key} exceeds max length {limit}")
 
-            normalized_email = _normalize_text(row.get("email") or "", lower=True) or ""
-            normalized_employee_id = _normalize_text(row.get("employee_id") or "") or ""
-            existing_membership_id = None
-            if normalized_email:
-                user_stmt = select(User.id).where(User.email == normalized_email)
-                user_id = (await db.execute(user_stmt)).scalar_one_or_none()
-                if user_id:
-                    membership_stmt = select(OrgMembership.id).where(
-                        OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == user_id
-                    )
-                    existing_membership_id = (
-                        await db.execute(membership_stmt)
-                    ).scalar_one_or_none()
-            if not existing_membership_id and normalized_employee_id:
-                employee_stmt = select(OrgMembership.id).where(
-                    OrgMembership.org_id == ctx.org_id,
-                    OrgMembership.employee_id == normalized_employee_id,
-                )
-                existing_membership_id = (await db.execute(employee_stmt)).scalar_one_or_none()
-            if existing_membership_id:
-                errors.append(
-                    BulkOnboardingRowError(
-                        row_number=idx,
-                        email=row.get("email"),
-                        first_name=row.get("first_name"),
-                        last_name=row.get("last_name"),
-                        employee_id=row.get("employee_id"),
-                        error="Already onboarded",
-                    )
-                )
-                continue
-
             country_code, state_code = _normalize_location(
                 row.get("country") or None, row.get("state") or None
             )
@@ -410,16 +414,18 @@ async def bulk_onboard_users(
                 employment_status=row.get("employment_status") or "ACTIVE",
             )
             payload = _normalize_payload(payload)
-            user, membership, temp_password = await onboard_single_user(db, ctx, payload)
-            user_out = OnboardingUserOut.model_validate(user).model_copy(
+            result = await onboard_single_user(db, ctx, payload)
+            user_out = OnboardingUserOut.model_validate(result.user).model_copy(
                 update={"org_id": ctx.org_id}
             )
             successes.append(
                 BulkOnboardingRowSuccess(
                     row_number=idx,
                     user=user_out,
-                    membership=membership,
-                    temporary_password=temp_password,
+                    membership=result.membership,
+                    user_status=result.user_status,
+                    membership_status=result.membership_status,
+                    temporary_password=result.temporary_password,
                 )
             )
         except IntegrityError:
