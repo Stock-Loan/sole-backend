@@ -103,6 +103,10 @@ class OrgResolveResponse(BaseModel):
     org: OrgSummary
 
 
+class CsrfTokenResponse(BaseModel):
+    csrf_token: str
+
+
 class UserOut(BaseModel):
     id: UUID
     org_id: str | None = None

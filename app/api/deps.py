@@ -55,6 +55,23 @@ def _extract_bearer_token(request: Request) -> str | None:
     return None
 
 
+def _refresh_paths_match(path: str) -> bool:
+    return path.endswith("/auth/refresh") or path.endswith("/auth/refresh/csrf")
+
+
+def _org_from_refresh_cookie(request: Request) -> str | None:
+    refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
+    if not refresh_token:
+        return None
+    try:
+        payload = decode_token(refresh_token, expected_type="refresh")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+        ) from exc
+    return payload.get("org")
+
+
 async def get_db_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
     return db
 
@@ -95,6 +112,9 @@ async def get_tenant_context(
                 candidate = token_org
         else:
             candidate = header_org
+
+        if not candidate and _refresh_paths_match(request.url.path):
+            candidate = _org_from_refresh_cookie(request)
 
         if not candidate:
             raise HTTPException(

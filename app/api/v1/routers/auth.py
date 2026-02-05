@@ -44,6 +44,7 @@ from app.schemas.auth import (
     OrgDiscoveryResponse,
     OrgResolveResponse,
     OrgSummary,
+    CsrfTokenResponse,
     RefreshRequest,
     StepUpVerifyRequest,
     StepUpVerifyResponse,
@@ -221,6 +222,29 @@ async def login_complete(
     if csrf_token:
         result = result.model_copy(update={"csrf_token": csrf_token})
     return result
+
+
+@router.post("/refresh/csrf", response_model=CsrfTokenResponse)
+async def refresh_csrf(
+    request: Request,
+    response: Response,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+) -> CsrfTokenResponse:
+    refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token required")
+    try:
+        token_data = decode_token(refresh_token, expected_type="refresh")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    token_org = token_data.get("org")
+    if token_org and token_org != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
+        )
+    csrf_token = _issue_csrf_token()
+    _set_refresh_cookies(response, refresh_token, csrf_token)
+    return CsrfTokenResponse(csrf_token=csrf_token)
 
 
 @router.post("/login/mfa", response_model=LoginMfaResponse)
