@@ -2,6 +2,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core.settings import settings
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Apply a set of safe default security headers for HTTP responses."""
@@ -22,4 +23,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault(
                 "Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload"
             )
+        if settings.content_security_policy:
+            header = (
+                "Content-Security-Policy-Report-Only"
+                if settings.content_security_policy_report_only
+                else "Content-Security-Policy"
+            )
+            response.headers.setdefault(header, settings.content_security_policy)
         return response

@@ -65,6 +65,30 @@ class Settings(BaseSettings):
     pbgc_rate_scrape_day: int = Field(default=30, alias="PBGC_RATE_SCRAPE_DAY")
     pbgc_rate_scrape_hour: int = Field(default=0, alias="PBGC_RATE_SCRAPE_HOUR")
     pbgc_rate_scrape_minute: int = Field(default=0, alias="PBGC_RATE_SCRAPE_MINUTE")
+    auth_refresh_cookie_enabled: bool = Field(
+        default=True, alias="AUTH_REFRESH_COOKIE_ENABLED"
+    )
+    auth_refresh_cookie_name: str = Field(
+        default="sole_refresh", alias="AUTH_REFRESH_COOKIE_NAME"
+    )
+    auth_csrf_cookie_name: str = Field(
+        default="sole_csrf", alias="AUTH_CSRF_COOKIE_NAME"
+    )
+    auth_csrf_header_name: str = Field(
+        default="X-CSRF-Token", alias="AUTH_CSRF_HEADER_NAME"
+    )
+    auth_cookie_domain: str | None = Field(default=None, alias="AUTH_COOKIE_DOMAIN")
+    auth_cookie_path: str = Field(default="/api/v1/auth/refresh", alias="AUTH_COOKIE_PATH")
+    auth_cookie_secure: bool = Field(default=True, alias="AUTH_COOKIE_SECURE")
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = Field(
+        default="none", alias="AUTH_COOKIE_SAMESITE"
+    )
+    content_security_policy: str | None = Field(
+        default=None, alias="CONTENT_SECURITY_POLICY"
+    )
+    content_security_policy_report_only: bool = Field(
+        default=False, alias="CONTENT_SECURITY_POLICY_REPORT_ONLY"
+    )
 
     def allowed_origins_list(self) -> list[str]:
         raw = (self.allowed_origins or "").strip()

@@ -9,10 +9,11 @@ class TokenPair(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    csrf_token: str | None = None
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -43,6 +44,7 @@ class LoginCompleteResponse(BaseModel):
     access_token: str | None = None
     refresh_token: str | None = None
     token_type: str = "bearer"
+    csrf_token: str | None = None
     mfa_required: bool = False
     mfa_setup_required: bool = False
     mfa_token: str | None = None
@@ -148,6 +150,7 @@ class MfaSetupCompleteResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    csrf_token: str | None = None
     remember_device_token: str | None = None
     recovery_codes: list[str]
 

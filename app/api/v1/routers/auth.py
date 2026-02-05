@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import secrets
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +54,61 @@ from app.services import authz as authz_service, mfa as mfa_service, settings as
 from app.utils.login_security import enforce_mfa_rate_limit, is_refresh_used, mark_refresh_used
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _issue_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _set_refresh_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
+    if not settings.auth_refresh_cookie_enabled:
+        return
+    cookie_kwargs = {
+        "httponly": True,
+        "secure": settings.auth_cookie_secure,
+        "samesite": settings.auth_cookie_samesite,
+        "path": settings.auth_cookie_path,
+    }
+    if settings.auth_cookie_domain:
+        cookie_kwargs["domain"] = settings.auth_cookie_domain
+    max_age = settings.refresh_token_expire_minutes * 60
+    response.set_cookie(
+        key=settings.auth_refresh_cookie_name,
+        value=refresh_token,
+        max_age=max_age,
+        **cookie_kwargs,
+    )
+    response.set_cookie(
+        key=settings.auth_csrf_cookie_name,
+        value=csrf_token,
+        max_age=max_age,
+        **cookie_kwargs,
+    )
+
+
+def _clear_refresh_cookies(response: Response) -> None:
+    if not settings.auth_refresh_cookie_enabled:
+        return
+    cookie_kwargs = {
+        "path": settings.auth_cookie_path,
+        "samesite": settings.auth_cookie_samesite,
+        "secure": settings.auth_cookie_secure,
+    }
+    if settings.auth_cookie_domain:
+        cookie_kwargs["domain"] = settings.auth_cookie_domain
+    response.delete_cookie(settings.auth_refresh_cookie_name, **cookie_kwargs)
+    response.delete_cookie(settings.auth_csrf_cookie_name, **cookie_kwargs)
+
+
+def _maybe_attach_cookies(
+    response: Response,
+    refresh_token: str | None,
+) -> str | None:
+    if not refresh_token or not settings.auth_refresh_cookie_enabled:
+        return None
+    csrf_token = _issue_csrf_token()
+    _set_refresh_cookies(response, refresh_token, csrf_token)
+    return csrf_token
 
 
 @router.post(
@@ -123,22 +180,28 @@ async def login_start(
 async def login_complete(
     payload: LoginCompleteRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> LoginCompleteResponse:
-    return await _complete_login_flow(
+    result = await _complete_login_flow(
         challenge_token=payload.challenge_token,
         password=payload.password,
         remember_device_token=payload.remember_device_token,
         ctx=ctx,
         db=db,
     )
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
 
 
 @router.post("/login/mfa", response_model=LoginMfaResponse)
 async def login_mfa(
     payload: LoginMfaRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> LoginMfaResponse:
@@ -208,17 +271,22 @@ async def login_mfa(
         mfa_authenticated=True,
         mfa_method="totp",
     )
-    return LoginMfaResponse(
+    result = LoginMfaResponse(
         access_token=access,
         refresh_token=refresh,
         remember_device_token=remember_device_token,
     )
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
 
 
 @router.post("/login/mfa/recovery", response_model=LoginMfaResponse)
 async def login_mfa_recovery(
     payload: LoginMfaRecoveryRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> LoginMfaResponse:
@@ -278,11 +346,15 @@ async def login_mfa_recovery(
         mfa_authenticated=True,
         mfa_method="recovery",
     )
-    return LoginMfaResponse(
+    result = LoginMfaResponse(
         access_token=access,
         refresh_token=refresh,
         remember_device_token=None,  # No remember device for recovery code login
     )
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
 
 
 @router.post("/login/mfa/setup/start", response_model=MfaSetupStartResponse)
@@ -336,6 +408,7 @@ async def login_mfa_setup_start(
 async def login_mfa_setup_verify(
     payload: LoginMfaSetupVerifyRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> MfaSetupCompleteResponse:
@@ -411,12 +484,16 @@ async def login_mfa_setup_verify(
         mfa_authenticated=True,
         mfa_method="totp",
     )
-    return MfaSetupCompleteResponse(
+    result = MfaSetupCompleteResponse(
         access_token=access,
         refresh_token=refresh,
         remember_device_token=remember_device_token,
         recovery_codes=recovery_codes,
     )
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
 
 
 @router.post("/mfa/setup/start", response_model=MfaSetupStartResponse)
@@ -452,6 +529,7 @@ async def mfa_setup_verify(
     payload: MfaSetupVerifyRequest,
     request: Request,
     current_user: User = Depends(deps.get_current_user),
+    response: Response,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupCompleteResponse:
@@ -507,12 +585,16 @@ async def mfa_setup_verify(
         mfa_authenticated=True,
         mfa_method="totp",
     )
-    return MfaSetupCompleteResponse(
+    result = MfaSetupCompleteResponse(
         access_token=access,
         refresh_token=refresh,
         remember_device_token=remember_device_token,
         recovery_codes=recovery_codes,
     )
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
 
 
 class RecoveryCodesCountResponse(BaseModel):
@@ -591,11 +673,28 @@ async def self_mfa_reset(
 
 @router.post("/refresh", response_model=TokenPair)
 async def refresh_tokens(
-    payload: RefreshRequest,
+    request: Request,
+    response: Response,
+    payload: RefreshRequest | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> TokenPair:
-    token_data = decode_token(payload.refresh_token, expected_type="refresh")
+    refresh_token = payload.refresh_token if payload else None
+    used_cookie = False
+    if not refresh_token:
+        refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
+        used_cookie = bool(refresh_token)
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Refresh token required")
+    if used_cookie and settings.auth_refresh_cookie_enabled:
+        csrf_header = request.headers.get(settings.auth_csrf_header_name)
+        csrf_cookie = request.cookies.get(settings.auth_csrf_cookie_name)
+        if not csrf_header or not csrf_cookie or csrf_header != csrf_cookie:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF validation failed",
+            )
+    token_data = decode_token(refresh_token, expected_type="refresh")
     user_id = token_data.get("sub")
     token_version = token_data.get("tv")
     jti = token_data.get("jti")
@@ -656,7 +755,11 @@ async def refresh_tokens(
         mfa_authenticated=token_mfa,
         mfa_method=token_mfa_method,
     )
-    return TokenPair(access_token=access, refresh_token=refresh)
+    result = TokenPair(access_token=access, refresh_token=refresh)
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
 
 
 async def _complete_login_flow(
@@ -782,12 +885,14 @@ async def _complete_login_flow(
 
 @router.post("/logout", status_code=204)
 async def logout(
+    response: Response,
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     current_user.token_version += 1
     db.add(current_user)
     await db.commit()
+    _clear_refresh_cookies(response)
     return None
 
 
@@ -801,6 +906,7 @@ async def change_password(
     payload: ChangePasswordRequest,
     current_user: User = Depends(deps.get_current_user_allow_password_change),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenPair:
     if not constant_time_verify(current_user.hashed_password, payload.current_password):
@@ -863,7 +969,11 @@ async def change_password(
         token_version=current_user.token_version,
         mfa_authenticated=current_user.mfa_enabled,
     )
-    return TokenPair(access_token=access, refresh_token=refresh)
+    result = TokenPair(access_token=access, refresh_token=refresh)
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
 
 
 @router.post(
