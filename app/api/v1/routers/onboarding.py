@@ -107,8 +107,14 @@ async def onboard_user(
         result = await onboarding.onboard_single_user(db, ctx, payload)
     except IntegrityError as exc:
         await db.rollback()
+        message = onboarding.describe_integrity_error(exc)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate user or employee_id"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "constraint_error",
+                "message": message,
+                "details": onboarding.integrity_error_details(exc),
+            },
         ) from exc
     except ValueError as exc:
         await db.rollback()
@@ -128,7 +134,7 @@ async def onboard_user(
                 "membership": model_snapshot(result.membership),
             },
         )
-        await db.commit()
+    await db.commit()
     return OnboardingResponse(
         user=_onboarding_user(result.user, result.profile, org_id=ctx.org_id),
         membership=result.membership,

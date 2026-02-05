@@ -30,7 +30,7 @@ class OnboardingUserCreate(BaseModel):
     postal_code: str | None = None
     temporary_password: str | None = None
     employee_id: str
-    employment_start_date: date | None = None
+    employment_start_date: date
     employment_status: EmploymentStatus = EmploymentStatus.ACTIVE
 
     @field_validator("marital_status", mode="before")

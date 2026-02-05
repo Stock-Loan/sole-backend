@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 import secrets
 import string
 import unicodedata
@@ -35,6 +36,22 @@ from app.resources.countries import COUNTRIES, SUBDIVISIONS
 
 UserStatus = Literal["new", "existing"]
 MembershipStatus = Literal["created", "already_exists"]
+
+CONSTRAINT_MESSAGES: dict[str, str] = {
+    "uq_users_org_email": "Email already exists in this organization",
+    "uq_membership_org_employee": "Employee ID already in use for this organization",
+    "uq_membership_org_user": "User is already onboarded in this organization",
+}
+REQUIRED_FIELD_LABELS: dict[str, str] = {
+    "employee_id": "Employee ID",
+    "employment_start_date": "Employment start date",
+    "email": "Email",
+    "first_name": "First name",
+    "last_name": "Last name",
+}
+
+_COLUMN_IN_DETAIL_RE = re.compile(r'column "(?P<column>[^"]+)"', re.IGNORECASE)
+_KEY_IN_DETAIL_RE = re.compile(r"Key \\((?P<column>[^)]+)\\)=", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -174,14 +191,38 @@ def _normalize_text(
     return cleaned
 
 
+def _normalize_required_text(
+    value: str | None,
+    field_name: str,
+    *,
+    lower: bool = False,
+    upper: bool = False,
+    title: bool = False,
+) -> str:
+    if value is None:
+        raise ValueError(f"{field_name} is required")
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{field_name} is required")
+    if lower:
+        return cleaned.lower()
+    if upper:
+        return cleaned.upper()
+    if title:
+        return cleaned.title()
+    return cleaned
+
+
 def _normalize_payload(payload: OnboardingUserCreate) -> OnboardingUserCreate:
     # Normalize textual fields to consistent casing/whitespace
-    normalized_email = _normalize_text(payload.email, lower=True) or payload.email
+    normalized_email = _normalize_required_text(payload.email, "email", lower=True)
+    if payload.employment_start_date is None:
+        raise ValueError("employment_start_date is required")
     return OnboardingUserCreate(
         email=normalized_email,
-        first_name=_normalize_text(payload.first_name, title=True),
+        first_name=_normalize_required_text(payload.first_name, "first_name", title=True),
         middle_name=_normalize_text(payload.middle_name, title=True),
-        last_name=_normalize_text(payload.last_name, title=True),
+        last_name=_normalize_required_text(payload.last_name, "last_name", title=True),
         preferred_name=_normalize_text(payload.preferred_name, title=True),
         timezone=_normalize_text(payload.timezone),
         phone_number=_normalize_text(payload.phone_number),
@@ -192,11 +233,66 @@ def _normalize_payload(payload: OnboardingUserCreate) -> OnboardingUserCreate:
         address_line2=_normalize_text(payload.address_line2),
         postal_code=_normalize_text(payload.postal_code, upper=True),
         temporary_password=_normalize_text(payload.temporary_password),
-        employee_id=_normalize_text(payload.employee_id),
+        employee_id=_normalize_required_text(payload.employee_id, "employee_id"),
         employment_start_date=payload.employment_start_date,
         employment_status=normalize_employment_status(payload.employment_status)
         or EmploymentStatus.ACTIVE,
     )
+
+
+def describe_integrity_error(exc: IntegrityError) -> str:
+    orig = getattr(exc, "orig", None)
+    constraint = getattr(orig, "constraint_name", None)
+    if constraint and constraint in CONSTRAINT_MESSAGES:
+        return CONSTRAINT_MESSAGES[constraint]
+
+    sqlstate = getattr(orig, "sqlstate", None)
+    detail = getattr(orig, "detail", "") or ""
+    detail_text = detail or str(orig) if orig is not None else ""
+    column_hint = None
+    if detail_text:
+        match = _COLUMN_IN_DETAIL_RE.search(detail_text)
+        if match:
+            column_hint = match.group("column")
+        else:
+            match = _KEY_IN_DETAIL_RE.search(detail_text)
+            if match:
+                column_hint = match.group("column").split(",")[0].strip()
+
+    if sqlstate == "23502":  # not_null_violation
+        column = getattr(orig, "column_name", None) or column_hint
+        if column:
+            label = REQUIRED_FIELD_LABELS.get(column, column.replace("_", " ").title())
+            return f"{label} is required"
+        return "Missing required field"
+    if sqlstate == "23503":  # foreign_key_violation
+        return "Related record not found"
+    if sqlstate == "23505":  # unique_violation
+        detail_lower = detail.lower()
+        if "employee_id" in detail_lower:
+            return "Employee ID already in use for this organization"
+        if "email" in detail_lower:
+            return "Email already exists in this organization"
+        return "Duplicate user or employee_id"
+
+    return "Unable to complete onboarding due to a data constraint"
+
+
+def integrity_error_details(exc: IntegrityError) -> dict:
+    orig = getattr(exc, "orig", None)
+    detail = getattr(orig, "detail", None)
+    detail_text = detail or (str(orig) if orig is not None else None)
+    column = getattr(orig, "column_name", None)
+    if not column and detail_text:
+        match = _COLUMN_IN_DETAIL_RE.search(detail_text)
+        if match:
+            column = match.group("column")
+    return {
+        "constraint": getattr(orig, "constraint_name", None),
+        "sqlstate": getattr(orig, "sqlstate", None),
+        "column": column,
+        "detail": detail_text,
+    }
 
 
 async def onboard_single_user(
@@ -257,6 +353,8 @@ async def onboard_single_user(
             invited_at=now,
         )
         db.add(membership)
+        # Ensure membership.id is available before creating a profile.
+        await db.flush()
         created_membership = True
 
     profile_stmt = select(OrgUserProfile).where(
@@ -410,6 +508,12 @@ async def bulk_onboard_users(
             country_code, state_code = _normalize_location(
                 row.get("country") or None, row.get("state") or None
             )
+            employee_id = (row.get("employee_id") or "").strip()
+            if not employee_id:
+                raise ValueError("employee_id is required")
+            employment_start_date = _parse_date(row.get("employment_start_date"))
+            if employment_start_date is None:
+                raise ValueError("employment_start_date is required")
             payload = OnboardingUserCreate(
                 email=row.get("email", "").strip(),
                 first_name=row.get("first_name", "").strip(),
@@ -425,8 +529,8 @@ async def bulk_onboard_users(
                 address_line2=(row.get("address_line2") or "").strip() or None,
                 postal_code=(row.get("postal_code") or "").strip() or None,
                 temporary_password=(row.get("temporary_password") or "").strip() or None,
-                employee_id=row.get("employee_id", "").strip(),
-                employment_start_date=_parse_date(row.get("employment_start_date")),
+                employee_id=employee_id,
+                employment_start_date=employment_start_date,
                 employment_status=row.get("employment_status") or "ACTIVE",
             )
             payload = _normalize_payload(payload)
@@ -454,17 +558,17 @@ async def bulk_onboard_users(
                     "postal_code": profile.postal_code if profile else None,
                 }
             )
-            successes.append(
-                BulkOnboardingRowSuccess(
-                    row_number=idx,
-                    user=user_out,
-                    membership=result.membership,
-                    user_status=result.user_status,
-                    membership_status=result.membership_status,
-                    temporary_password=result.temporary_password,
-                )
+            success = BulkOnboardingRowSuccess(
+                row_number=idx,
+                user=user_out,
+                membership=result.membership,
+                user_status=result.user_status,
+                membership_status=result.membership_status,
+                temporary_password=result.temporary_password,
             )
-        except IntegrityError:
+            await db.commit()
+            successes.append(success)
+        except IntegrityError as exc:
             await db.rollback()
             errors.append(
                 BulkOnboardingRowError(
@@ -473,10 +577,11 @@ async def bulk_onboard_users(
                     first_name=row.get("first_name"),
                     last_name=row.get("last_name"),
                     employee_id=row.get("employee_id"),
-                    error="Duplicate user or employee_id",
+                    error=describe_integrity_error(exc),
                 )
             )
         except Exception as exc:  # pragma: no cover - capture validation/runtime errors
+            await db.rollback()
             errors.append(
                 BulkOnboardingRowError(
                     row_number=idx,

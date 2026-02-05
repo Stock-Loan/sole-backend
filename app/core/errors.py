@@ -97,11 +97,23 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    errors = exc.errors()
+    message = "Validation failed"
+    if errors:
+        first = errors[0] or {}
+        loc = first.get("loc") or []
+        msg = first.get("msg") or "Validation failed"
+        # Drop the request section (body/query/path) from the location
+        loc_parts = [str(part) for part in loc if part not in {"body", "query", "path"}]
+        if loc_parts:
+            message = f"{'.'.join(loc_parts)}: {msg}"
+        else:
+            message = str(msg)
     return _build_response(
         status_code=422,
         code="validation_error",
-        message="Validation failed",
-        details={"errors": exc.errors(), "body": exc.body},
+        message=message,
+        details={"errors": errors, "body": exc.body},
     )
 
 
