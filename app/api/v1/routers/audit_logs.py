@@ -4,13 +4,15 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
+from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User
 from app.schemas.audit import AuditActorSummary, AuditLogEntry, AuditLogListResponse
 
@@ -56,8 +58,25 @@ async def list_audit_logs(
     total = int((await db.execute(count_stmt)).scalar_one() or 0)
 
     stmt = (
-        select(AuditLog, User)
-        .outerjoin(User, User.id == AuditLog.actor_id)
+        select(AuditLog, User, OrgUserProfile)
+        .outerjoin(
+            User,
+            and_(User.id == AuditLog.actor_id, User.org_id == AuditLog.org_id),
+        )
+        .outerjoin(
+            OrgMembership,
+            and_(
+                OrgMembership.user_id == User.id,
+                OrgMembership.org_id == AuditLog.org_id,
+            ),
+        )
+        .outerjoin(
+            OrgUserProfile,
+            and_(
+                OrgUserProfile.membership_id == OrgMembership.id,
+                OrgUserProfile.org_id == AuditLog.org_id,
+            ),
+        )
         .where(*conditions)
         .order_by(AuditLog.created_at.desc())
         .offset(offset)
@@ -65,12 +84,12 @@ async def list_audit_logs(
     )
     rows = (await db.execute(stmt)).all()
     items: list[AuditLogEntry] = []
-    for audit_log, user in rows:
+    for audit_log, user, profile in rows:
         actor = None
         if user is not None:
             actor = AuditActorSummary(
                 user_id=user.id,
-                full_name=user.full_name,
+                full_name=profile.full_name if profile else None,
                 email=user.email,
             )
         items.append(AuditLogEntry.model_validate(audit_log).model_copy(update={"actor": actor}))

@@ -12,6 +12,7 @@ class OrgMembership(Base):
     __table_args__ = (
         UniqueConstraint("org_id", "user_id", name="uq_membership_org_user"),
         UniqueConstraint("org_id", "employee_id", name="uq_membership_org_employee"),
+        UniqueConstraint("org_id", "id", name="uq_membership_org_id_id"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -38,3 +39,9 @@ class OrgMembership(Base):
     )
 
     user = relationship("User", back_populates="memberships")
+    profile = relationship(
+        "OrgUserProfile",
+        back_populates="membership",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

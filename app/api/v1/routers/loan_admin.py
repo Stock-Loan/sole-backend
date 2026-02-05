@@ -18,7 +18,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -29,6 +29,7 @@ from app.models.audit_log import AuditLog
 from app.models.loan_document import LoanDocument
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User
 from app.schemas.loan import (
     LoanAdminUpdateRequest,
@@ -294,11 +295,14 @@ def _document_manage_permission(stage_type: LoanWorkflowStageType) -> Permission
     raise ValueError(f"Unsupported stage type: {stage_type}")
 
 
-def _build_applicant_summary(membership, user, department) -> LoanApplicantSummaryDTO:
+def _build_applicant_summary(
+    membership, user, department, profile: OrgUserProfile | None
+) -> LoanApplicantSummaryDTO:
+    full_name = profile.full_name if profile and profile.full_name else user.email
     return LoanApplicantSummaryDTO(
         org_membership_id=membership.id,
         user_id=user.id,
-        full_name=user.full_name,
+        full_name=full_name,
         email=user.email,
         employee_id=membership.employee_id,
         department_id=membership.department_id,
@@ -316,13 +320,20 @@ def _build_admin_summary(row) -> LoanApplicationSummaryDTO:
         stage_status,
         assigned_user,
         assigned_at,
+        applicant_profile,
+        assigned_profile,
     ) = row
-    applicant = _build_applicant_summary(membership, user, department)
+    applicant = _build_applicant_summary(membership, user, department, applicant_profile)
     assignee = None
     if assigned_user is not None:
+        assignee_name = (
+            assigned_profile.full_name
+            if assigned_profile and assigned_profile.full_name
+            else assigned_user.email
+        )
         assignee = LoanStageAssigneeSummaryDTO(
             user_id=assigned_user.id,
-            full_name=assigned_user.full_name,
+            full_name=assignee_name,
             email=assigned_user.email,
         )
     return LoanApplicationSummaryDTO(
@@ -362,10 +373,17 @@ def _current_stage_from_workflow(stages: list[LoanWorkflowStage] | None):
         if str(stage.status) != LoanWorkflowStageStatus.COMPLETED.value:
             assignee = None
             if getattr(stage, "assigned_to_user", None) is not None:
+                assigned_user = stage.assigned_to_user
+                assigned_profile = getattr(assigned_user, "profile", None)
+                assignee_name = (
+                    assigned_profile.full_name
+                    if assigned_profile and assigned_profile.full_name
+                    else assigned_user.email
+                )
                 assignee = LoanStageAssigneeSummaryDTO(
-                    user_id=stage.assigned_to_user.id,
-                    full_name=stage.assigned_to_user.full_name,
-                    email=stage.assigned_to_user.email,
+                    user_id=assigned_user.id,
+                    full_name=assignee_name,
+                    email=assigned_user.email,
                 )
             return stage.stage_type, stage.status, assignee, stage.assigned_at
     return None, None, None, None
@@ -379,16 +397,27 @@ async def _fetch_applicant_summary(
     )
     if not membership_bundle:
         return None
-    membership, user, department = membership_bundle
-    return _build_applicant_summary(membership, user, department)
+    membership, user, department, profile = membership_bundle
+    return _build_applicant_summary(membership, user, department, profile)
 
 
 async def _fetch_last_edit_note(
     db: AsyncSession, ctx: deps.TenantContext, loan_id: UUID
 ) -> tuple[str | None, datetime | None, LoanStageAssigneeSummaryDTO | None]:
+    actor_membership = aliased(OrgMembership)
+    actor_profile = aliased(OrgUserProfile)
     stmt = (
-        select(AuditLog, User)
+        select(AuditLog, User, actor_profile)
         .outerjoin(User, User.id == AuditLog.actor_id)
+        .outerjoin(
+            actor_membership,
+            (actor_membership.user_id == User.id) & (actor_membership.org_id == ctx.org_id),
+        )
+        .outerjoin(
+            actor_profile,
+            (actor_profile.membership_id == actor_membership.id)
+            & (actor_profile.org_id == actor_membership.org_id),
+        )
         .where(
             AuditLog.org_id == ctx.org_id,
             AuditLog.resource_type == "loan_application",
@@ -401,15 +430,20 @@ async def _fetch_last_edit_note(
     row = (await db.execute(stmt)).first()
     if not row:
         return None, None, None
-    audit, actor = row
+    audit, actor, actor_profile_row = row
     note = None
     if isinstance(audit.new_value, dict):
         note = audit.new_value.get("edit_note")
     editor = None
     if actor is not None:
+        editor_name = (
+            actor_profile_row.full_name
+            if actor_profile_row and actor_profile_row.full_name
+            else actor.email
+        )
         editor = LoanStageAssigneeSummaryDTO(
             user_id=actor.id,
-            full_name=actor.full_name,
+            full_name=editor_name,
             email=actor.email,
         )
     return note, audit.created_at, editor

@@ -27,6 +27,7 @@ from app.schemas.users import (
 )
 from app.schemas.settings import MfaEnforcementAction
 from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User as UserModel
 from app.models.user_role import UserRole
 from app.models.role import Role
@@ -39,12 +40,55 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/org/users", tags=["users"])
 
 
-def _user_summary(user: UserModel, *, org_id: str) -> UserSummary:
-    return UserSummary.model_validate(user).model_copy(update={"org_id": org_id})
+def _user_summary(user: UserModel, profile: OrgUserProfile | None, *, org_id: str) -> UserSummary:
+    data = {
+        "id": user.id,
+        "org_id": org_id,
+        "email": user.email,
+        "is_active": user.is_active,
+        "is_superuser": user.is_superuser,
+        "mfa_enabled": user.mfa_enabled,
+        "created_at": user.created_at,
+        "first_name": profile.first_name if profile else None,
+        "middle_name": profile.middle_name if profile else None,
+        "last_name": profile.last_name if profile else None,
+        "preferred_name": profile.preferred_name if profile else None,
+        "timezone": profile.timezone if profile else None,
+        "phone_number": profile.phone_number if profile else None,
+        "marital_status": profile.marital_status if profile else None,
+        "country": profile.country if profile else None,
+        "state": profile.state if profile else None,
+        "address_line1": profile.address_line1 if profile else None,
+        "address_line2": profile.address_line2 if profile else None,
+        "postal_code": profile.postal_code if profile else None,
+    }
+    return UserSummary.model_validate(data)
 
 
-def _onboarding_user(user: UserModel, *, org_id: str) -> OnboardingUserOut:
-    return OnboardingUserOut.model_validate(user).model_copy(update={"org_id": org_id})
+def _onboarding_user(
+    user: UserModel, profile: OrgUserProfile | None, *, org_id: str
+) -> OnboardingUserOut:
+    data = {
+        "id": user.id,
+        "org_id": org_id,
+        "email": user.email,
+        "is_active": user.is_active,
+        "is_superuser": user.is_superuser,
+        "created_at": user.created_at,
+        "first_name": profile.first_name if profile else None,
+        "middle_name": profile.middle_name if profile else None,
+        "last_name": profile.last_name if profile else None,
+        "preferred_name": profile.preferred_name if profile else None,
+        "timezone": profile.timezone if profile else None,
+        "phone_number": profile.phone_number if profile else None,
+        "marital_status": profile.marital_status if profile else None,
+        "country": profile.country if profile else None,
+        "state": profile.state if profile else None,
+        "address_line1": profile.address_line1 if profile else None,
+        "address_line2": profile.address_line2 if profile else None,
+        "postal_code": profile.postal_code if profile else None,
+    }
+    return OnboardingUserOut.model_validate(data)
 
 
 @router.post(
@@ -86,7 +130,7 @@ async def onboard_user(
         )
         await db.commit()
     return OnboardingResponse(
-        user=_onboarding_user(result.user, org_id=ctx.org_id),
+        user=_onboarding_user(result.user, result.profile, org_id=ctx.org_id),
         membership=result.membership,
         user_status=result.user_status,
         membership_status=result.membership_status,
@@ -191,9 +235,14 @@ async def list_users(
     filters = [OrgMembership.org_id == ctx.org_id]
 
     base_stmt = (
-        select(OrgMembership, UserModel, Department)
+        select(OrgMembership, UserModel, Department, OrgUserProfile)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
-        .join(Department, OrgMembership.department_id == Department.id, isouter=True)
+        .outerjoin(Department, OrgMembership.department_id == Department.id)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.membership_id == OrgMembership.id)
+            & (OrgUserProfile.org_id == OrgMembership.org_id),
+        )
         .where(*filters)
     )
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
@@ -215,11 +264,11 @@ async def list_users(
             roles_map.setdefault(str(user_role.user_id), []).append(role)
 
     items = []
-    for membership, user, dept in rows:
+    for membership, user, dept, profile in rows:
         membership.department_name = dept.name if dept else None
         items.append(
             {
-                "user": _user_summary(user, org_id=ctx.org_id),
+                "user": _user_summary(user, profile, org_id=ctx.org_id),
                 "membership": membership,
                 "roles": roles_map.get(str(user.id), []),
             }
@@ -237,16 +286,21 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
-        select(OrgMembership, UserModel, Department)
+        select(OrgMembership, UserModel, Department, OrgUserProfile)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
-        .join(Department, OrgMembership.department_id == Department.id, isouter=True)
+        .outerjoin(Department, OrgMembership.department_id == Department.id)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.membership_id == OrgMembership.id)
+            & (OrgUserProfile.org_id == OrgMembership.org_id),
+        )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user, dept = row
+    membership, user, dept, profile = row
     membership.department_name = dept.name if dept else None
     roles_stmt = (
         select(Role)
@@ -255,7 +309,9 @@ async def get_user(
     )
     roles = (await db.execute(roles_stmt)).scalars().all()
     return UserDetailResponse(
-        user=_user_summary(user, org_id=ctx.org_id), membership=membership, roles=roles
+        user=_user_summary(user, profile, org_id=ctx.org_id),
+        membership=membership,
+        roles=roles,
     )
 
 
@@ -271,15 +327,20 @@ async def delete_user(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     stmt = (
-        select(OrgMembership, UserModel)
+        select(OrgMembership, UserModel, OrgUserProfile)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.membership_id == OrgMembership.id)
+            & (OrgUserProfile.org_id == OrgMembership.org_id),
+        )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user = row
+    membership, user, profile = row
 
     membership_snapshot = model_snapshot(membership)
     user_snapshot = model_snapshot(user, exclude={"hashed_password"})
@@ -380,8 +441,13 @@ async def update_membership(
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
-        select(OrgMembership, UserModel)
+        select(OrgMembership, UserModel, OrgUserProfile)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.membership_id == OrgMembership.id)
+            & (OrgUserProfile.org_id == OrgMembership.org_id),
+        )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
         .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
@@ -389,7 +455,7 @@ async def update_membership(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user = row
+    membership, user, profile = row
 
     old_membership = model_snapshot(membership)
     if payload.employment_status:
@@ -453,7 +519,7 @@ async def update_membership(
     )
     await db.commit()
     return UserDetailResponse(
-        user=_user_summary(user, org_id=ctx.org_id),
+        user=_user_summary(user, profile, org_id=ctx.org_id),
         membership=membership,
         roles=user_roles,
     )
@@ -486,8 +552,13 @@ async def update_user_profile(
             detail="Profile editing is disabled for this organization",
         )
     stmt = (
-        select(OrgMembership, UserModel)
+        select(OrgMembership, UserModel, OrgUserProfile)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.membership_id == OrgMembership.id)
+            & (OrgUserProfile.org_id == OrgMembership.org_id),
+        )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
         .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
@@ -495,18 +566,33 @@ async def update_user_profile(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user = row
+    membership, user, profile = row
 
     old_user = model_snapshot(user, exclude={"hashed_password"})
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(user, field, value)
-    # maintain full_name if first/last change
-    if payload.first_name or payload.last_name:
-        first = payload.first_name if payload.first_name is not None else user.first_name or ""
-        last = payload.last_name if payload.last_name is not None else user.last_name or ""
-        user.full_name = f"{first} {last}".strip()
+    old_profile = model_snapshot(profile) if profile else None
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "email" in updates:
+        user.email = updates.pop("email")
+
+    if profile is None:
+        profile = OrgUserProfile(
+            org_id=ctx.org_id,
+            membership_id=membership.id,
+            full_name="",
+        )
+        db.add(profile)
+
+    for field, value in updates.items():
+        setattr(profile, field, value)
+
+    if "first_name" in updates or "last_name" in updates:
+        first = profile.first_name or ""
+        last = profile.last_name or ""
+        profile.full_name = f"{first} {last}".strip()
 
     db.add(user)
+    db.add(profile)
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -521,6 +607,7 @@ async def update_user_profile(
         ) from exc
     await db.refresh(user)
     await db.refresh(membership)
+    await db.refresh(profile)
     user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
     record_audit_log(
         db,
@@ -529,12 +616,15 @@ async def update_user_profile(
         action="user.profile.updated",
         resource_type="user",
         resource_id=str(user.id),
-        old_value=old_user,
-        new_value=model_snapshot(user, exclude={"hashed_password"}),
+        old_value={"user": old_user, "profile": old_profile},
+        new_value={
+            "user": model_snapshot(user, exclude={"hashed_password"}),
+            "profile": model_snapshot(profile) if profile else None,
+        },
     )
     await db.commit()
     return UserDetailResponse(
-        user=_user_summary(user, org_id=ctx.org_id),
+        user=_user_summary(user, profile, org_id=ctx.org_id),
         membership=membership,
         roles=user_roles,
     )

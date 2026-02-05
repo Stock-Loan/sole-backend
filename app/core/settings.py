@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     extra_seed_org_ids: str = Field(
         default="",
         alias="EXTRA_SEED_ORG_IDS",
-        description="Comma-separated org_ids to also grant seed admin ORG_ADMIN",
+        description="Comma-separated org_ids to also seed with dedicated admin users",
     )
     seed_admin_email: str = Field(alias="SEED_ADMIN_EMAIL")
     seed_admin_password: str = Field(alias="SEED_ADMIN_PASSWORD")

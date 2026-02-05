@@ -4,6 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select, func
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -13,6 +14,8 @@ from app.db.session import get_db
 from app.models.audit_log import AuditLog
 from app.models.loan_workflow_stage import LoanWorkflowStage
 from app.models.loan_application import LoanApplication
+from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User
 from app.schemas.loan import (
     LoanApplicationDraftCreate,
@@ -97,9 +100,20 @@ async def _fetch_last_edit_note(
     ctx: deps.TenantContext,
     application_id: UUID,
 ) -> tuple[str | None, datetime | None, LoanStageAssigneeSummaryDTO | None]:
+    actor_membership = aliased(OrgMembership)
+    actor_profile = aliased(OrgUserProfile)
     stmt = (
-        select(AuditLog, User)
+        select(AuditLog, User, actor_profile)
         .outerjoin(User, User.id == AuditLog.actor_id)
+        .outerjoin(
+            actor_membership,
+            (actor_membership.user_id == User.id) & (actor_membership.org_id == ctx.org_id),
+        )
+        .outerjoin(
+            actor_profile,
+            (actor_profile.membership_id == actor_membership.id)
+            & (actor_profile.org_id == actor_membership.org_id),
+        )
         .where(
             AuditLog.org_id == ctx.org_id,
             AuditLog.resource_type == "loan_application",
@@ -112,15 +126,20 @@ async def _fetch_last_edit_note(
     row = (await db.execute(stmt)).first()
     if not row:
         return None, None, None
-    audit, actor = row
+    audit, actor, actor_profile_row = row
     note = None
     if isinstance(audit.new_value, dict):
         note = audit.new_value.get("edit_note")
     editor = None
     if actor is not None:
+        editor_name = (
+            actor_profile_row.full_name
+            if actor_profile_row and actor_profile_row.full_name
+            else actor.email
+        )
         editor = LoanStageAssigneeSummaryDTO(
             user_id=actor.id,
-            full_name=actor.full_name,
+            full_name=editor_name,
             email=actor.email,
         )
     return note, audit.created_at, editor

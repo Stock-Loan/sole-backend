@@ -16,6 +16,7 @@ from app.api import deps
 from app.core.security import get_password_hash
 from app.services.authz import assign_default_employee_role
 from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User
 from app.schemas.common import (
     EmploymentStatus,
@@ -40,6 +41,7 @@ MembershipStatus = Literal["created", "already_exists"]
 class OnboardingResult:
     user: User
     membership: OrgMembership
+    profile: OrgUserProfile | None
     temporary_password: str | None
     user_status: UserStatus
     membership_status: MembershipStatus
@@ -214,23 +216,9 @@ async def onboard_single_user(
     if not user:
         created_user = True
         temporary_password = payload.temporary_password or _generate_temp_password()
-        full_name = f"{payload.first_name} {payload.last_name}".strip()
         user = User(
             org_id=ctx.org_id,
             email=payload.email,
-            first_name=payload.first_name,
-            middle_name=payload.middle_name,
-            last_name=payload.last_name,
-            preferred_name=payload.preferred_name,
-            timezone=payload.timezone,
-            phone_number=payload.phone_number,
-            marital_status=payload.marital_status,
-            country=payload.country,
-            state=payload.state,
-            address_line1=payload.address_line1,
-            address_line2=payload.address_line2,
-            postal_code=payload.postal_code,
-            full_name=full_name,
             hashed_password=get_password_hash(temporary_password),
             is_active=True,
             is_superuser=False,
@@ -271,9 +259,36 @@ async def onboard_single_user(
         db.add(membership)
         created_membership = True
 
+    profile_stmt = select(OrgUserProfile).where(
+        OrgUserProfile.org_id == ctx.org_id,
+        OrgUserProfile.membership_id == membership.id,
+    )
+    profile = (await db.execute(profile_stmt)).scalar_one_or_none()
+    if not profile:
+        full_name = f"{payload.first_name} {payload.last_name}".strip()
+        profile = OrgUserProfile(
+            org_id=ctx.org_id,
+            membership_id=membership.id,
+            full_name=full_name,
+            first_name=payload.first_name,
+            middle_name=payload.middle_name,
+            last_name=payload.last_name,
+            preferred_name=payload.preferred_name,
+            timezone=payload.timezone,
+            phone_number=payload.phone_number,
+            marital_status=payload.marital_status,
+            country=payload.country,
+            state=payload.state,
+            address_line1=payload.address_line1,
+            address_line2=payload.address_line2,
+            postal_code=payload.postal_code,
+        )
+        db.add(profile)
+
     await db.commit()
     await db.refresh(user)
     await db.refresh(membership)
+    await db.refresh(profile)
     # Ensure a minimal EMPLOYEE role so first login is possible even while invited
     try:
         await assign_default_employee_role(db, ctx.org_id, user.id)
@@ -285,6 +300,7 @@ async def onboard_single_user(
     return OnboardingResult(
         user=user,
         membership=membership,
+        profile=profile,
         temporary_password=temporary_password,
         user_status=user_status,
         membership_status=membership_status,
@@ -415,8 +431,28 @@ async def bulk_onboard_users(
             )
             payload = _normalize_payload(payload)
             result = await onboard_single_user(db, ctx, payload)
-            user_out = OnboardingUserOut.model_validate(result.user).model_copy(
-                update={"org_id": ctx.org_id}
+            profile = result.profile
+            user_out = OnboardingUserOut.model_validate(
+                {
+                    "id": result.user.id,
+                    "org_id": ctx.org_id,
+                    "email": result.user.email,
+                    "is_active": result.user.is_active,
+                    "is_superuser": result.user.is_superuser,
+                    "created_at": result.user.created_at,
+                    "first_name": profile.first_name if profile else None,
+                    "middle_name": profile.middle_name if profile else None,
+                    "last_name": profile.last_name if profile else None,
+                    "preferred_name": profile.preferred_name if profile else None,
+                    "timezone": profile.timezone if profile else None,
+                    "phone_number": profile.phone_number if profile else None,
+                    "marital_status": profile.marital_status if profile else None,
+                    "country": profile.country if profile else None,
+                    "state": profile.state if profile else None,
+                    "address_line1": profile.address_line1 if profile else None,
+                    "address_line2": profile.address_line2 if profile else None,
+                    "postal_code": profile.postal_code if profile else None,
+                }
             )
             successes.append(
                 BulkOnboardingRowSuccess(

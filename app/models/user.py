@@ -14,19 +14,6 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True)
     email = Column(String(255), nullable=False)
-    full_name = Column(String(255), nullable=False)
-    first_name = Column(String(100), nullable=True)
-    middle_name = Column(String(100), nullable=True)
-    last_name = Column(String(100), nullable=True)
-    marital_status = Column(String(50), nullable=True)
-    country = Column(String(2), nullable=True)
-    state = Column(String(10), nullable=True)
-    address_line1 = Column(String(255), nullable=True)
-    address_line2 = Column(String(255), nullable=True)
-    postal_code = Column(String(32), nullable=True)
-    preferred_name = Column(String(255), nullable=True)
-    timezone = Column(String(50), nullable=True)
-    phone_number = Column(String(50), nullable=True)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, nullable=False, server_default="true")
     is_superuser = Column(Boolean, nullable=False, server_default="false")
@@ -47,3 +34,75 @@ class User(Base):
 
     memberships = relationship("OrgMembership", back_populates="user", cascade="all, delete-orphan")
     roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan")
+
+    @property
+    def profile(self):
+        memberships = getattr(self, "memberships", None) or []
+        if memberships:
+            return memberships[0].profile
+        return None
+
+    @property
+    def full_name(self) -> str | None:
+        profile = self.profile
+        return profile.full_name if profile else None
+
+    @property
+    def first_name(self) -> str | None:
+        profile = self.profile
+        return profile.first_name if profile else None
+
+    @property
+    def middle_name(self) -> str | None:
+        profile = self.profile
+        return profile.middle_name if profile else None
+
+    @property
+    def last_name(self) -> str | None:
+        profile = self.profile
+        return profile.last_name if profile else None
+
+    @property
+    def preferred_name(self) -> str | None:
+        profile = self.profile
+        return profile.preferred_name if profile else None
+
+    @property
+    def timezone(self) -> str | None:
+        profile = self.profile
+        return profile.timezone if profile else None
+
+    @property
+    def phone_number(self) -> str | None:
+        profile = self.profile
+        return profile.phone_number if profile else None
+
+    @property
+    def marital_status(self) -> str | None:
+        profile = self.profile
+        return profile.marital_status if profile else None
+
+    @property
+    def country(self) -> str | None:
+        profile = self.profile
+        return profile.country if profile else None
+
+    @property
+    def state(self) -> str | None:
+        profile = self.profile
+        return profile.state if profile else None
+
+    @property
+    def address_line1(self) -> str | None:
+        profile = self.profile
+        return profile.address_line1 if profile else None
+
+    @property
+    def address_line2(self) -> str | None:
+        profile = self.profile
+        return profile.address_line2 if profile else None
+
+    @property
+    def postal_code(self) -> str | None:
+        profile = self.profile
+        return profile.postal_code if profile else None

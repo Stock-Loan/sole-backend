@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     String,
@@ -59,13 +60,18 @@ class LoanApplication(Base):
             "repayment_method IN ('BALLOON', 'PRINCIPAL_AND_INTEREST')",
             name="ck_loan_app_repayment_method",
         ),
+        ForeignKeyConstraint(
+            ["org_id", "org_membership_id"],
+            ["org_memberships.org_id", "org_memberships.id"],
+            ondelete="CASCADE",
+            name="fk_loan_app_org_membership",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True)
     org_membership_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("org_memberships.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

@@ -725,6 +725,8 @@ async def refresh_tokens(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     if not jti or not exp_ts:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    if not token_org:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim")
     if token_org and token_org != ctx.org_id and not token_is_superuser:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
@@ -815,7 +817,7 @@ async def _complete_login_flow(
         if not deps.membership_allows_auth(membership, allow_pending=True):
             await record_login_attempt(email, success=False)
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Membership is not active"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
             )
 
     org_settings = await settings_service.get_org_settings(db, ctx)

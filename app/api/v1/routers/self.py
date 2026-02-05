@@ -14,7 +14,7 @@ from app.models.user import User
 from app.models.user_role import UserRole
 from app.schemas.self import OrgSummary, RoleSummary, SelfContextResponse
 from app.schemas.settings import OrgPolicyResponse
-from app.schemas.users import UserDetailResponse
+from app.schemas.users import UserDetailResponse, UserSummary
 from app.services import pbgc_rates, settings as settings_service
 
 router = APIRouter(prefix="/self", tags=["self"])
@@ -90,12 +90,18 @@ async def get_self_profile(
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     from app.models.org_membership import OrgMembership
+    from app.models.org_user_profile import OrgUserProfile
     from app.models.user import User as UserModel
 
     stmt = (
-        select(OrgMembership, UserModel, Department)
+        select(OrgMembership, UserModel, Department, OrgUserProfile)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
         .join(Department, OrgMembership.department_id == Department.id, isouter=True)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.membership_id == OrgMembership.id)
+            & (OrgUserProfile.org_id == OrgMembership.org_id),
+        )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == current_user.id)
         .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
@@ -103,7 +109,30 @@ async def get_self_profile(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user, dept = row
+    membership, user, dept, profile = row
     membership.department_name = dept.name if dept else None
     roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
-    return UserDetailResponse(user=user, membership=membership, roles=roles)
+    user_summary = UserSummary.model_validate(
+        {
+            "id": user.id,
+            "org_id": ctx.org_id,
+            "email": user.email,
+            "is_active": user.is_active,
+            "is_superuser": user.is_superuser,
+            "mfa_enabled": user.mfa_enabled,
+            "created_at": user.created_at,
+            "first_name": profile.first_name if profile else None,
+            "middle_name": profile.middle_name if profile else None,
+            "last_name": profile.last_name if profile else None,
+            "preferred_name": profile.preferred_name if profile else None,
+            "timezone": profile.timezone if profile else None,
+            "phone_number": profile.phone_number if profile else None,
+            "marital_status": profile.marital_status if profile else None,
+            "country": profile.country if profile else None,
+            "state": profile.state if profile else None,
+            "address_line1": profile.address_line1 if profile else None,
+            "address_line2": profile.address_line2 if profile else None,
+            "postal_code": profile.postal_code if profile else None,
+        }
+    )
+    return UserDetailResponse(user=user_summary, membership=membership, roles=roles)

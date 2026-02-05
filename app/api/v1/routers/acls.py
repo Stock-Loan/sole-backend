@@ -10,6 +10,8 @@ from app.api import deps
 from app.core.permissions import PermissionCode
 from app.db.session import get_db
 from app.models.access_control_list import AccessControlList
+from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User
 from app.models.user_permission import UserPermission
 from app.schemas.acl import ACLCreate, ACLListResponse, ACLOut, ACLUpdate
@@ -25,6 +27,18 @@ from app.schemas.settings import MfaEnforcementAction
 
 router = APIRouter(prefix="/acls", tags=["acls"])
 logger = logging.getLogger(__name__)
+
+
+async def _require_membership(db: AsyncSession, *, org_id: str, user_id: UUID) -> None:
+    stmt = select(OrgMembership.id).where(
+        OrgMembership.org_id == org_id,
+        OrgMembership.user_id == user_id,
+    )
+    if (await db.execute(stmt)).scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User is not a member of this organization",
+        )
 
 
 @router.get("", response_model=ACLListResponse, summary="List ACL entries for current org")
@@ -54,6 +68,7 @@ async def create_acl(
         db,
         action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
     )
+    await _require_membership(db, org_id=ctx.org_id, user_id=payload.user_id)
     acl = AccessControlList(
         org_id=ctx.org_id,
         user_id=payload.user_id,
@@ -197,10 +212,19 @@ async def list_user_permission_assignments(
     db: AsyncSession = Depends(get_db),
 ) -> UserPermissionAssignmentList:
     stmt = (
-        select(UserPermission, User.full_name, User.email)
+        select(UserPermission, OrgUserProfile.full_name, User.email)
         .join(User, User.id == UserPermission.user_id)
+        .join(
+            OrgMembership,
+            (OrgMembership.user_id == User.id) & (OrgMembership.org_id == ctx.org_id),
+        )
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.org_id == OrgMembership.org_id)
+            & (OrgUserProfile.membership_id == OrgMembership.id),
+        )
         .where(UserPermission.org_id == ctx.org_id)
-        .order_by(User.full_name.asc())
+        .order_by(OrgUserProfile.full_name.asc())
     )
     result = await db.execute(stmt)
     items: list[UserPermissionAssignmentOut] = []
@@ -243,6 +267,7 @@ async def create_user_permission_assignment(
         db,
         action=MfaEnforcementAction.ACL_ASSIGNMENT.value,
     )
+    await _require_membership(db, org_id=ctx.org_id, user_id=payload.user_id)
     assignment = UserPermission(
         org_id=ctx.org_id,
         user_id=payload.user_id,
@@ -272,7 +297,20 @@ async def create_user_permission_assignment(
         new_value=model_snapshot(assignment),
     )
     await db.commit()
-    user_row = await db.execute(select(User.full_name, User.email).where(User.id == assignment.user_id))
+    user_row = await db.execute(
+        select(OrgUserProfile.full_name, User.email)
+        .select_from(User)
+        .join(
+            OrgMembership,
+            (OrgMembership.user_id == User.id) & (OrgMembership.org_id == ctx.org_id),
+        )
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.org_id == OrgMembership.org_id)
+            & (OrgUserProfile.membership_id == OrgMembership.id),
+        )
+        .where(User.id == assignment.user_id)
+    )
     full_name, email = user_row.one()
     return UserPermissionAssignmentOut(
         id=assignment.id,
@@ -332,7 +370,20 @@ async def update_user_permission_assignment(
         new_value=model_snapshot(assignment),
     )
     await db.commit()
-    user_row = await db.execute(select(User.full_name, User.email).where(User.id == assignment.user_id))
+    user_row = await db.execute(
+        select(OrgUserProfile.full_name, User.email)
+        .select_from(User)
+        .join(
+            OrgMembership,
+            (OrgMembership.user_id == User.id) & (OrgMembership.org_id == ctx.org_id),
+        )
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.org_id == OrgMembership.org_id)
+            & (OrgUserProfile.membership_id == OrgMembership.id),
+        )
+        .where(User.id == assignment.user_id)
+    )
     full_name, email = user_row.one()
     return UserPermissionAssignmentOut(
         id=assignment.id,

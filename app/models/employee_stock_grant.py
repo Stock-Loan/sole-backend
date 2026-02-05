@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Numeric,
     String,
     Text,
@@ -24,13 +25,18 @@ class EmployeeStockGrant(Base):
     __table_args__ = (
         CheckConstraint("total_shares >= 0", name="ck_stock_grants_total_shares_nonnegative"),
         CheckConstraint("exercise_price >= 0", name="ck_stock_grants_exercise_price_nonnegative"),
+        ForeignKeyConstraint(
+            ["org_id", "org_membership_id"],
+            ["org_memberships.org_id", "org_memberships.id"],
+            ondelete="CASCADE",
+            name="fk_stock_grants_org_membership",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True)
     org_membership_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("org_memberships.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

@@ -6,12 +6,16 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("DEFAULT_ORG_ID", "default")
 
 from app.core.security import create_access_token, decode_token
+from sqlalchemy import ForeignKeyConstraint
 from app.models.audit_log import AuditLog
 from app.models.journal_entry import JournalEntry
 from app.models.types import EncryptedString
 from app.models.user import User
 from app.models.loan_application import LoanApplication
 from app.models.vesting_event import VestingEvent
+from app.models.employee_stock_grant import EmployeeStockGrant
+from app.models.stock_grant_reservation import StockGrantReservation
+from app.models.org_user_profile import OrgUserProfile
 
 
 def test_partitioning_metadata_present() -> None:
@@ -72,3 +76,38 @@ def test_loan_application_constraints_present() -> None:
     assert "ck_loan_app_shares_nonneg" in names
     assert "ck_loan_app_status" in names
     assert "ck_loan_app_selection_mode" in names
+
+
+def _has_composite_fk(table, local_cols: list[str], remote_cols: list[str]) -> bool:
+    for constraint in table.constraints:
+        if not isinstance(constraint, ForeignKeyConstraint):
+            continue
+        if list(constraint.column_keys) != local_cols:
+            continue
+        targets = [element.target_fullname for element in constraint.elements]
+        if targets == remote_cols:
+            return True
+    return False
+
+
+def test_org_scoped_composite_foreign_keys_present() -> None:
+    assert _has_composite_fk(
+        LoanApplication.__table__,
+        ["org_id", "org_membership_id"],
+        ["org_memberships.org_id", "org_memberships.id"],
+    )
+    assert _has_composite_fk(
+        EmployeeStockGrant.__table__,
+        ["org_id", "org_membership_id"],
+        ["org_memberships.org_id", "org_memberships.id"],
+    )
+    assert _has_composite_fk(
+        StockGrantReservation.__table__,
+        ["org_id", "org_membership_id"],
+        ["org_memberships.org_id", "org_memberships.id"],
+    )
+    assert _has_composite_fk(
+        OrgUserProfile.__table__,
+        ["org_id", "membership_id"],
+        ["org_memberships.org_id", "org_memberships.id"],
+    )

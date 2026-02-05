@@ -10,6 +10,14 @@ FastAPI backend scaffold for the SOLE platform.
 
 ---
 
+## Tenancy & Identity
+
+- **Org-scoped identity:** Users are scoped to an org (`org_id + email` is unique). The same email can exist in multiple orgs as separate accounts.
+- **Tenant context:** In multi-tenant mode, requests must include `X-Org-Id`. Tokens include an `org` claim and are rejected if they do not match the resolved tenant (superusers may bypass in multi-tenant mode).
+- **Isolation:** Profile data and memberships are org-scoped; cross-org access is rejected by API checks and composite foreign keys.
+
+---
+
 ## 🚀 Local Development (Daily Workflow)
 
 We use Docker Compose to run the API, Postgres, and Redis locally with hot-reloading enabled.
@@ -22,6 +30,19 @@ Run the interactive setup to create your local `.env` file:
 make setup-env
 # Choose 'dev' when prompted
 ```
+
+### Seed Data (Local/Dev)
+
+The seed script (`make seed`) creates org-scoped admin accounts and demo users.
+
+- `SEED_ADMIN_EMAIL` + `SEED_ADMIN_PASSWORD` create **one admin user per org** (org-scoped identity).
+- `EXTRA_SEED_ORG_IDS` (comma-separated) creates additional orgs and **dedicated** admin users in each org.
+- In non-production environments, demo users are created per org:
+  - `hr-<org_id>@example.com` (HR + EMPLOYEE roles)
+  - `employee-<org_id>@example.com` (EMPLOYEE role)
+  - Password = `SEED_ADMIN_PASSWORD`
+
+To disable demo users in production, set `ENVIRONMENT=production`.
 
 ### 2. Start the App
 
@@ -112,6 +133,15 @@ To see errors from Cloud Run without leaving your terminal:
 make prod-logs
 
 ```
+
+---
+
+## ✅ Release Checklist (Org-Scoped)
+
+- Set `ENVIRONMENT=production` in production config to avoid demo user seeding.
+- Confirm CI/CD runs the **current baseline migrations** (legacy migrations are archived and should not be used).
+- If using `EXTRA_SEED_ORG_IDS`, verify each org has a **dedicated** admin user seeded.
+- Verify logs/metrics include `org_id`/`tenant_id` for request tracing and isolation checks.
 
 ---
 

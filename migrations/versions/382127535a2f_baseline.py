@@ -1,19 +1,19 @@
-"""initial
+"""baseline
 
-Revision ID: 0b35ba921b5c
+Revision ID: 382127535a2f
 Revises: 
-Create Date: 2026-01-19 19:51:44.296782
+Create Date: 2026-02-05 15:55:48.298192
 
 """
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 from app.models.types import EncryptedString
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '0b35ba921b5c'
+revision: str = '382127535a2f'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -30,6 +30,8 @@ def upgrade() -> None:
     sa.Column('resource_id', sa.String(length=255), nullable=False),
     sa.Column('old_value', sa.JSON(), nullable=True),
     sa.Column('new_value', sa.JSON(), nullable=True),
+    sa.Column('changes', sa.JSON(), nullable=True),
+    sa.Column('summary', sa.String(length=500), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id', 'org_id'),
     postgresql_partition_by='LIST (org_id)'
@@ -60,52 +62,35 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('slug')
     )
-    op.create_table('users',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('org_id', sa.String(), nullable=False),
-    sa.Column('email', sa.String(length=255), nullable=False),
-    sa.Column('full_name', sa.String(length=255), nullable=False),
-    sa.Column('first_name', sa.String(length=100), nullable=True),
-    sa.Column('middle_name', sa.String(length=100), nullable=True),
-    sa.Column('last_name', sa.String(length=100), nullable=True),
-    sa.Column('marital_status', sa.String(length=50), nullable=True),
-    sa.Column('country', sa.String(length=2), nullable=True),
-    sa.Column('state', sa.String(length=10), nullable=True),
-    sa.Column('address_line1', sa.String(length=255), nullable=True),
-    sa.Column('address_line2', sa.String(length=255), nullable=True),
-    sa.Column('postal_code', sa.String(length=32), nullable=True),
-    sa.Column('preferred_name', sa.String(length=255), nullable=True),
-    sa.Column('timezone', sa.String(length=50), nullable=True),
-    sa.Column('phone_number', sa.String(length=50), nullable=True),
-    sa.Column('hashed_password', sa.String(length=255), nullable=False),
-    sa.Column('is_active', sa.Boolean(), server_default='true', nullable=False),
-    sa.Column('is_superuser', sa.Boolean(), server_default='false', nullable=False),
-    sa.Column('mfa_enabled', sa.Boolean(), server_default='false', nullable=False),
-    sa.Column('mfa_method', sa.String(length=50), nullable=True),
-    sa.Column('token_version', sa.Integer(), server_default='0', nullable=False),
-    sa.Column('last_active_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('must_change_password', sa.Boolean(), nullable=False),
+    op.create_table('pbgc_mid_term_rates',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('year', sa.Integer(), nullable=False),
+    sa.Column('month', sa.Integer(), nullable=False),
+    sa.Column('annual_rate_percent', sa.Numeric(precision=10, scale=4), nullable=True),
+    sa.Column('monthly_rate_percent', sa.Numeric(precision=10, scale=4), nullable=True),
+    sa.Column('source_url', sa.String(length=500), nullable=False),
+    sa.Column('fetched_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('org_id', 'email', name='uq_users_org_email')
+    sa.UniqueConstraint('year', 'month', name='uq_pbgc_mid_term_rates_year_month')
     )
-    op.create_index(op.f('ix_users_org_id'), 'users', ['org_id'], unique=False)
-    op.create_table('access_control_list',
+    op.create_index(op.f('ix_pbgc_mid_term_rates_month'), 'pbgc_mid_term_rates', ['month'], unique=False)
+    op.create_index(op.f('ix_pbgc_mid_term_rates_year'), 'pbgc_mid_term_rates', ['year'], unique=False)
+    op.create_table('storage_backend_configs',
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('org_id', sa.String(), nullable=False),
-    sa.Column('user_id', sa.UUID(), nullable=False),
-    sa.Column('resource_type', sa.String(length=100), nullable=False),
-    sa.Column('resource_id', sa.String(length=255), nullable=False),
-    sa.Column('permissions', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=True),
+    sa.Column('provider', sa.String(), nullable=False),
+    sa.Column('bucket', sa.String(), nullable=False),
+    sa.Column('endpoint_url', sa.String(), nullable=True),
+    sa.Column('base_prefix', sa.String(), nullable=True),
+    sa.Column('credentials_ref', sa.String(), nullable=True),
+    sa.Column('configuration', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('org_id', 'user_id', 'resource_type', 'resource_id', name='uq_acl_org_user_resource')
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_access_control_list_org_id'), 'access_control_list', ['org_id'], unique=False)
-    op.create_index(op.f('ix_access_control_list_user_id'), 'access_control_list', ['user_id'], unique=False)
+    op.create_index(op.f('ix_storage_backend_configs_org_id'), 'storage_backend_configs', ['org_id'], unique=False)
     op.create_table('announcements',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('org_id', sa.String(), nullable=False),
@@ -122,6 +107,29 @@ def upgrade() -> None:
     sa.UniqueConstraint('org_id', 'title', name='uq_announcements_org_title')
     )
     op.create_index(op.f('ix_announcements_org_id'), 'announcements', ['org_id'], unique=False)
+    op.create_table('assets',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=False),
+    sa.Column('owner_type', sa.String(), nullable=False),
+    sa.Column('owner_id', sa.String(), nullable=False),
+    sa.Column('kind', sa.String(), nullable=False),
+    sa.Column('content_type', sa.String(), nullable=True),
+    sa.Column('filename', sa.String(), nullable=False),
+    sa.Column('size_bytes', sa.BigInteger(), nullable=True),
+    sa.Column('checksum', sa.String(), nullable=True),
+    sa.Column('status', sa.String(), nullable=False),
+    sa.Column('storage_backend_id', sa.UUID(), nullable=True),
+    sa.Column('provider', sa.String(length=32), nullable=True),
+    sa.Column('bucket', sa.String(), nullable=True),
+    sa.Column('object_key', sa.String(), nullable=False),
+    sa.Column('external_url', sa.String(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['storage_backend_id'], ['storage_backend_configs.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_assets_org_id'), 'assets', ['org_id'], unique=False)
+    op.create_index(op.f('ix_assets_owner_id'), 'assets', ['owner_id'], unique=False)
     op.create_table('departments',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('org_id', sa.String(), nullable=False),
@@ -155,13 +163,16 @@ def upgrade() -> None:
     sa.Column('allow_user_data_export', sa.Boolean(), server_default='true', nullable=False),
     sa.Column('allow_profile_edit', sa.Boolean(), server_default='true', nullable=False),
     sa.Column('require_two_factor', sa.Boolean(), server_default='false', nullable=False),
+    sa.Column('mfa_required_actions', postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'[]'::jsonb"), nullable=False),
+    sa.Column('remember_device_days', sa.Integer(), server_default='30', nullable=False),
+    sa.Column('session_timeout_minutes', sa.Integer(), server_default='5', nullable=False),
     sa.Column('audit_log_retention_days', sa.Integer(), server_default='180', nullable=False),
     sa.Column('inactive_user_retention_days', sa.Integer(), server_default='180', nullable=False),
     sa.Column('enforce_service_duration_rule', sa.Boolean(), server_default='false', nullable=False),
     sa.Column('min_service_duration_years', sa.Numeric(precision=6, scale=2), nullable=True),
     sa.Column('enforce_min_vested_to_exercise', sa.Boolean(), server_default='false', nullable=False),
     sa.Column('min_vested_shares_to_exercise', sa.BigInteger(), nullable=True),
-    sa.Column('allowed_repayment_methods', postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text('\'["INTEREST_ONLY", "BALLOON", "PRINCIPAL_AND_INTEREST"]\'::jsonb'), nullable=False),
+    sa.Column('allowed_repayment_methods', postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text('\'["BALLOON", "PRINCIPAL_AND_INTEREST"]\'::jsonb'), nullable=False),
     sa.Column('min_loan_term_months', sa.Integer(), server_default='6', nullable=False),
     sa.Column('max_loan_term_months', sa.Integer(), server_default='60', nullable=False),
     sa.Column('allowed_interest_types', postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text('\'["FIXED", "VARIABLE"]\'::jsonb'), nullable=False),
@@ -190,6 +201,45 @@ def upgrade() -> None:
     sa.UniqueConstraint('org_id', 'name', name='uq_roles_org_name')
     )
     op.create_index(op.f('ix_roles_org_id'), 'roles', ['org_id'], unique=False)
+    op.create_table('users',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=False),
+    sa.Column('email', sa.String(length=255), nullable=False),
+    sa.Column('hashed_password', sa.String(length=255), nullable=False),
+    sa.Column('is_active', sa.Boolean(), server_default='true', nullable=False),
+    sa.Column('is_superuser', sa.Boolean(), server_default='false', nullable=False),
+    sa.Column('mfa_enabled', sa.Boolean(), server_default='false', nullable=False),
+    sa.Column('mfa_method', sa.String(length=50), nullable=True),
+    sa.Column('mfa_secret_encrypted', sa.String(length=255), nullable=True),
+    sa.Column('mfa_confirmed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('token_version', sa.Integer(), server_default='0', nullable=False),
+    sa.Column('last_active_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('must_change_password', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('org_id', 'email', name='uq_users_org_email')
+    )
+    op.create_index(op.f('ix_users_org_id'), 'users', ['org_id'], unique=False)
+    op.create_table('access_control_list',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=False),
+    sa.Column('user_id', sa.UUID(), nullable=False),
+    sa.Column('resource_type', sa.String(length=100), nullable=False),
+    sa.Column('resource_id', sa.String(length=255), nullable=False),
+    sa.Column('permissions', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('effect', sa.String(length=10), server_default='allow', nullable=False),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('org_id', 'user_id', 'resource_type', 'resource_id', name='uq_acl_org_user_resource')
+    )
+    op.create_index(op.f('ix_access_control_list_org_id'), 'access_control_list', ['org_id'], unique=False)
+    op.create_index(op.f('ix_access_control_list_user_id'), 'access_control_list', ['user_id'], unique=False)
     op.create_table('announcement_reads',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('announcement_id', sa.UUID(), nullable=False),
@@ -212,6 +262,12 @@ def upgrade() -> None:
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('file_name', sa.String(length=255), nullable=False),
     sa.Column('storage_path_or_url', sa.String(length=1024), nullable=False),
+    sa.Column('storage_provider', sa.String(length=32), nullable=True),
+    sa.Column('storage_bucket', sa.String(length=255), nullable=True),
+    sa.Column('storage_object_key', sa.String(length=1024), nullable=True),
+    sa.Column('content_type', sa.String(length=100), nullable=True),
+    sa.Column('size_bytes', sa.BigInteger(), nullable=True),
+    sa.Column('checksum', sa.String(length=128), nullable=True),
     sa.Column('uploaded_by_user_id', sa.UUID(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -241,10 +297,57 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('org_id', 'employee_id', name='uq_membership_org_employee'),
+    sa.UniqueConstraint('org_id', 'id', name='uq_membership_org_id_id'),
     sa.UniqueConstraint('org_id', 'user_id', name='uq_membership_org_user')
     )
     op.create_index(op.f('ix_org_memberships_org_id'), 'org_memberships', ['org_id'], unique=False)
     op.create_index(op.f('ix_org_memberships_user_id'), 'org_memberships', ['user_id'], unique=False)
+    op.create_table('user_mfa_devices',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=False),
+    sa.Column('user_id', sa.UUID(), nullable=False),
+    sa.Column('token_hash', sa.String(length=64), nullable=False),
+    sa.Column('user_agent', sa.String(length=500), nullable=True),
+    sa.Column('ip_address', sa.String(length=64), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('last_used_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_user_mfa_devices_org_id'), 'user_mfa_devices', ['org_id'], unique=False)
+    op.create_index(op.f('ix_user_mfa_devices_token_hash'), 'user_mfa_devices', ['token_hash'], unique=True)
+    op.create_index(op.f('ix_user_mfa_devices_user_id'), 'user_mfa_devices', ['user_id'], unique=False)
+    op.create_table('user_mfa_recovery_codes',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=False),
+    sa.Column('user_id', sa.UUID(), nullable=False),
+    sa.Column('code_hash', sa.String(length=64), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('used_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_user_mfa_recovery_codes_org_id'), 'user_mfa_recovery_codes', ['org_id'], unique=False)
+    op.create_index(op.f('ix_user_mfa_recovery_codes_user_id'), 'user_mfa_recovery_codes', ['user_id'], unique=False)
+    op.create_table('user_permissions',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=False),
+    sa.Column('user_id', sa.UUID(), nullable=False),
+    sa.Column('permissions', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('effect', sa.String(length=10), server_default='allow', nullable=False),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('org_id', 'user_id', name='uq_user_permissions_org_user')
+    )
+    op.create_index(op.f('ix_user_permissions_org_id'), 'user_permissions', ['org_id'], unique=False)
+    op.create_index(op.f('ix_user_permissions_user_id'), 'user_permissions', ['user_id'], unique=False)
     op.create_table('user_roles',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('org_id', sa.String(), nullable=False),
@@ -275,8 +378,8 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint('exercise_price >= 0', name='ck_stock_grants_exercise_price_nonnegative'),
     sa.CheckConstraint('total_shares >= 0', name='ck_stock_grants_total_shares_nonnegative'),
+    sa.ForeignKeyConstraint(['org_id', 'org_membership_id'], ['org_memberships.org_id', 'org_memberships.id'], name='fk_stock_grants_org_membership', ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['org_membership_id'], ['org_memberships.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_employee_stock_grants_org_id'), 'employee_stock_grants', ['org_id'], unique=False)
@@ -325,7 +428,7 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("allocation_strategy IN ('OLDEST_VESTED_FIRST')", name='ck_loan_app_allocation_strategy'),
     sa.CheckConstraint("interest_type IN ('FIXED', 'VARIABLE')", name='ck_loan_app_interest_type'),
-    sa.CheckConstraint("repayment_method IN ('INTEREST_ONLY', 'BALLOON', 'PRINCIPAL_AND_INTEREST')", name='ck_loan_app_repayment_method'),
+    sa.CheckConstraint("repayment_method IN ('BALLOON', 'PRINCIPAL_AND_INTEREST')", name='ck_loan_app_repayment_method'),
     sa.CheckConstraint("selection_mode IN ('PERCENT', 'SHARES')", name='ck_loan_app_selection_mode'),
     sa.CheckConstraint("status IN ('DRAFT', 'SUBMITTED', 'CANCELLED', 'IN_REVIEW', 'ACTIVE', 'COMPLETED', 'REJECTED')", name='ck_loan_app_status'),
     sa.CheckConstraint('down_payment_amount >= 0', name='ck_loan_app_down_payment_nonneg'),
@@ -339,13 +442,38 @@ def upgrade() -> None:
     sa.CheckConstraint('total_interest_amount >= 0', name='ck_loan_app_total_interest_nonneg'),
     sa.CheckConstraint('total_payable_amount >= 0', name='ck_loan_app_total_payable_nonneg'),
     sa.CheckConstraint('version >= 1', name='ck_loan_app_version_positive'),
+    sa.ForeignKeyConstraint(['org_id', 'org_membership_id'], ['org_memberships.org_id', 'org_memberships.id'], name='fk_loan_app_org_membership', ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['org_membership_id'], ['org_memberships.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_loan_applications_org_id'), 'loan_applications', ['org_id'], unique=False)
     op.create_index(op.f('ix_loan_applications_org_membership_id'), 'loan_applications', ['org_membership_id'], unique=False)
     op.create_index(op.f('ix_loan_applications_status'), 'loan_applications', ['status'], unique=False)
+    op.create_table('org_user_profiles',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('org_id', sa.String(), nullable=False),
+    sa.Column('membership_id', sa.UUID(), nullable=False),
+    sa.Column('full_name', sa.String(length=255), nullable=False),
+    sa.Column('first_name', sa.String(length=100), nullable=True),
+    sa.Column('middle_name', sa.String(length=100), nullable=True),
+    sa.Column('last_name', sa.String(length=100), nullable=True),
+    sa.Column('preferred_name', sa.String(length=255), nullable=True),
+    sa.Column('timezone', sa.String(length=50), nullable=True),
+    sa.Column('phone_number', sa.String(length=50), nullable=True),
+    sa.Column('marital_status', sa.String(length=50), nullable=True),
+    sa.Column('country', sa.String(length=2), nullable=True),
+    sa.Column('state', sa.String(length=10), nullable=True),
+    sa.Column('address_line1', sa.String(length=255), nullable=True),
+    sa.Column('address_line2', sa.String(length=255), nullable=True),
+    sa.Column('postal_code', sa.String(length=32), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['org_id', 'membership_id'], ['org_memberships.org_id', 'org_memberships.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('org_id', 'membership_id', name='uq_org_user_profiles_org_membership')
+    )
+    op.create_index(op.f('ix_org_user_profiles_membership_id'), 'org_user_profiles', ['membership_id'], unique=False)
+    op.create_index(op.f('ix_org_user_profiles_org_id'), 'org_user_profiles', ['org_id'], unique=False)
     op.create_table('loan_documents',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('org_id', sa.String(), nullable=False),
@@ -354,6 +482,12 @@ def upgrade() -> None:
     sa.Column('document_type', sa.String(length=100), nullable=False),
     sa.Column('file_name', sa.String(length=255), nullable=False),
     sa.Column('storage_path_or_url', sa.String(length=1024), nullable=False),
+    sa.Column('storage_provider', sa.String(length=32), nullable=True),
+    sa.Column('storage_bucket', sa.String(length=255), nullable=True),
+    sa.Column('storage_object_key', sa.String(length=1024), nullable=True),
+    sa.Column('content_type', sa.String(length=100), nullable=True),
+    sa.Column('size_bytes', sa.BigInteger(), nullable=True),
+    sa.Column('checksum', sa.String(length=128), nullable=True),
     sa.Column('uploaded_by_user_id', sa.UUID(), nullable=True),
     sa.Column('uploaded_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -378,7 +512,12 @@ def upgrade() -> None:
     sa.Column('recorded_by_user_id', sa.UUID(), nullable=True),
     sa.Column('evidence_file_name', sa.String(length=255), nullable=True),
     sa.Column('evidence_storage_path_or_url', sa.String(length=1024), nullable=True),
+    sa.Column('evidence_storage_provider', sa.String(length=32), nullable=True),
+    sa.Column('evidence_storage_bucket', sa.String(length=255), nullable=True),
+    sa.Column('evidence_storage_object_key', sa.String(length=1024), nullable=True),
     sa.Column('evidence_content_type', sa.String(length=100), nullable=True),
+    sa.Column('evidence_size_bytes', sa.BigInteger(), nullable=True),
+    sa.Column('evidence_checksum', sa.String(length=128), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint('amount >= 0', name='ck_loan_repayment_amount_nonneg'),
     sa.CheckConstraint('interest_amount >= 0', name='ck_loan_repayment_interest_nonneg'),
@@ -430,8 +569,8 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['grant_id'], ['employee_stock_grants.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['loan_application_id'], ['loan_applications.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['org_id', 'org_membership_id'], ['org_memberships.org_id', 'org_memberships.id'], name='fk_stock_reservations_org_membership', ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['org_id'], ['orgs.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['org_membership_id'], ['org_memberships.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_stock_grant_reservations_grant_id'), 'stock_grant_reservations', ['grant_id'], unique=False)
@@ -480,6 +619,9 @@ def downgrade() -> None:
     op.drop_index('ix_loan_documents_org_id', table_name='loan_documents')
     op.drop_index(op.f('ix_loan_documents_loan_application_id'), table_name='loan_documents')
     op.drop_table('loan_documents')
+    op.drop_index(op.f('ix_org_user_profiles_org_id'), table_name='org_user_profiles')
+    op.drop_index(op.f('ix_org_user_profiles_membership_id'), table_name='org_user_profiles')
+    op.drop_table('org_user_profiles')
     op.drop_index(op.f('ix_loan_applications_status'), table_name='loan_applications')
     op.drop_index(op.f('ix_loan_applications_org_membership_id'), table_name='loan_applications')
     op.drop_index(op.f('ix_loan_applications_org_id'), table_name='loan_applications')
@@ -491,6 +633,16 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_user_roles_role_id'), table_name='user_roles')
     op.drop_index(op.f('ix_user_roles_org_id'), table_name='user_roles')
     op.drop_table('user_roles')
+    op.drop_index(op.f('ix_user_permissions_user_id'), table_name='user_permissions')
+    op.drop_index(op.f('ix_user_permissions_org_id'), table_name='user_permissions')
+    op.drop_table('user_permissions')
+    op.drop_index(op.f('ix_user_mfa_recovery_codes_user_id'), table_name='user_mfa_recovery_codes')
+    op.drop_index(op.f('ix_user_mfa_recovery_codes_org_id'), table_name='user_mfa_recovery_codes')
+    op.drop_table('user_mfa_recovery_codes')
+    op.drop_index(op.f('ix_user_mfa_devices_user_id'), table_name='user_mfa_devices')
+    op.drop_index(op.f('ix_user_mfa_devices_token_hash'), table_name='user_mfa_devices')
+    op.drop_index(op.f('ix_user_mfa_devices_org_id'), table_name='user_mfa_devices')
+    op.drop_table('user_mfa_devices')
     op.drop_index(op.f('ix_org_memberships_user_id'), table_name='org_memberships')
     op.drop_index(op.f('ix_org_memberships_org_id'), table_name='org_memberships')
     op.drop_table('org_memberships')
@@ -499,6 +651,11 @@ def downgrade() -> None:
     op.drop_table('org_document_templates')
     op.drop_index('ix_announcement_reads_org_id', table_name='announcement_reads')
     op.drop_table('announcement_reads')
+    op.drop_index(op.f('ix_access_control_list_user_id'), table_name='access_control_list')
+    op.drop_index(op.f('ix_access_control_list_org_id'), table_name='access_control_list')
+    op.drop_table('access_control_list')
+    op.drop_index(op.f('ix_users_org_id'), table_name='users')
+    op.drop_table('users')
     op.drop_index(op.f('ix_roles_org_id'), table_name='roles')
     op.drop_table('roles')
     op.drop_table('org_settings')
@@ -506,13 +663,16 @@ def downgrade() -> None:
     op.drop_table('org_document_folders')
     op.drop_index(op.f('ix_departments_org_id'), table_name='departments')
     op.drop_table('departments')
+    op.drop_index(op.f('ix_assets_owner_id'), table_name='assets')
+    op.drop_index(op.f('ix_assets_org_id'), table_name='assets')
+    op.drop_table('assets')
     op.drop_index(op.f('ix_announcements_org_id'), table_name='announcements')
     op.drop_table('announcements')
-    op.drop_index(op.f('ix_access_control_list_user_id'), table_name='access_control_list')
-    op.drop_index(op.f('ix_access_control_list_org_id'), table_name='access_control_list')
-    op.drop_table('access_control_list')
-    op.drop_index(op.f('ix_users_org_id'), table_name='users')
-    op.drop_table('users')
+    op.drop_index(op.f('ix_storage_backend_configs_org_id'), table_name='storage_backend_configs')
+    op.drop_table('storage_backend_configs')
+    op.drop_index(op.f('ix_pbgc_mid_term_rates_year'), table_name='pbgc_mid_term_rates')
+    op.drop_index(op.f('ix_pbgc_mid_term_rates_month'), table_name='pbgc_mid_term_rates')
+    op.drop_table('pbgc_mid_term_rates')
     op.drop_table('orgs')
     op.drop_index(op.f('ix_journal_entries_org_id'), table_name='journal_entries')
     op.drop_table('journal_entries')

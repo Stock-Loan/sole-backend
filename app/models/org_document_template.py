@@ -44,4 +44,7 @@ class OrgDocumentTemplate(Base):
     @property
     def uploaded_by_name(self) -> str | None:
         user = getattr(self, "uploaded_by_user", None)
-        return user.full_name if user else None
+        if not user:
+            return None
+        profile = getattr(user, "profile", None)
+        return profile.full_name if profile and profile.full_name else user.email

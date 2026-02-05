@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.models.department import Department
 from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_role import UserRole
@@ -97,15 +98,20 @@ async def build_dashboard_summary(
 
     missing_profile_stmt = (
         select(func.count())
-        .select_from(User)
-        .join(OrgMembership, OrgMembership.user_id == User.id)
+        .select_from(OrgMembership)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.org_id == OrgMembership.org_id)
+            & (OrgUserProfile.membership_id == OrgMembership.id),
+        )
         .where(
             OrgMembership.org_id == ctx.org_id,
             (
-                User.timezone.is_(None)
-                | User.phone_number.is_(None)
-                | User.address_line1.is_(None)
-                | User.country.is_(None)
+                OrgUserProfile.id.is_(None)
+                | OrgUserProfile.timezone.is_(None)
+                | OrgUserProfile.phone_number.is_(None)
+                | OrgUserProfile.address_line1.is_(None)
+                | OrgUserProfile.country.is_(None)
             ),
         )
     )

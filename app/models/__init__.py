@@ -3,6 +3,7 @@ from app.models.announcement import Announcement, AnnouncementRead
 from app.models.journal_entry import JournalEntry
 from app.models.org import Org
 from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.department import Department
 from app.models.access_control_list import AccessControlList
 from app.models.role import Role
@@ -32,6 +33,7 @@ __all__ = [
     "JournalEntry",
     "Org",
     "OrgMembership",
+    "OrgUserProfile",
     "Department",
     "User",
     "Role",

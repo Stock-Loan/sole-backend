@@ -193,16 +193,11 @@ async def _get_current_user(
     token_is_superuser = bool(payload.get("su"))
     if not user_sub:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    if settings.tenancy_mode == "multi":
-        if not token_org:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim"
-            )
-        if token_org != ctx.org_id and not token_is_superuser:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
-            )
-    if token_org and token_org != ctx.org_id and not token_is_superuser:
+    if not token_org:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim"
+        )
+    if token_org != ctx.org_id and not token_is_superuser:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch")
 
     stmt = select(User).where(User.id == user_sub)

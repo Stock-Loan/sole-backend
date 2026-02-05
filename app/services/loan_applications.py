@@ -13,6 +13,7 @@ from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.loan_application import LoanApplication
 from app.models.loan_document import LoanDocument
 from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User
 from app.models.department import Department
 from app.models.org_settings import OrgSettings
@@ -34,6 +35,7 @@ from app.services import (
     stock_reservations,
     vesting_engine,
 )
+from app.services.org_scoping import membership_join_condition, profile_join_condition
 from app.services.audit import record_audit_log
 from app.services.storage.adapter import GCSStorageAdapter, LocalFileSystemAdapter
 from app.core.settings import settings
@@ -421,11 +423,15 @@ async def get_membership_with_user(
     db: AsyncSession,
     ctx: deps.TenantContext,
     membership_id,
-) -> tuple[OrgMembership, User, Department | None] | None:
+) -> tuple[OrgMembership, User, Department | None, OrgUserProfile | None] | None:
     stmt = (
-        select(OrgMembership, User, Department)
+        select(OrgMembership, User, Department, OrgUserProfile)
         .join(User, User.id == OrgMembership.user_id)
         .outerjoin(Department, Department.id == OrgMembership.department_id)
+        .outerjoin(
+            OrgUserProfile,
+            profile_join_condition(OrgMembership, OrgUserProfile),
+        )
         .where(
             OrgMembership.org_id == ctx.org_id,
             OrgMembership.id == membership_id,
@@ -435,8 +441,8 @@ async def get_membership_with_user(
     row = result.first()
     if not row:
         return None
-    membership, user, department = row
-    return membership, user, department
+    membership, user, department, profile = row
+    return membership, user, department, profile
 
 
 async def get_application_with_related(
@@ -486,6 +492,9 @@ async def list_admin_applications(
         conditions.append(LoanApplication.created_at <= created_to)
 
     assigned_user = aliased(User)
+    assigned_membership = aliased(OrgMembership)
+    applicant_profile = aliased(OrgUserProfile)
+    assigned_profile = aliased(OrgUserProfile)
     stage_subq = (
         select(
             LoanWorkflowStage.loan_application_id.label("loan_id"),
@@ -530,13 +539,37 @@ async def list_admin_applications(
                 stage_subq.c.stage_status,
                 assigned_user,
                 stage_subq.c.assigned_at,
+                applicant_profile,
+                assigned_profile,
             )
             .join(LoanWorkflowStage, LoanWorkflowStage.loan_application_id == LoanApplication.id)
-            .join(OrgMembership, OrgMembership.id == LoanApplication.org_membership_id)
+            .join(
+                OrgMembership,
+                membership_join_condition(
+                    OrgMembership, LoanApplication.org_id, LoanApplication.org_membership_id
+                ),
+            )
             .join(User, User.id == OrgMembership.user_id)
             .outerjoin(Department, Department.id == OrgMembership.department_id)
+            .outerjoin(
+                applicant_profile,
+                profile_join_condition(OrgMembership, applicant_profile),
+            )
             .outerjoin(stage_subq, stage_subq.c.loan_id == LoanApplication.id)
-            .outerjoin(assigned_user, assigned_user.id == stage_subq.c.assigned_to_user_id)
+            .outerjoin(
+                assigned_user,
+                (assigned_user.id == stage_subq.c.assigned_to_user_id)
+                & (assigned_user.org_id == ctx.org_id),
+            )
+            .outerjoin(
+                assigned_membership,
+                (assigned_membership.user_id == assigned_user.id)
+                & (assigned_membership.org_id == ctx.org_id),
+            )
+            .outerjoin(
+                assigned_profile,
+                profile_join_condition(assigned_membership, assigned_profile),
+            )
             .where(*conditions)
             .order_by(LoanApplication.created_at.desc())
             .limit(limit)
@@ -557,12 +590,36 @@ async def list_admin_applications(
                 stage_subq.c.stage_status,
                 assigned_user,
                 stage_subq.c.assigned_at,
+                applicant_profile,
+                assigned_profile,
             )
-            .join(OrgMembership, OrgMembership.id == LoanApplication.org_membership_id)
+            .join(
+                OrgMembership,
+                membership_join_condition(
+                    OrgMembership, LoanApplication.org_id, LoanApplication.org_membership_id
+                ),
+            )
             .join(User, User.id == OrgMembership.user_id)
             .outerjoin(Department, Department.id == OrgMembership.department_id)
+            .outerjoin(
+                applicant_profile,
+                profile_join_condition(OrgMembership, applicant_profile),
+            )
             .outerjoin(stage_subq, stage_subq.c.loan_id == LoanApplication.id)
-            .outerjoin(assigned_user, assigned_user.id == stage_subq.c.assigned_to_user_id)
+            .outerjoin(
+                assigned_user,
+                (assigned_user.id == stage_subq.c.assigned_to_user_id)
+                & (assigned_user.org_id == ctx.org_id),
+            )
+            .outerjoin(
+                assigned_membership,
+                (assigned_membership.user_id == assigned_user.id)
+                & (assigned_membership.org_id == ctx.org_id),
+            )
+            .outerjoin(
+                assigned_profile,
+                profile_join_condition(assigned_membership, assigned_profile),
+            )
             .where(*conditions)
             .order_by(LoanApplication.created_at.desc())
             .limit(limit)
