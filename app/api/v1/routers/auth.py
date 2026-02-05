@@ -22,6 +22,7 @@ from app.core.security import (
     decode_token,
     get_password_hash,
 )
+from app.core.settings import settings
 from app.db.session import get_db
 from app.models import OrgMembership, User
 from app.models.org import Org
@@ -111,6 +112,30 @@ def _maybe_attach_cookies(
     return csrf_token
 
 
+async def _load_user_for_org(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    ctx: deps.TenantContext,
+    allow_pending: bool,
+) -> User:
+    stmt = select(User).where(User.id == user_id)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not available")
+    if not user.is_superuser:
+        membership = await deps.get_membership(db, user_id=user.id, org_id=ctx.org_id)
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="User not available"
+            )
+        if not deps.membership_allows_auth(membership, allow_pending=allow_pending):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Membership is not active"
+            )
+    return user
+
+
 @router.post(
     "/org-discovery", response_model=OrgDiscoveryResponse, summary="Discover org(s) by email"
 )
@@ -125,7 +150,8 @@ async def discover_orgs_by_email(
 
     stmt = (
         select(Org)
-        .join(User, User.org_id == Org.id)
+        .join(OrgMembership, OrgMembership.org_id == Org.id)
+        .join(User, User.id == OrgMembership.user_id)
         .where(User.email == payload.email, Org.status == "ACTIVE")
         .order_by(Org.name.asc())
     )
@@ -166,7 +192,7 @@ async def login_start(
     client_ip = request.client.host if request.client else "unknown"
     await enforce_login_limits(client_ip, payload.email)
 
-    stmt = select(User).where(User.org_id == ctx.org_id, User.email == payload.email)
+    stmt = select(User).where(User.email == payload.email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
@@ -221,9 +247,8 @@ async def login_mfa(
         )
 
     user_id = challenge.get("sub")
-    stmt = select(User).where(User.id == user_id, User.org_id == ctx.org_id)
-    user = (await db.execute(stmt)).scalar_one_or_none()
-    if not user or not user.is_active or not user.mfa_enabled:
+    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
+    if not user.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA not available")
     if not user.mfa_secret_encrypted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA secret missing")
@@ -257,7 +282,7 @@ async def login_mfa(
 
     access = create_access_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
@@ -265,7 +290,7 @@ async def login_mfa(
     )
     refresh = create_refresh_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
@@ -310,9 +335,8 @@ async def login_mfa_recovery(
         )
 
     user_id = challenge.get("sub")
-    stmt = select(User).where(User.id == user_id, User.org_id == ctx.org_id)
-    user = (await db.execute(stmt)).scalar_one_or_none()
-    if not user or not user.is_active or not user.mfa_enabled:
+    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
+    if not user.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA not available")
 
     # Verify recovery code (marks it as used if valid)
@@ -332,7 +356,7 @@ async def login_mfa_recovery(
 
     access = create_access_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
@@ -340,7 +364,7 @@ async def login_mfa_recovery(
     )
     refresh = create_refresh_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
@@ -376,10 +400,7 @@ async def login_mfa_setup_start(
         )
 
     user_id = setup.get("sub")
-    stmt = select(User).where(User.id == user_id, User.org_id == ctx.org_id)
-    user = (await db.execute(stmt)).scalar_one_or_none()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not available")
+    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
     if user.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA already enabled")
 
@@ -428,10 +449,7 @@ async def login_mfa_setup_verify(
         )
 
     user_id = setup.get("sub")
-    stmt = select(User).where(User.id == user_id, User.org_id == ctx.org_id)
-    user = (await db.execute(stmt)).scalar_one_or_none()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not available")
+    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
     if not user.mfa_secret_encrypted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not initialized")
 
@@ -470,7 +488,7 @@ async def login_mfa_setup_verify(
 
     access = create_access_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
@@ -478,7 +496,7 @@ async def login_mfa_setup_verify(
     )
     refresh = create_refresh_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=True,
@@ -528,8 +546,8 @@ async def mfa_setup_start(
 async def mfa_setup_verify(
     payload: MfaSetupVerifyRequest,
     request: Request,
-    current_user: User = Depends(deps.get_current_user),
     response: Response,
+    current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupCompleteResponse:
@@ -571,7 +589,7 @@ async def mfa_setup_verify(
 
     access = create_access_token(
         str(current_user.id),
-        org_id=current_user.org_id,
+        org_id=ctx.org_id,
         is_superuser=current_user.is_superuser,
         token_version=current_user.token_version,
         mfa_authenticated=True,
@@ -579,7 +597,7 @@ async def mfa_setup_verify(
     )
     refresh = create_refresh_token(
         str(current_user.id),
-        org_id=current_user.org_id,
+        org_id=ctx.org_id,
         is_superuser=current_user.is_superuser,
         token_version=current_user.token_version,
         mfa_authenticated=True,
@@ -712,15 +730,9 @@ async def refresh_tokens(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
         )
 
-    stmt = select(User).where(User.id == user_id, User.org_id == ctx.org_id)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
     if user.token_version != token_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
 
     now = datetime.now(timezone.utc)
     deps.enforce_inactivity(user.last_active_at, now)
@@ -741,7 +753,7 @@ async def refresh_tokens(
 
     access = create_access_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=token_mfa,
@@ -749,7 +761,7 @@ async def refresh_tokens(
     )
     refresh = create_refresh_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=token_mfa,
@@ -783,7 +795,7 @@ async def _complete_login_flow(
         )
 
     email = challenge.get("sub")
-    stmt = select(User).where(User.org_id == ctx.org_id, User.email == email)
+    stmt = select(User).where(User.email == email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if (
@@ -793,6 +805,18 @@ async def _complete_login_flow(
     ):
         await record_login_attempt(email, success=False)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    membership = None
+    if not user.is_superuser:
+        membership = await deps.get_membership(db, user_id=user.id, org_id=ctx.org_id)
+        if not membership:
+            await record_login_attempt(email, success=False)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        if not deps.membership_allows_auth(membership, allow_pending=True):
+            await record_login_attempt(email, success=False)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Membership is not active"
+            )
 
     org_settings = await settings_service.get_org_settings(db, ctx)
 
@@ -835,7 +859,7 @@ async def _complete_login_flow(
             if device:
                 access = create_access_token(
                     str(user.id),
-                    org_id=user.org_id,
+                    org_id=ctx.org_id,
                     is_superuser=user.is_superuser,
                     token_version=user.token_version,
                     mfa_authenticated=True,
@@ -843,7 +867,7 @@ async def _complete_login_flow(
                 )
                 refresh = create_refresh_token(
                     str(user.id),
-                    org_id=user.org_id,
+                    org_id=ctx.org_id,
                     is_superuser=user.is_superuser,
                     token_version=user.token_version,
                     mfa_authenticated=True,
@@ -864,14 +888,14 @@ async def _complete_login_flow(
 
     access = create_access_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=False,
     )
     refresh = create_refresh_token(
         str(user.id),
-        org_id=user.org_id,
+        org_id=ctx.org_id,
         is_superuser=user.is_superuser,
         token_version=user.token_version,
         mfa_authenticated=False,
@@ -897,16 +921,19 @@ async def logout(
 
 
 @router.get("/me", response_model=UserOut)
-async def read_current_user(current_user: User = Depends(deps.get_current_user)) -> UserOut:
-    return UserOut.model_validate(current_user)
+async def read_current_user(
+    current_user: User = Depends(deps.get_current_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+) -> UserOut:
+    return UserOut.model_validate(current_user).model_copy(update={"org_id": ctx.org_id})
 
 
 @router.post("/change-password", response_model=TokenPair)
 async def change_password(
     payload: ChangePasswordRequest,
+    response: Response,
     current_user: User = Depends(deps.get_current_user_allow_password_change),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenPair:
     if not constant_time_verify(current_user.hashed_password, payload.current_password):
@@ -957,14 +984,14 @@ async def change_password(
 
     access = create_access_token(
         str(current_user.id),
-        org_id=current_user.org_id,
+        org_id=ctx.org_id,
         is_superuser=current_user.is_superuser,
         token_version=current_user.token_version,
         mfa_authenticated=current_user.mfa_enabled,
     )
     refresh = create_refresh_token(
         str(current_user.id),
-        org_id=current_user.org_id,
+        org_id=ctx.org_id,
         is_superuser=current_user.is_superuser,
         token_version=current_user.token_version,
         mfa_authenticated=current_user.mfa_enabled,

@@ -93,37 +93,7 @@ async def _bootstrap_creator(
     creator: User,
     roles,
 ) -> None:
-    # Ensure a user record exists for the creator in the new org.
-    stmt = select(User).where(User.org_id == org_id, User.email == creator.email)
-    existing_user = (await db.execute(stmt)).scalar_one_or_none()
-    if existing_user:
-        user = existing_user
-    else:
-        user = User(
-            org_id=org_id,
-            email=creator.email,
-            hashed_password=creator.hashed_password,
-            is_active=True,
-            is_superuser=False,
-            token_version=creator.token_version,
-            full_name=creator.full_name,
-            first_name=creator.first_name,
-            middle_name=creator.middle_name,
-            last_name=creator.last_name,
-            preferred_name=creator.preferred_name,
-            timezone=creator.timezone,
-            phone_number=creator.phone_number,
-            marital_status=creator.marital_status,
-            country=creator.country,
-            state=creator.state,
-            address_line1=creator.address_line1,
-            address_line2=creator.address_line2,
-            postal_code=creator.postal_code,
-            must_change_password=False,
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
+    user = creator
 
     admin_role = roles.get("ORG_ADMIN")
     if admin_role:

@@ -57,7 +57,7 @@ async def list_audit_logs(
 
     stmt = (
         select(AuditLog, User)
-        .outerjoin(User, (User.id == AuditLog.actor_id) & (User.org_id == ctx.org_id))
+        .outerjoin(User, User.id == AuditLog.actor_id)
         .where(*conditions)
         .order_by(AuditLog.created_at.desc())
         .offset(offset)

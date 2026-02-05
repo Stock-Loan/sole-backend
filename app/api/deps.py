@@ -14,7 +14,7 @@ from app.core.permissions import PermissionCode
 from app.services import authz, settings as settings_service
 from app.core.settings import settings
 from app.db.session import get_db
-from app.models import Org, User
+from app.models import Org, OrgMembership, User
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ async def get_tenant_context(
     if mode == "multi":
         token_org = None
         token_is_superuser = False
+        token_user_id = None
         token = _extract_bearer_token(request)
         if token:
             try:
@@ -79,6 +80,7 @@ async def get_tenant_context(
                 ) from exc
             token_org = payload.get("org")
             token_is_superuser = bool(payload.get("su"))
+            token_user_id = payload.get("sub")
 
         header_org = org_id_header or legacy_tenant_id
         if token_org:
@@ -102,12 +104,58 @@ async def get_tenant_context(
         org_stmt = select(Org.id).where(Org.id == candidate)
         if (await db.execute(org_stmt)).scalar_one_or_none() is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+        if token_user_id and not token_is_superuser:
+            membership = await get_membership(db, user_id=token_user_id, org_id=candidate)
+            if not membership:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User is not a member of this organization",
+                )
         set_tenant_id(candidate)
         return TenantContext(org_id=candidate)
 
     default_org = settings.default_org_id
+    header_org = org_id_header or legacy_tenant_id
+    if header_org and header_org != default_org:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant header does not match default org",
+        )
     set_tenant_id(default_org)
     return TenantContext(org_id=default_org)
+
+
+async def get_membership(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    org_id: str,
+) -> OrgMembership | None:
+    stmt = select(OrgMembership).where(
+        OrgMembership.org_id == org_id,
+        OrgMembership.user_id == user_id,
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+def membership_allows_auth(membership: OrgMembership, *, allow_pending: bool) -> bool:
+    employment = (membership.employment_status or "").upper()
+    platform = (membership.platform_status or "").upper()
+    invitation = (membership.invitation_status or "").upper()
+
+    if employment and employment != "ACTIVE":
+        return False
+    if allow_pending:
+        if platform not in {"ACTIVE", "INVITED"}:
+            return False
+        if invitation not in {"PENDING", "ACCEPTED"}:
+            return False
+        return True
+    if platform != "ACTIVE":
+        return False
+    if invitation != "ACCEPTED":
+        return False
+    return True
 
 
 async def get_current_user(
@@ -154,11 +202,10 @@ async def _get_current_user(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
             )
+    if token_org and token_org != ctx.org_id and not token_is_superuser:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch")
 
-    if token_is_superuser and token_org != ctx.org_id:
-        stmt = select(User).where(User.id == user_sub)
-    else:
-        stmt = select(User).where(User.id == user_sub, User.org_id == ctx.org_id)
+    stmt = select(User).where(User.id == user_sub)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
@@ -168,6 +215,17 @@ async def _get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
     if token_version is not None and user.token_version != token_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
+
+    if not token_is_superuser:
+        membership = await get_membership(db, user_id=user.id, org_id=ctx.org_id)
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not a member of org"
+            )
+        if not membership_allows_auth(membership, allow_pending=allow_password_change):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Membership is not active"
+            )
 
     now = datetime.now(timezone.utc)
     enforce_inactivity(user.last_active_at, now)

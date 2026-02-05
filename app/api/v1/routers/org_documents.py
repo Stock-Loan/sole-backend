@@ -155,16 +155,19 @@ async def upload_template(
         folder = await org_documents.get_folder(db, ctx, folder_id)
         if not folder:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
-    template = await org_documents.create_template_from_upload(
-        db,
-        ctx,
-        folder_id=folder_id,
-        name=name,
-        description=description,
-        file=file,
-        actor_id=current_user.id,
-        base_dir=Path(settings.local_upload_dir),
-    )
+    try:
+        template = await org_documents.create_template_from_upload(
+            db,
+            ctx,
+            folder_id=folder_id,
+            name=name,
+            description=description,
+            file=file,
+            actor_id=current_user.id,
+            base_dir=Path(settings.local_upload_dir),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return OrgDocumentTemplateDTO.model_validate(template)
 
 
@@ -183,6 +186,10 @@ async def create_template_upload_url(
         folder = await org_documents.get_folder(db, ctx, payload.folder_id)
         if not folder:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+    try:
+        org_documents.validate_template_filename(payload.file_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     storage_key, original_name = generate_storage_key(
         org_templates_subdir(ctx.org_id, payload.folder_id),
         payload.file_name,
@@ -254,21 +261,24 @@ async def create_template(
                 "details": {},
             },
         )
-    template = await org_documents.create_template_from_storage(
-        db,
-        ctx,
-        folder_id=payload.folder_id,
-        name=payload.name,
-        description=payload.description,
-        file_name=payload.file_name,
-        storage_key=payload.storage_key,
-        storage_provider=storage_provider,
-        storage_bucket=storage_bucket,
-        content_type=payload.content_type,
-        size_bytes=payload.size_bytes,
-        checksum=payload.checksum,
-        actor_id=current_user.id,
-    )
+    try:
+        template = await org_documents.create_template_from_storage(
+            db,
+            ctx,
+            folder_id=payload.folder_id,
+            name=payload.name,
+            description=payload.description,
+            file_name=payload.file_name,
+            storage_key=payload.storage_key,
+            storage_provider=storage_provider,
+            storage_bucket=storage_bucket,
+            content_type=payload.content_type,
+            size_bytes=payload.size_bytes,
+            checksum=payload.checksum,
+            actor_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return OrgDocumentTemplateDTO.model_validate(template)
 
 

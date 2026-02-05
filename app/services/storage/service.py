@@ -1,4 +1,5 @@
 from uuid import UUID, uuid4
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.asset import Asset
 from app.models.storage_backend_config import StorageBackendConfig
@@ -36,6 +37,13 @@ def get_storage_adapter(
 class AssetService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _get_asset(self, asset_id: UUID, org_id: str | None = None) -> Asset | None:
+        if org_id:
+            stmt = select(Asset).where(Asset.id == asset_id, Asset.org_id == org_id)
+            result = await self.db.execute(stmt)
+            return result.scalar_one_or_none()
+        return await self.db.get(Asset, asset_id)
 
     async def create_upload_session(self, req: UploadSessionRequest) -> UploadSessionResponse:
         asset_id = uuid4()
@@ -87,8 +95,8 @@ class AssetService:
             required_headers_or_fields=upload_info.get("headers", {}),
         )
 
-    async def finalize_upload(self, asset_id: UUID):
-        asset = await self.db.get(Asset, asset_id)
+    async def finalize_upload(self, asset_id: UUID, *, org_id: str):
+        asset = await self._get_asset(asset_id, org_id)
         if not asset:
             raise ValueError("Asset not found")
 
@@ -106,8 +114,8 @@ class AssetService:
         await self.db.refresh(asset)
         return asset
 
-    async def get_download_url(self, asset_id: UUID) -> str:
-        asset = await self.db.get(Asset, asset_id)
+    async def get_download_url(self, asset_id: UUID, *, org_id: str) -> str:
+        asset = await self._get_asset(asset_id, org_id)
         if not asset or asset.status != "uploaded":
             raise ValueError("Asset not found or not uploaded")
 

@@ -9,10 +9,9 @@ from app.db.base import Base
 
 class User(Base):
     __tablename__ = "users"
-    __table_args__ = (UniqueConstraint("org_id", "email", name="uq_users_org_email"),)
+    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id = Column(String, nullable=False, index=True)
     email = Column(String(255), nullable=False)
     full_name = Column(String(255), nullable=False)
     first_name = Column(String(100), nullable=True)

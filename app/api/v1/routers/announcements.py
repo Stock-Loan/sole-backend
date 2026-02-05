@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from uuid import UUID
 
@@ -111,7 +110,15 @@ async def stream_announcements(
                 )
                 if message and message.get("data"):
                     yield "event: announcement.published\n"
-                    yield f"data: {message['data']}\n\n"
+                    raw = message["data"]
+                    if isinstance(raw, (bytes, bytearray)):
+                        raw = raw.decode("utf-8", errors="replace")
+                    else:
+                        raw = str(raw)
+                    sanitized = raw.replace("\r\n", "\n").replace("\r", "\n")
+                    for line in sanitized.split("\n"):
+                        yield f"data: {line}\n"
+                    yield "\n"
                 else:
                     yield ": keep-alive\n\n"
                 await asyncio.sleep(0)

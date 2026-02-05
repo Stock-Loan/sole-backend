@@ -90,7 +90,7 @@ class OrgDiscoveryRequest(BaseModel):
 
 
 class OrgSummary(BaseModel):
-    org_id: str
+    org_id: str | None = None
     name: str
     slug: str | None = None
 
@@ -105,7 +105,7 @@ class OrgResolveResponse(BaseModel):
 
 class UserOut(BaseModel):
     id: UUID
-    org_id: str
+    org_id: str | None = None
     email: EmailStr
     is_active: bool
     is_superuser: bool

@@ -54,6 +54,7 @@ prod = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+exclude = ["tests", "test", "*/tests/*"]
 
 [tool.black]
 line-length = 100

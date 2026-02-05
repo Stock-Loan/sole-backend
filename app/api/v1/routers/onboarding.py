@@ -11,13 +11,19 @@ from app.api import deps
 from app.db.session import get_db
 from app.core.permissions import PermissionCode
 from app.models import User
-from app.schemas.onboarding import BulkOnboardingResult, OnboardingResponse, OnboardingUserCreate
+from app.schemas.onboarding import (
+    BulkOnboardingResult,
+    OnboardingResponse,
+    OnboardingUserCreate,
+    OnboardingUserOut,
+)
 from app.schemas.users import (
     BulkDeleteRequest,
     UpdateMembershipRequest,
     UpdateUserProfileRequest,
     UserDetailResponse,
     UserListResponse,
+    UserSummary,
 )
 from app.schemas.settings import MfaEnforcementAction
 from app.models.org_membership import OrgMembership
@@ -31,6 +37,14 @@ from app.services import settings as settings_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/org/users", tags=["users"])
+
+
+def _user_summary(user: UserModel, *, org_id: str) -> UserSummary:
+    return UserSummary.model_validate(user).model_copy(update={"org_id": org_id})
+
+
+def _onboarding_user(user: UserModel, *, org_id: str) -> OnboardingUserOut:
+    return OnboardingUserOut.model_validate(user).model_copy(update={"org_id": org_id})
 
 
 @router.post(
@@ -70,7 +84,11 @@ async def onboard_user(
         },
     )
     await db.commit()
-    return OnboardingResponse(user=user, membership=membership, temporary_password=temp_password)
+    return OnboardingResponse(
+        user=_onboarding_user(user, org_id=ctx.org_id),
+        membership=membership,
+        temporary_password=temp_password,
+    )
 
 
 @router.get(
@@ -113,6 +131,11 @@ async def bulk_onboard(
     try:
         result = await onboarding.bulk_onboard_users(db, ctx, content)
         for success in result.successes:
+            user_snapshot = (
+                model_snapshot(success.user, exclude={"hashed_password"})
+                if hasattr(success.user, "__table__")
+                else success.user.model_dump()
+            )
             record_audit_log(
                 db,
                 ctx,
@@ -122,7 +145,7 @@ async def bulk_onboard(
                 resource_id=str(success.membership.id),
                 old_value=None,
                 new_value={
-                    "user": model_snapshot(success.user, exclude={"hashed_password"}),
+                    "user": user_snapshot,
                     "membership": model_snapshot(success.membership),
                 },
             )
@@ -185,7 +208,11 @@ async def list_users(
     for membership, user, dept in rows:
         membership.department_name = dept.name if dept else None
         items.append(
-            {"user": user, "membership": membership, "roles": roles_map.get(str(user.id), [])}
+            {
+                "user": _user_summary(user, org_id=ctx.org_id),
+                "membership": membership,
+                "roles": roles_map.get(str(user.id), []),
+            }
         )
     return UserListResponse(items=items, total=total)
 
@@ -217,7 +244,9 @@ async def get_user(
         .where(UserRole.org_id == ctx.org_id, UserRole.user_id == user.id)
     )
     roles = (await db.execute(roles_stmt)).scalars().all()
-    return UserDetailResponse(user=user, membership=membership, roles=roles)
+    return UserDetailResponse(
+        user=_user_summary(user, org_id=ctx.org_id), membership=membership, roles=roles
+    )
 
 
 @router.delete(
@@ -258,10 +287,7 @@ async def delete_user(
     await db.commit()
 
     # If user has no other memberships, delete user record
-    other_stmt = select(OrgMembership.id).where(
-        OrgMembership.org_id == ctx.org_id,
-        OrgMembership.user_id == user.id,
-    )
+    other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
     other_result = await db.execute(other_stmt)
     if not other_result.first():
         await db.delete(user)
@@ -314,10 +340,7 @@ async def bulk_delete_users(
             new_value=None,
         )
         await db.commit()
-        other_stmt = select(OrgMembership.id).where(
-            OrgMembership.org_id == ctx.org_id,
-            OrgMembership.user_id == user.id,
-        )
+        other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
         other_result = await db.execute(other_stmt)
         if not other_result.first():
             await db.delete(user)
@@ -419,7 +442,11 @@ async def update_membership(
         new_value=model_snapshot(membership),
     )
     await db.commit()
-    return UserDetailResponse(user=user, membership=membership, roles=user_roles)
+    return UserDetailResponse(
+        user=_user_summary(user, org_id=ctx.org_id),
+        membership=membership,
+        roles=user_roles,
+    )
 
 
 @router.patch(
@@ -478,7 +505,7 @@ async def update_user_profile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "duplicate_email",
-                "message": "Email already exists for this organization",
+                "message": "Email already exists",
                 "details": {},
             },
         ) from exc
@@ -496,7 +523,11 @@ async def update_user_profile(
         new_value=model_snapshot(user, exclude={"hashed_password"}),
     )
     await db.commit()
-    return UserDetailResponse(user=user, membership=membership, roles=user_roles)
+    return UserDetailResponse(
+        user=_user_summary(user, org_id=ctx.org_id),
+        membership=membership,
+        roles=user_roles,
+    )
 
 
 @router.post("/{membership_id}/mfa/reset", status_code=200, summary="Admin reset of user MFA")

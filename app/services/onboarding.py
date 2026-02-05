@@ -25,6 +25,7 @@ from app.schemas.onboarding import (
     BulkOnboardingResult,
     BulkOnboardingRowError,
     BulkOnboardingRowSuccess,
+    OnboardingUserOut,
     OnboardingUserCreate,
 )
 from app.resources.countries import COUNTRIES, SUBDIVISIONS
@@ -188,7 +189,7 @@ async def onboard_single_user(
     payload: OnboardingUserCreate,
 ) -> Tuple[User, OrgMembership, str | None]:
     payload = _normalize_payload(payload)
-    stmt = select(User).where(User.email == payload.email, User.org_id == ctx.org_id)
+    stmt = select(User).where(User.email == payload.email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     temporary_password: str | None = None
@@ -198,7 +199,6 @@ async def onboard_single_user(
         temporary_password = payload.temporary_password or _generate_temp_password()
         full_name = f"{payload.first_name} {payload.last_name}".strip()
         user = User(
-            org_id=ctx.org_id,
             email=payload.email,
             first_name=payload.first_name,
             middle_name=payload.middle_name,
@@ -359,9 +359,7 @@ async def bulk_onboard_users(
             normalized_employee_id = _normalize_text(row.get("employee_id") or "") or ""
             existing_membership_id = None
             if normalized_email:
-                user_stmt = select(User.id).where(
-                    User.org_id == ctx.org_id, User.email == normalized_email
-                )
+                user_stmt = select(User.id).where(User.email == normalized_email)
                 user_id = (await db.execute(user_stmt)).scalar_one_or_none()
                 if user_id:
                     membership_stmt = select(OrgMembership.id).where(
@@ -413,10 +411,13 @@ async def bulk_onboard_users(
             )
             payload = _normalize_payload(payload)
             user, membership, temp_password = await onboard_single_user(db, ctx, payload)
+            user_out = OnboardingUserOut.model_validate(user).model_copy(
+                update={"org_id": ctx.org_id}
+            )
             successes.append(
                 BulkOnboardingRowSuccess(
                     row_number=idx,
-                    user=user,
+                    user=user_out,
                     membership=membership,
                     temporary_password=temp_password,
                 )

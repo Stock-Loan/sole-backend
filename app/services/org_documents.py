@@ -24,6 +24,17 @@ DEFAULT_FOLDERS = [
     ("GENERAL", "General"),
 ]
 
+ALLOWED_TEMPLATE_EXTENSIONS = {".pdf", ".docx", ".png", ".jpg", ".jpeg"}
+
+
+def validate_template_filename(file_name: str | None) -> None:
+    if not file_name:
+        raise ValueError("file_name is required")
+    ext = Path(file_name).suffix.lower()
+    if ext not in ALLOWED_TEMPLATE_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_TEMPLATE_EXTENSIONS))
+        raise ValueError(f"File type not allowed. Allowed extensions: {allowed}")
+
 
 async def ensure_default_folders(db: AsyncSession, org_id: str) -> list[OrgDocumentFolder]:
     stmt = select(OrgDocumentFolder).where(OrgDocumentFolder.org_id == org_id)
@@ -177,7 +188,12 @@ async def create_template_from_upload(
     base_dir: Path,
 ) -> OrgDocumentTemplate:
     subdir = org_templates_subdir(ctx.org_id, folder_id)
-    relative_path, original_name = await save_upload(file, base_dir=base_dir, subdir=subdir)
+    relative_path, original_name = await save_upload(
+        file,
+        base_dir=base_dir,
+        subdir=subdir,
+        allowed_extensions=ALLOWED_TEMPLATE_EXTENSIONS,
+    )
     template = OrgDocumentTemplate(
         org_id=ctx.org_id,
         folder_id=folder_id,
@@ -215,6 +231,7 @@ async def create_template_from_storage(
     checksum: str | None,
     actor_id: UUID,
 ) -> OrgDocumentTemplate:
+    validate_template_filename(file_name)
     template = OrgDocumentTemplate(
         org_id=ctx.org_id,
         folder_id=folder_id,

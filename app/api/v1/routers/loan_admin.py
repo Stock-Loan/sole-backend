@@ -1561,7 +1561,7 @@ async def assign_workflow_stage(
                 detail=f"Missing permission: {required_permission.value}",
             )
 
-    user_stmt = select(User).where(User.id == assignee_id, User.org_id == ctx.org_id)
+    user_stmt = select(User).where(User.id == assignee_id)
     user_result = await db.execute(user_stmt)
     assignee = user_result.scalar_one_or_none()
     if not assignee:

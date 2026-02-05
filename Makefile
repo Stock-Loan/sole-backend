@@ -48,6 +48,9 @@ clean: ## Stop and remove local containers, volumes, networks
 	$(DC) down -v
 	@echo "Cleaned up local environment."
 
+setup-env: ## Set up local environment files (runs setup.sh)
+	@./setup.sh
+
 migrate: ## Run migrations on LOCAL database
 	$(DC) run --rm $(APP) alembic upgrade head
 

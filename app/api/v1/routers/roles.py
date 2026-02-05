@@ -178,7 +178,10 @@ async def update_role(
         )
 
     old_snapshot = model_snapshot(role)
-    updates = payload.model_dump(exclude_unset=True)
+    updates = payload.model_dump(
+        exclude_unset=True,
+        include={"name", "description", "permissions"},
+    )
     if "permissions" in updates and updates["permissions"] is not None:
         # Validate permission codes
         validated = []
@@ -322,7 +325,7 @@ async def assign_roles_to_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "membership_not_found", "message": "Membership not found"},
         )
-    user_stmt = select(User).where(User.id == membership.user_id, User.org_id == ctx.org_id)
+    user_stmt = select(User).where(User.id == membership.user_id)
     user_result = await db.execute(user_stmt)
     user = user_result.scalar_one_or_none()
     if not user or not user.is_active:

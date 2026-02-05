@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from datetime import timedelta
 
 
@@ -44,6 +44,21 @@ class LocalFileSystemAdapter(StorageAdapter):
         self.bucket = "local"
         self.base_path.mkdir(parents=True, exist_ok=True)
 
+    def _resolve_safe_path(self, object_key: str) -> Path:
+        if "\\" in object_key:
+            raise ValueError("Invalid object key")
+        key_path = PurePosixPath(object_key)
+        if key_path.is_absolute() or ".." in key_path.parts:
+            raise ValueError("Invalid object key")
+        base = self.base_path.resolve()
+        resolved = (base / Path(object_key)).resolve()
+        if resolved != base and base not in resolved.parents:
+            raise ValueError("Invalid object key")
+        return resolved
+
+    def resolve_path(self, object_key: str) -> Path:
+        return self._resolve_safe_path(object_key)
+
     def generate_upload_url(
         self, object_key: str, content_type: str, size_bytes: int
     ) -> Dict[str, Any]:
@@ -77,16 +92,19 @@ class LocalFileSystemAdapter(StorageAdapter):
         return f"{self.base_url}/api/v1/assets/local-content?key={object_key}"
 
     def delete_object(self, object_key: str):
-        path = self.base_path / object_key
+        path = self._resolve_safe_path(object_key)
         if path.exists():
             path.unlink()
 
     def object_exists(self, object_key: str) -> bool:
-        path = self.base_path / object_key
+        try:
+            path = self._resolve_safe_path(object_key)
+        except ValueError:
+            return False
         return path.exists()
 
     def write_file(self, object_key: str, content: bytes):
-        path = self.base_path / object_key
+        path = self._resolve_safe_path(object_key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
 

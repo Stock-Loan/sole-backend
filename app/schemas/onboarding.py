@@ -47,7 +47,7 @@ class OnboardingUserOut(BaseModel):
     model_config = ConfigDict(use_enum_values=True, from_attributes=True)
 
     id: UUID
-    org_id: str
+    org_id: str | None = None
     email: EmailStr
     first_name: str | None = None
     middle_name: str | None = None
