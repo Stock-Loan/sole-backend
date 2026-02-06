@@ -112,6 +112,7 @@ async def get_self_profile(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user, dept, profile = row
+    await db.refresh(user, attribute_names=["roles"])
     membership.department_name = dept.name if dept else None
     roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
     user_summary = UserSummary.model_validate(
@@ -187,6 +188,7 @@ async def update_self_profile(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user, dept, profile = row
+    await db.refresh(user, attribute_names=["roles"])
     membership.department_name = dept.name if dept else None
 
     updates = payload.model_dump(exclude_unset=True)
