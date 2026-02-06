@@ -105,9 +105,7 @@ async def stream_announcements(
         try:
             yield ": connected\n\n"
             while True:
-                message = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=15.0
-                )
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15.0)
                 if message and message.get("data"):
                     yield "event: announcement.published\n"
                     raw = message["data"]

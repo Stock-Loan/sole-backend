@@ -3,14 +3,18 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
+
 class UploadSessionRequest(BaseModel):
     org_id: str
     kind: str = Field(..., description="org_template, display_image, loan_document, etc.")
-    owner_refs: Dict[str, str] = Field(..., description="IDs needed to build the path: user_id, loan_id, etc.")
+    owner_refs: Dict[str, str] = Field(
+        ..., description="IDs needed to build the path: user_id, loan_id, etc."
+    )
     filename: str
     content_type: str
     size_bytes: int
     checksum: str | None = None
+
 
 class UploadSessionResponse(BaseModel):
     asset_id: UUID
@@ -19,6 +23,7 @@ class UploadSessionResponse(BaseModel):
     storage_bucket: str | None = None
     object_key: str
     required_headers_or_fields: Dict[str, Any] = Field(default_factory=dict)
+
 
 class AssetRead(BaseModel):
     id: UUID

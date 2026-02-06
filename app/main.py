@@ -9,6 +9,7 @@ from app.core.limiter import limiter
 from app.core.logging import configure_logging
 from app.core.settings import settings
 from app.events import register_event_handlers
+from app.middlewares.concurrency_limit import ConcurrencyLimitMiddleware
 from app.middlewares.request_context import RequestContextMiddleware
 from app.middlewares.security_headers import SecurityHeadersMiddleware
 from app.middlewares.trust_proxies import TrustedProxiesMiddleware
@@ -21,6 +22,12 @@ def create_app() -> FastAPI:
     register_response_envelope(app)
     app.state.limiter = limiter
     app.add_middleware(SlowAPIMiddleware)
+    if settings.request_concurrency_limit > 0:
+        app.add_middleware(
+            ConcurrencyLimitMiddleware,
+            limit=settings.request_concurrency_limit,
+            timeout_seconds=settings.request_concurrency_timeout_seconds,
+        )
     app.add_middleware(TrustedProxiesMiddleware, proxies_count=settings.proxies_count)
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(SecurityHeadersMiddleware, enable_hsts=settings.enable_hsts)

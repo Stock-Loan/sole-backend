@@ -752,10 +752,14 @@ async def update_admin_application_fields(
             variable_base_rate_annual_percent=variable_base_rate,
         )
         application.status = target_status
-        if original_status in {
-            LoanApplicationStatus.SUBMITTED.value,
-            LoanApplicationStatus.IN_REVIEW.value,
-        } or workflow_reset:
+        if (
+            original_status
+            in {
+                LoanApplicationStatus.SUBMITTED.value,
+                LoanApplicationStatus.IN_REVIEW.value,
+            }
+            or workflow_reset
+        ):
             await stock_reservations.delete_reservations_for_application(
                 db, ctx, application_id=application.id
             )

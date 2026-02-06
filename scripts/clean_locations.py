@@ -71,7 +71,9 @@ def load_subdivisions() -> Dict[str, List[Dict[str, str]]]:
     return cleaned
 
 
-def write_python(countries: List[Dict[str, str]], subdivisions: Dict[str, List[Dict[str, str]]]) -> None:
+def write_python(
+    countries: List[Dict[str, str]], subdivisions: Dict[str, List[Dict[str, str]]]
+) -> None:
     lines = [
         "COUNTRIES = [",
     ]

@@ -544,15 +544,18 @@ async def activate_loan_backlog(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanActivationMaintenanceResponse:
-    checked, activated, activated_ids, post_issuance_completed_ids = (
-        await loan_workflow.activate_backlog(
-            db,
-            ctx,
-            loan_id=str(loan_id) if loan_id else None,
-            limit=limit,
-            offset=offset,
-            actor_id=current_user.id,
-        )
+    (
+        checked,
+        activated,
+        activated_ids,
+        post_issuance_completed_ids,
+    ) = await loan_workflow.activate_backlog(
+        db,
+        ctx,
+        loan_id=str(loan_id) if loan_id else None,
+        limit=limit,
+        offset=offset,
+        actor_id=current_user.id,
     )
     if loan_id and checked == 0:
         raise HTTPException(
@@ -598,9 +601,7 @@ async def get_loan(
         current_stage_assigned_at,
     ) = _current_stage_from_workflow(application.workflow_stages or [])
     applicant = await _fetch_applicant_summary(db, ctx, application)
-    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
-        db, ctx, loan_id
-    )
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(db, ctx, loan_id)
     payment_fields = await _payment_status_fields(db, ctx, application)
     return LoanApplicationDTO.model_validate(application).model_copy(
         update={
@@ -734,9 +735,7 @@ async def create_loan_document_upload_url(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "storage_not_configured", "message": str(exc), "details": {}},
         ) from exc
-    upload_info = adapter.generate_upload_url(
-        storage_key, payload.content_type, payload.size_bytes
-    )
+    upload_info = adapter.generate_upload_url(storage_key, payload.content_type, payload.size_bytes)
     return LoanDocumentUploadUrlResponse(
         upload_url=upload_info["upload_url"],
         required_headers_or_fields=upload_info.get("headers", {}),
@@ -1076,9 +1075,7 @@ async def create_repayment_evidence_upload_url(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "storage_not_configured", "message": str(exc), "details": {}},
         ) from exc
-    upload_info = adapter.generate_upload_url(
-        storage_key, payload.content_type, payload.size_bytes
-    )
+    upload_info = adapter.generate_upload_url(storage_key, payload.content_type, payload.size_bytes)
     return LoanRepaymentEvidenceUploadUrlResponse(
         upload_url=upload_info["upload_url"],
         required_headers_or_fields=upload_info.get("headers", {}),
@@ -1765,9 +1762,7 @@ async def get_hr_review(
         application
     )
     applicant = await _fetch_applicant_summary(db, ctx, application)
-    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
-        db, ctx, loan_id
-    )
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(db, ctx, loan_id)
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
@@ -1973,9 +1968,7 @@ async def get_finance_review(
         application
     )
     applicant = await _fetch_applicant_summary(db, ctx, application)
-    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
-        db, ctx, loan_id
-    )
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(db, ctx, loan_id)
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={
@@ -2174,9 +2167,7 @@ async def get_legal_review(
         application
     )
     applicant = await _fetch_applicant_summary(db, ctx, application)
-    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
-        db, ctx, loan_id
-    )
+    last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(db, ctx, loan_id)
     payment_fields = await _payment_status_fields(db, ctx, application)
     loan_payload = LoanApplicationDTO.model_validate(application).model_copy(
         update={

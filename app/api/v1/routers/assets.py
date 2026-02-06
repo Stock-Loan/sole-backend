@@ -12,6 +12,7 @@ from app.models import Asset, User
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
+
 async def _require_asset_for_org(
     db: AsyncSession, *, asset_id: UUID | None = None, object_key: str | None = None, org_id: str
 ) -> Asset:

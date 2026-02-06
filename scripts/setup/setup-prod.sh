@@ -122,9 +122,14 @@ PY
 configure_database() {
     msg "--- Database Configuration ---"
     prompt_required "DATABASE_URL" \
-        "Enter the PostgreSQL Connection String (e.g., postgresql+asyncpg://user:pass@host:5432/dbname):" \
-        "^postgresql\+asyncpg://" \
-        "Must be a valid asyncpg PostgreSQL URL starting with 'postgresql+asyncpg://'"
+        "Enter the POOLED PostgreSQL URL (Neon pooler, hostname includes -pooler). Example: postgresql+psycopg://user:pass@host/dbname" \
+        "^postgres(ql)?(\\+psycopg)?://" \
+        "Must be a valid PostgreSQL URL starting with 'postgresql+psycopg://' or 'postgresql://'"
+
+    prompt_required "DATABASE_URL_DIRECT" \
+        "Enter the DIRECT PostgreSQL URL (non-pooler, used for migrations/admin). Example: postgresql+psycopg://user:pass@host/dbname" \
+        "^postgres(ql)?(\\+psycopg)?://" \
+        "Must be a valid PostgreSQL URL starting with 'postgresql+psycopg://' or 'postgresql://'"
         
     prompt_required "REDIS_URL" \
         "Enter the Redis Connection String (e.g., redis://user:pass@host:6379/0):" \
@@ -512,7 +517,7 @@ main() {
   msg ""
   msg "Next steps:"
   msg "  1. Review .env.prod for accuracy"
-  msg "  2. Ensure DATABASE_URL and REDIS_URL are correct"
+  msg "  2. Ensure DATABASE_URL, DATABASE_URL_DIRECT, and REDIS_URL are correct"
   msg "  3. Verify JWT keys are valid PEM format"
   msg "  4. Run: docker compose -f compose.yaml up"
 }

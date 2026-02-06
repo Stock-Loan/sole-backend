@@ -11,6 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -132,6 +133,7 @@ def register_exception_handlers(app) -> None:
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)
+    app.add_exception_handler(SqlAlchemyTimeoutError, db_pool_timeout_handler)
     app.add_exception_handler(StepUpMfaRequired, step_up_mfa_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
@@ -164,4 +166,18 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded)
     headers = getattr(exc, "headers", None)
     if isinstance(headers, dict):
         response.headers.update(headers)
+    return response
+
+
+async def db_pool_timeout_handler(request: Request, exc: SqlAlchemyTimeoutError) -> JSONResponse:
+    from app.core.settings import settings
+
+    response = _build_response(
+        status_code=503,
+        code="db_overloaded",
+        message="Database is busy, please retry",
+        details={"detail": "Database connection pool exhausted"},
+    )
+    retry_after = max(1, settings.db_pool_retry_after_seconds)
+    response.headers["Retry-After"] = str(retry_after)
     return response

@@ -40,10 +40,10 @@ steps:
       - --allow-unauthenticated
       # optional: non-secret config file committed to repo (recommended)
       - --env-vars-file
-      - env.prod.yaml
+      - config.prod.yaml
       # optional: secret references only (no values)
       - --set-secrets
-      - DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,SECRET_KEY=SECRET_KEY:latest,JWT_PRIVATE_KEY=JWT_PRIVATE_KEY:latest,JWT_PUBLIC_KEY=JWT_PUBLIC_KEY:latest,SEED_ADMIN_PASSWORD=SEED_ADMIN_PASSWORD:latest,SEED_ADMIN_EMAIL=SEED_ADMIN_EMAIL:latest
+      - DATABASE_URL=DATABASE_URL:latest,DATABASE_URL_DIRECT=DATABASE_URL_DIRECT:latest,REDIS_URL=REDIS_URL:latest,SECRET_KEY=SECRET_KEY:latest,JWT_PRIVATE_KEY=JWT_PRIVATE_KEY:latest,JWT_PUBLIC_KEY=JWT_PUBLIC_KEY:latest,SEED_ADMIN_PASSWORD=SEED_ADMIN_PASSWORD:latest,SEED_ADMIN_EMAIL=SEED_ADMIN_EMAIL:latest
       - --quiet
 
 images:

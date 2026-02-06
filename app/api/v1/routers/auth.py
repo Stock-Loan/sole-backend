@@ -232,7 +232,9 @@ async def refresh_csrf(
 ) -> CsrfTokenResponse:
     refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
     if not refresh_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token required")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token required"
+        )
     try:
         token_data = decode_token(refresh_token, expected_type="refresh")
     except ValueError as exc:
@@ -727,7 +729,9 @@ async def refresh_tokens(
         refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
         used_cookie = bool(refresh_token)
     if not refresh_token:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Refresh token required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Refresh token required"
+        )
     if used_cookie and settings.auth_refresh_cookie_enabled:
         csrf_header = request.headers.get(settings.auth_csrf_header_name)
         csrf_cookie = request.cookies.get(settings.auth_csrf_cookie_name)
@@ -750,7 +754,9 @@ async def refresh_tokens(
     if not jti or not exp_ts:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     if not token_org:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim"
+        )
     if token_org and token_org != ctx.org_id and not token_is_superuser:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
@@ -837,7 +843,9 @@ async def _complete_login_flow(
         membership = await deps.get_membership(db, user_id=user.id, org_id=ctx.org_id)
         if not membership:
             await record_login_attempt(email, success=False)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+            )
         if not deps.membership_allows_auth(membership, allow_pending=True):
             await record_login_attempt(email, success=False)
             raise HTTPException(

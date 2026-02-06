@@ -1,7 +1,7 @@
 import os
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key-boot")
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:5432/test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("DEFAULT_ORG_ID", "default")
 os.environ.setdefault("SEED_ADMIN_EMAIL", "admin@example.com")

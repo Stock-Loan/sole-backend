@@ -15,6 +15,19 @@ class Settings(BaseSettings):
 
     environment: str = Field(default="development", alias="ENVIRONMENT")
     database_url: str = Field(alias="DATABASE_URL")
+    database_url_direct: str | None = Field(default=None, alias="DATABASE_URL_DIRECT")
+    db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=0, alias="DB_MAX_OVERFLOW")
+    db_pool_timeout: int = Field(default=10, alias="DB_POOL_TIMEOUT")
+    db_pool_recycle: int = Field(default=1800, alias="DB_POOL_RECYCLE")
+    db_pool_retry_after_seconds: int = Field(default=3, alias="DB_POOL_RETRY_AFTER_SECONDS")
+    db_statement_timeout_ms: int = Field(default=10000, alias="DB_STATEMENT_TIMEOUT_MS")
+    db_slow_query_ms: int = Field(default=2000, alias="DB_SLOW_QUERY_MS")
+    db_log_query_timings: bool = Field(default=False, alias="DB_LOG_QUERY_TIMINGS")
+    request_concurrency_limit: int = Field(default=0, alias="REQUEST_CONCURRENCY_LIMIT")
+    request_concurrency_timeout_seconds: int = Field(
+        default=0, alias="REQUEST_CONCURRENCY_TIMEOUT_SECONDS"
+    )
     redis_url: str = Field(alias="REDIS_URL")
     tenancy_mode: Literal["single", "multi"] = Field(default="single", alias="TENANCY_MODE")
     session_timeout_minutes: int = Field(default=30, alias="SESSION_TIMEOUT_MINUTES")
@@ -22,9 +35,7 @@ class Settings(BaseSettings):
     refresh_token_expire_minutes: int = Field(
         default=60 * 24 * 7, alias="REFRESH_TOKEN_EXPIRE_MINUTES"
     )
-    allowed_origins: str = Field(
-        default="http://localhost:3000", alias="ALLOWED_ORIGINS"
-    )
+    allowed_origins: str = Field(default="http://localhost:3000", alias="ALLOWED_ORIGINS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     enable_hsts: bool = Field(default=True, alias="ENABLE_HSTS")
     default_org_id: str = Field(default="default", alias="DEFAULT_ORG_ID")
@@ -54,9 +65,7 @@ class Settings(BaseSettings):
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
     storage_provider: Literal["local", "gcs"] = Field(default="local", alias="STORAGE_PROVIDER")
     gcs_bucket: str | None = Field(default=None, alias="GCS_BUCKET")
-    gcs_signed_url_expiry_seconds: int = Field(
-        default=900, alias="GCS_SIGNED_URL_EXPIRY_SECONDS"
-    )
+    gcs_signed_url_expiry_seconds: int = Field(default=900, alias="GCS_SIGNED_URL_EXPIRY_SECONDS")
     pbgc_mid_term_rates_url: str = Field(
         default="https://www.pbgc.gov/employers-practitioners/interest-rates/historical-applicable-mid-term",
         alias="PBGC_MID_TERM_RATES_URL",
@@ -65,27 +74,17 @@ class Settings(BaseSettings):
     pbgc_rate_scrape_day: int = Field(default=30, alias="PBGC_RATE_SCRAPE_DAY")
     pbgc_rate_scrape_hour: int = Field(default=0, alias="PBGC_RATE_SCRAPE_HOUR")
     pbgc_rate_scrape_minute: int = Field(default=0, alias="PBGC_RATE_SCRAPE_MINUTE")
-    auth_refresh_cookie_enabled: bool = Field(
-        default=True, alias="AUTH_REFRESH_COOKIE_ENABLED"
-    )
-    auth_refresh_cookie_name: str = Field(
-        default="sole_refresh", alias="AUTH_REFRESH_COOKIE_NAME"
-    )
-    auth_csrf_cookie_name: str = Field(
-        default="sole_csrf", alias="AUTH_CSRF_COOKIE_NAME"
-    )
-    auth_csrf_header_name: str = Field(
-        default="X-CSRF-Token", alias="AUTH_CSRF_HEADER_NAME"
-    )
+    auth_refresh_cookie_enabled: bool = Field(default=True, alias="AUTH_REFRESH_COOKIE_ENABLED")
+    auth_refresh_cookie_name: str = Field(default="sole_refresh", alias="AUTH_REFRESH_COOKIE_NAME")
+    auth_csrf_cookie_name: str = Field(default="sole_csrf", alias="AUTH_CSRF_COOKIE_NAME")
+    auth_csrf_header_name: str = Field(default="X-CSRF-Token", alias="AUTH_CSRF_HEADER_NAME")
     auth_cookie_domain: str | None = Field(default=None, alias="AUTH_COOKIE_DOMAIN")
     auth_cookie_path: str = Field(default="/api/v1/auth/refresh", alias="AUTH_COOKIE_PATH")
     auth_cookie_secure: bool = Field(default=True, alias="AUTH_COOKIE_SECURE")
     auth_cookie_samesite: Literal["lax", "strict", "none"] = Field(
         default="none", alias="AUTH_COOKIE_SAMESITE"
     )
-    content_security_policy: str | None = Field(
-        default=None, alias="CONTENT_SECURITY_POLICY"
-    )
+    content_security_policy: str | None = Field(default=None, alias="CONTENT_SECURITY_POLICY")
     content_security_policy_report_only: bool = Field(
         default=False, alias="CONTENT_SECURITY_POLICY_REPORT_ONLY"
     )

@@ -66,9 +66,7 @@ def _org_from_refresh_cookie(request: Request) -> str | None:
     try:
         payload = decode_token(refresh_token, expected_type="refresh")
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return payload.get("org")
 
 
@@ -218,7 +216,9 @@ async def _get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing org claim"
         )
     if token_org != ctx.org_id and not token_is_superuser:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
+        )
 
     stmt = select(User).where(User.id == user_sub)
     result = await db.execute(stmt)

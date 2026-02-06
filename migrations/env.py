@@ -1,13 +1,13 @@
 import asyncio
 import os
 from logging.config import fileConfig
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.db.base import Base
+from app.db.url import normalize_database_url
 import app.models  # noqa: F401
 
 # Alembic Config object (ini values)
@@ -18,38 +18,21 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
- 
-
-def _normalize_database_url(url: str) -> str:
-    """
-    Normalize DATABASE_URL so asyncpg/sqlalchemy don't choke.
-
-    Known gotcha:
-      - Neon often uses ?ssl=true, but asyncpg expects sslmode=require (or ssl handled via connect_args).
-    We'll convert ssl=true -> sslmode=require
-    """
-    parts = urlsplit(url)
-    q = dict(parse_qsl(parts.query, keep_blank_values=True))
-
-    # Convert ssl=true to sslmode=require for asyncpg compatibility
-    ssl_val = q.get("ssl")
-    if ssl_val and ssl_val.lower() in ("1", "true", "yes", "on"):
-        q.pop("ssl", None)
-        q.setdefault("sslmode", "require")
-
-    new_query = urlencode(q, doseq=True)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
 
 def _get_database_url() -> str:
     """
-    Prefer DATABASE_URL from environment (Cloud Run secrets / local env).
+    Prefer DATABASE_URL_DIRECT from environment for migrations.
+    Fall back to DATABASE_URL, then alembic.ini.
     Fall back to alembic.ini sqlalchemy.url if not present.
     """
+    direct_url = os.getenv("DATABASE_URL_DIRECT", "").strip()
+    if direct_url:
+        return normalize_database_url(direct_url)
     env_url = os.getenv("DATABASE_URL", "").strip()
     if env_url:
-        return _normalize_database_url(env_url)
-    return config.get_main_option("sqlalchemy.url")
+        return normalize_database_url(env_url)
+    return normalize_database_url(config.get_main_option("sqlalchemy.url"))
 
 
 # Force sqlalchemy.url to the resolved URL (so both offline/online modes use the same value)

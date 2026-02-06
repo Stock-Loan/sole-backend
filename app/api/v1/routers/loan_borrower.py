@@ -511,9 +511,7 @@ async def create_83b_upload_url(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "storage_not_configured", "message": str(exc), "details": {}},
         ) from exc
-    upload_info = adapter.generate_upload_url(
-        storage_key, payload.content_type, payload.size_bytes
-    )
+    upload_info = adapter.generate_upload_url(storage_key, payload.content_type, payload.size_bytes)
     return LoanDocumentUploadUrlResponse(
         upload_url=upload_info["upload_url"],
         required_headers_or_fields=upload_info.get("headers", {}),

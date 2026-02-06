@@ -156,7 +156,7 @@ configure_database() {
     msg "--- Database Configuration ---"
     prompt_input "DATABASE_URL" \
         "Enter the PostgreSQL Connection String:" \
-        "postgresql+asyncpg://sole:sole@db:5432/sole"
+        "postgresql+psycopg://sole:sole@db:5432/sole"
         
     prompt_input "REDIS_URL" \
         "Enter the Redis Connection String:" \

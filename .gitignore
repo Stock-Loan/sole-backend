@@ -30,3 +30,4 @@ backend-card.json
 
 local_uploads/
 .gemini*
+!config.prod.yaml

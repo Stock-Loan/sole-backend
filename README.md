@@ -151,16 +151,20 @@ make prod-logs
 
 The `make setup-env` script creates this. It controls your local Docker environment.
 
-- **Database:** `postgresql://user:password@db:5432/sole-db`
+- **Database:** `postgresql+psycopg://user:password@db:5432/sole-db`
 - **Redis:** `redis://redis:6379/0`
 - **Secrets:** Can be weak (e.g., `secret`) for local dev.
 
-### Production (Google Secret Manager)
+### Production (Google Secret Manager + Config File)
 
-We do **not** use `.env` files in production. Secrets are injected via Google Secret Manager.
+We do **not** use `.env` files in production. Non-secret configuration lives in
+`config.prod.yaml` and is passed to Cloud Run via `--env-vars-file`. Secrets are injected via Google Secret Manager.
+
 Ensure these secrets exist in your Google Cloud Project:
-
-- `DATABASE_URL` (Connection string to Neon/Cloud SQL)
+- `DATABASE_URL` (POOLED connection string for runtime, e.g. Neon pooler host)
+- `DATABASE_URL_DIRECT` (DIRECT connection string for migrations/admin tasks only)
+- `JWT_PRIVATE_KEY`
+- `JWT_PUBLIC_KEY`
 - `REDIS_URL`
 - `SECRET_KEY`
 - `SEED_ADMIN_EMAIL`
@@ -204,6 +208,12 @@ Ensure these secrets exist in your Google Cloud Project:
 ```bash
 gcloud run jobs update sole-db-migrate --set-env-vars SECRET_KEY="...",REDIS_URL="..."
 
+```
+
+If you are using pooled runtime connections, also set the **direct** URL for jobs:
+
+```bash
+gcloud run jobs update sole-db-migrate --set-secrets DATABASE_URL_DIRECT=DATABASE_URL_DIRECT:latest
 ```
 
 ### "Code changes aren't showing up locally"

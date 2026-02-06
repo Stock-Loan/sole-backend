@@ -4,6 +4,7 @@ from starlette.responses import Response
 
 from app.core.settings import settings
 
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Apply a set of safe default security headers for HTTP responses."""
 
