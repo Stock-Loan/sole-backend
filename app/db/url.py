@@ -18,9 +18,16 @@ def normalize_database_url(url: str) -> str:
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     ssl_val = query.get("ssl")
-    if ssl_val and ssl_val.lower() in {"1", "true", "yes", "on"}:
+    if ssl_val is not None:
+        normalized = ssl_val.lower()
         query.pop("ssl", None)
-        query.setdefault("sslmode", "require")
+        if "sslmode" not in query:
+            if normalized in {"0", "false", "no", "off", "disable"}:
+                query["sslmode"] = "disable"
+            elif normalized in {"require", "verify-ca", "verify-full"}:
+                query["sslmode"] = normalized
+            else:
+                query["sslmode"] = "require"
 
     new_query = urlencode(query, doseq=True)
     return urlunsplit((scheme, parts.netloc, parts.path, new_query, parts.fragment))
