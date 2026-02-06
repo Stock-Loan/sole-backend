@@ -6,13 +6,12 @@ import time
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.core.settings import settings
 from app.db.url import normalize_database_url
 
 logger = logging.getLogger(__name__)
-
-connect_args: dict = {}
 
 db_url = normalize_database_url(settings.database_url)
 
@@ -24,14 +23,23 @@ else:
     lowered = db_url.lower()
     db_ssl = not ("ssl=disable" in lowered or "sslmode=disable" in lowered)
 
-if db_ssl:
-    connect_args["ssl"] = ssl.create_default_context()
+def _ensure_sslmode(url: str, enable: bool) -> str:
+    if not enable or not url:
+        return url
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    if "sslmode" not in query:
+        query["sslmode"] = "require"
+    new_query = urlencode(query, doseq=True)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+
+db_url = _ensure_sslmode(db_url, db_ssl)
 
 engine = create_async_engine(
     db_url,
     future=True,
     echo=False,
-    connect_args=connect_args,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
     pool_timeout=settings.db_pool_timeout,
