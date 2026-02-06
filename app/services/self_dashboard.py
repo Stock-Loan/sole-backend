@@ -13,6 +13,8 @@ from app.models.employee_stock_grant import EmployeeStockGrant
 from app.models.loan_application import LoanApplication
 from app.models.loan_repayment import LoanRepayment
 from app.models.loan_workflow_stage import LoanWorkflowStage
+from app.models.org_user_profile import OrgUserProfile
+from app.resources.countries import SUBDIVISIONS
 from app.schemas.loan import LoanApplicationStatus
 from app.schemas.self_dashboard import (
     PendingAction,
@@ -23,6 +25,7 @@ from app.schemas.self_dashboard import (
     SelfGrantSummary,
     SelfLoanRepaymentActivity,
     SelfLoanSummary,
+    SelfProfileCompletion,
     SelfStockReservations,
     SelfStockTotals,
     SelfVestingTimeline,
@@ -49,6 +52,16 @@ from app.services import (
 
 TWOPLACES = Decimal("0.01")
 
+SELF_PROFILE_REQUIRED_FIELDS = [
+    "phone_number",
+    "timezone",
+    "marital_status",
+    "country",
+    "state",
+    "address_line1",
+    "postal_code",
+]
+
 
 def _as_decimal(value) -> Decimal:
     if isinstance(value, Decimal):
@@ -62,6 +75,39 @@ def _month_key(value: date) -> str:
 
 def _month_index(as_of: date, value: date) -> int:
     return (value.year - as_of.year) * 12 + (value.month - as_of.month)
+
+
+def _profile_completion(profile: OrgUserProfile | None) -> SelfProfileCompletion:
+    required_fields = list(SELF_PROFILE_REQUIRED_FIELDS)
+    country_value = getattr(profile, "country", None) if profile else None
+    if not country_value:
+        required_fields = [field for field in required_fields if field != "state"]
+    else:
+        subdivisions = SUBDIVISIONS.get(str(country_value).upper(), [])
+        if not subdivisions:
+            required_fields = [field for field in required_fields if field != "state"]
+
+    missing_fields: list[str] = []
+    for field in required_fields:
+        value = getattr(profile, field, None) if profile else None
+        if value is None:
+            missing_fields.append(field)
+            continue
+        if isinstance(value, str) and not value.strip():
+            missing_fields.append(field)
+
+    total_required = len(required_fields)
+    completed = max(total_required - len(missing_fields), 0)
+    percent = int(round((completed / total_required) * 100)) if total_required else 100
+    percent = max(0, min(100, percent))
+    return SelfProfileCompletion(
+        completion_percent=percent,
+        missing_fields=missing_fields,
+        required_fields=required_fields,
+        total_required_fields=total_required,
+        missing_count=len(missing_fields),
+        is_complete=len(missing_fields) == 0,
+    )
 
 
 def _grant_next_vesting(
@@ -153,6 +199,7 @@ async def build_self_dashboard_summary(
     if not membership:
         unread_count = await _unread_announcements_count(db, ctx, user_id)
         pending_total, pending_actions = await _pending_actions(db, ctx, user_id)
+        profile_completion = _profile_completion(None)
         return SelfDashboardSummary(
             as_of_date=as_of_date,
             attention=SelfDashboardAttention(
@@ -160,6 +207,7 @@ async def build_self_dashboard_summary(
                 pending_actions_count=pending_total,
                 pending_actions=pending_actions,
             ),
+            profile_completion=profile_completion,
             stock_totals=SelfStockTotals(
                 grant_count=0,
                 total_granted_shares=0,
@@ -194,6 +242,12 @@ async def build_self_dashboard_summary(
             ),
             repayment_activity=SelfLoanRepaymentActivity(),
         )
+    profile_stmt = select(OrgUserProfile).where(
+        OrgUserProfile.org_id == ctx.org_id,
+        OrgUserProfile.membership_id == membership.id,
+    )
+    profile = (await db.execute(profile_stmt)).scalar_one_or_none()
+    profile_completion = _profile_completion(profile)
     grants = await vesting_engine.load_active_grants(db, ctx, membership.id)
 
     reserved_by_grant = {}
@@ -422,6 +476,7 @@ async def build_self_dashboard_summary(
             pending_actions_count=pending_total,
             pending_actions=pending_actions,
         ),
+        profile_completion=profile_completion,
         stock_totals=SelfStockTotals(
             grant_count=len(grants),
             total_granted_shares=totals.total_granted_shares,

@@ -29,6 +29,15 @@ class SelfDashboardAttention(BaseModel):
     pending_actions: list[PendingAction] = Field(default_factory=list)
 
 
+class SelfProfileCompletion(BaseModel):
+    completion_percent: int
+    missing_fields: list[str] = Field(default_factory=list)
+    required_fields: list[str] = Field(default_factory=list)
+    total_required_fields: int
+    missing_count: int
+    is_complete: bool
+
+
 class SelfStockTotals(BaseModel):
     grant_count: int
     total_granted_shares: int
@@ -125,6 +134,7 @@ class SelfLoanRepaymentActivity(BaseModel):
 class SelfDashboardSummary(BaseModel):
     as_of_date: date
     attention: SelfDashboardAttention
+    profile_completion: SelfProfileCompletion
     stock_totals: SelfStockTotals
     stock_eligibility: EligibilityResult
     vesting_timeline: SelfVestingTimeline

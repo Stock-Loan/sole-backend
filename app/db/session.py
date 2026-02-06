@@ -47,7 +47,8 @@ def _set_statement_timeout(dbapi_connection, _connection_record) -> None:
         return
     cursor = dbapi_connection.cursor()
     try:
-        cursor.execute("SET statement_timeout = %s", (timeout_ms,))
+        # Postgres does not accept bound params for SET, so inline a sanitized int.
+        cursor.execute(f"SET statement_timeout = {int(timeout_ms)}")
     finally:
         cursor.close()
 
