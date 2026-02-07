@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -22,6 +21,24 @@ from app.services import pbgc_rates, settings as settings_service
 router = APIRouter(prefix="/self", tags=["self"])
 
 
+async def _load_roles_for_user_in_org(
+    db: AsyncSession,
+    user_id,
+    org_id: str,
+) -> list[Role]:
+    stmt = (
+        select(Role)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(
+            UserRole.user_id == user_id,
+            UserRole.org_id == org_id,
+            Role.org_id == org_id,
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
 @router.get(
     "/context",
     response_model=SelfContextResponse,
@@ -38,17 +55,7 @@ async def get_self_context(
     if not org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
 
-    roles_stmt = (
-        select(Role)
-        .join(UserRole, UserRole.role_id == Role.id)
-        .where(
-            UserRole.user_id == current_user.id,
-            Role.org_id == ctx.org_id,
-            UserRole.org_id == ctx.org_id,
-        )
-    )
-    roles_result = await db.execute(roles_stmt)
-    roles = roles_result.scalars().all()
+    roles = await _load_roles_for_user_in_org(db, current_user.id, ctx.org_id)
 
     # Effective permissions from roles (ACLs not included here)
     perm_set: set[str] = set()
@@ -105,16 +112,14 @@ async def get_self_profile(
             & (OrgUserProfile.org_id == OrgMembership.org_id),
         )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == current_user.id)
-        .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user, dept, profile = row
-    await db.refresh(user, attribute_names=["roles"])
     membership.department_name = dept.name if dept else None
-    roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
     user_summary = UserSummary.model_validate(
         {
             "id": user.id,
@@ -181,19 +186,17 @@ async def update_self_profile(
             & (OrgUserProfile.org_id == OrgMembership.org_id),
         )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == current_user.id)
-        .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     membership, user, dept, profile = row
-    await db.refresh(user, attribute_names=["roles"])
     membership.department_name = dept.name if dept else None
 
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
-        roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+        roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
         user_summary = UserSummary.model_validate(
             {
                 "id": user.id,
@@ -252,7 +255,7 @@ async def update_self_profile(
     await db.refresh(user)
     await db.refresh(membership)
 
-    roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
     user_summary = UserSummary.model_validate(
         {
             "id": user.id,

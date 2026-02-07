@@ -46,9 +46,10 @@ class User(Base):
 
     @property
     def profile(self):
-        memberships = getattr(self, "memberships", None) or []
+        memberships = self.__dict__.get("memberships") or []
         if memberships:
-            return memberships[0].profile
+            first_membership = memberships[0]
+            return first_membership.__dict__.get("profile")
         return None
 
     @property

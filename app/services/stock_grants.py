@@ -403,7 +403,7 @@ async def update_grant(
 
     db.add(grant)
     await db.commit()
-    await db.refresh(grant)
+    await db.refresh(grant, attribute_names=["vesting_events"])
     _apply_vesting_summary(grant)
     await _record_audit_log(
         db,

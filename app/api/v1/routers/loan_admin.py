@@ -590,7 +590,12 @@ async def get_loan(
     activated = await loan_workflow.try_activate_loan(db, ctx, application)
     if activated:
         await db.commit()
-        await db.refresh(application)
+        refreshed = await loan_applications.get_application_with_related(db, ctx, loan_id)
+        if not refreshed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+            )
+        application = refreshed
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
         application
     )
@@ -1310,12 +1315,18 @@ async def update_loan(
             detail={"code": "invalid_status_transition", "message": str(exc), "details": {}},
         ) from exc
 
+    refreshed = await loan_applications.get_application_with_related(db, ctx, updated.id)
+    if refreshed is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
+
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
-        updated
+        refreshed
     )
-    applicant = await _fetch_applicant_summary(db, ctx, updated)
-    payment_fields = await _payment_status_fields(db, ctx, updated)
-    return LoanApplicationDTO.model_validate(updated).model_copy(
+    applicant = await _fetch_applicant_summary(db, ctx, refreshed)
+    payment_fields = await _payment_status_fields(db, ctx, refreshed)
+    return LoanApplicationDTO.model_validate(refreshed).model_copy(
         update={
             "has_share_certificate": has_share_certificate,
             "has_83b_election": has_83b_election,
@@ -1375,7 +1386,9 @@ async def edit_loan_application(
 
     refreshed = await loan_applications.get_application_with_related(db, ctx, updated.id)
     if refreshed is None:
-        refreshed = updated
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
     has_share_certificate, has_83b_election, days_until = loan_applications._compute_workflow_flags(
         refreshed
     )

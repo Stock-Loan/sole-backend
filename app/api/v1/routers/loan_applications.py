@@ -252,7 +252,14 @@ async def get_loan_application(
     activated = await loan_workflow.try_activate_loan(db, ctx, application)
     if activated:
         await db.commit()
-        await db.refresh(application)
+        refreshed = await loan_applications.get_application_with_related(
+            db, ctx, application.id, membership_id=membership.id
+        )
+        if not refreshed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+            )
+        application = refreshed
     last_edit_note, last_edited_at, last_edited_by = await _fetch_last_edit_note(
         db, ctx, application.id
     )
@@ -295,8 +302,11 @@ async def create_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, application.id, membership_id=membership.id
     )
-    target = hydrated or application
-    return _build_self_payload(target)
+    if hydrated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
+    return _build_self_payload(hydrated)
 
 
 @router.patch(
@@ -349,8 +359,11 @@ async def update_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, updated.id, membership_id=membership.id
     )
-    target = hydrated or updated
-    return _build_self_payload(target)
+    if hydrated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
+    return _build_self_payload(hydrated)
 
 
 @router.post(
@@ -409,8 +422,11 @@ async def submit_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, submitted.id, membership_id=membership.id
     )
-    target = hydrated or submitted
-    return _build_self_payload(target)
+    if hydrated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
+    return _build_self_payload(hydrated)
 
 
 @router.post(
@@ -457,5 +473,8 @@ async def cancel_loan_application(
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, cancelled.id, membership_id=membership.id
     )
-    target = hydrated or cancelled
-    return _build_self_payload(target)
+    if hydrated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
+        )
+    return _build_self_payload(hydrated)

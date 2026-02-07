@@ -59,8 +59,9 @@ class LoanRepayment(Base):
 
     @property
     def recorded_by_name(self) -> str | None:
-        user = getattr(self, "recorded_by_user", None)
+        # Avoid implicit lazy-loads in async contexts.
+        user = self.__dict__.get("recorded_by_user")
         if not user:
             return None
-        profile = getattr(user, "profile", None)
+        profile = user.__dict__.get("profile")
         return profile.full_name if profile and profile.full_name else user.email

@@ -40,6 +40,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/org/users", tags=["users"])
 
 
+async def _load_roles_for_user_in_org(
+    db: AsyncSession,
+    user_id,
+    org_id: str,
+) -> list[Role]:
+    stmt = (
+        select(Role)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.org_id == org_id, UserRole.user_id == user_id, Role.org_id == org_id)
+    )
+    return (await db.execute(stmt)).scalars().all()
+
+
 def _user_summary(user: UserModel, profile: OrgUserProfile | None, *, org_id: str) -> UserSummary:
     data = {
         "id": user.id,
@@ -455,7 +468,6 @@ async def update_membership(
             & (OrgUserProfile.org_id == OrgMembership.org_id),
         )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
-        .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
@@ -475,7 +487,7 @@ async def update_membership(
     if (membership.platform_status and membership.platform_status.upper() != "ACTIVE") or (
         membership.employment_status and membership.employment_status.upper() != "ACTIVE"
     ):
-        roles_to_remove = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+        roles_to_remove = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
         await db.execute(
             delete(UserRole)
             .where(UserRole.org_id == ctx.org_id, UserRole.user_id == membership.user_id)
@@ -508,11 +520,7 @@ async def update_membership(
         )
     await db.refresh(membership)
     await db.refresh(user)
-    # Refresh logic for roles is tricky here because we just deleted them.
-    # But since we eager loaded them initially, the object might still have stale roles?
-    # No, we modified DB. We should expire the relationship or reload.
-    await db.refresh(user, attribute_names=["roles"])
-    user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    user_roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
     record_audit_log(
         db,
         ctx,
@@ -566,7 +574,6 @@ async def update_user_profile(
             & (OrgUserProfile.org_id == OrgMembership.org_id),
         )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
-        .options(selectinload(UserModel.roles).selectinload(UserRole.role))
     )
     result = await db.execute(stmt)
     row = result.one_or_none()
@@ -614,7 +621,7 @@ async def update_user_profile(
     await db.refresh(user)
     await db.refresh(membership)
     await db.refresh(profile)
-    user_roles = [ur.role for ur in user.roles if ur.org_id == ctx.org_id]
+    user_roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
     record_audit_log(
         db,
         ctx,
