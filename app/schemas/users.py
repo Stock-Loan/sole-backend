@@ -25,6 +25,10 @@ class UserSummary(BaseModel):
     marital_status: MaritalStatus | None = None
     country: str | None = None
     state: str | None = None
+    country_code: str | None = None
+    state_code: str | None = None
+    country_name: str | None = None
+    state_name: str | None = None
     address_line1: str | None = None
     address_line2: str | None = None
     postal_code: str | None = None

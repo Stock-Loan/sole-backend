@@ -11,6 +11,7 @@ from app.models.org import Org
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_role import UserRole
+from app.resources.countries import COUNTRIES, SUBDIVISIONS
 from app.schemas.self import OrgSummary, RoleSummary, SelfContextResponse, SelfProfileUpdateRequest
 from app.schemas.settings import MfaEnforcementAction
 from app.schemas.settings import OrgPolicyResponse
@@ -19,6 +20,12 @@ from app.services.audit import model_snapshot, record_audit_log
 from app.services import pbgc_rates, settings as settings_service
 
 router = APIRouter(prefix="/self", tags=["self"])
+
+COUNTRY_NAME_BY_CODE = {entry["code"].upper(): entry["name"] for entry in COUNTRIES}
+SUBDIVISION_NAME_BY_COUNTRY_AND_CODE = {
+    country_code.upper(): {sub["code"].upper(): sub["name"] for sub in subdivisions}
+    for country_code, subdivisions in SUBDIVISIONS.items()
+}
 
 
 async def _load_roles_for_user_in_org(
@@ -37,6 +44,61 @@ async def _load_roles_for_user_in_org(
     )
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+def _resolve_location_names(
+    country_code: str | None, state_code: str | None
+) -> tuple[str | None, str | None]:
+    normalized_country = country_code.upper() if country_code else None
+    normalized_state = state_code.upper() if state_code else None
+
+    country_name = (
+        COUNTRY_NAME_BY_CODE.get(normalized_country, country_code)
+        if country_code
+        else None
+    )
+    state_name = None
+    if normalized_country and normalized_state:
+        state_name = SUBDIVISION_NAME_BY_COUNTRY_AND_CODE.get(normalized_country, {}).get(
+            normalized_state
+        )
+    if not state_name and state_code:
+        state_name = state_code
+
+    return country_name, state_name
+
+
+def _build_user_summary_payload(user: User, profile, org_id: str) -> dict:
+    country_code = profile.country if profile else None
+    state_code = profile.state if profile else None
+    country_name, state_name = _resolve_location_names(country_code, state_code)
+
+    return {
+        "id": user.id,
+        "org_id": org_id,
+        "email": user.email,
+        "is_active": user.is_active,
+        "is_superuser": user.is_superuser,
+        "mfa_enabled": user.mfa_enabled,
+        "created_at": user.created_at,
+        "first_name": profile.first_name if profile else None,
+        "middle_name": profile.middle_name if profile else None,
+        "last_name": profile.last_name if profile else None,
+        "preferred_name": profile.preferred_name if profile else None,
+        "timezone": profile.timezone if profile else None,
+        "phone_number": profile.phone_number if profile else None,
+        "marital_status": profile.marital_status if profile else None,
+        # Self profile returns display names while preserving raw codes for edit workflows.
+        "country": country_name,
+        "state": state_name,
+        "country_code": country_code,
+        "state_code": state_code,
+        "country_name": country_name,
+        "state_name": state_name,
+        "address_line1": profile.address_line1 if profile else None,
+        "address_line2": profile.address_line2 if profile else None,
+        "postal_code": profile.postal_code if profile else None,
+    }
 
 
 @router.get(
@@ -120,29 +182,7 @@ async def get_self_profile(
     membership, user, dept, profile = row
     membership.department_name = dept.name if dept else None
     roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
-    user_summary = UserSummary.model_validate(
-        {
-            "id": user.id,
-            "org_id": ctx.org_id,
-            "email": user.email,
-            "is_active": user.is_active,
-            "is_superuser": user.is_superuser,
-            "mfa_enabled": user.mfa_enabled,
-            "created_at": user.created_at,
-            "first_name": profile.first_name if profile else None,
-            "middle_name": profile.middle_name if profile else None,
-            "last_name": profile.last_name if profile else None,
-            "preferred_name": profile.preferred_name if profile else None,
-            "timezone": profile.timezone if profile else None,
-            "phone_number": profile.phone_number if profile else None,
-            "marital_status": profile.marital_status if profile else None,
-            "country": profile.country if profile else None,
-            "state": profile.state if profile else None,
-            "address_line1": profile.address_line1 if profile else None,
-            "address_line2": profile.address_line2 if profile else None,
-            "postal_code": profile.postal_code if profile else None,
-        }
-    )
+    user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
     return UserDetailResponse(user=user_summary, membership=membership, roles=roles)
 
 
@@ -197,29 +237,7 @@ async def update_self_profile(
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
-        user_summary = UserSummary.model_validate(
-            {
-                "id": user.id,
-                "org_id": ctx.org_id,
-                "email": user.email,
-                "is_active": user.is_active,
-                "is_superuser": user.is_superuser,
-                "mfa_enabled": user.mfa_enabled,
-                "created_at": user.created_at,
-                "first_name": profile.first_name if profile else None,
-                "middle_name": profile.middle_name if profile else None,
-                "last_name": profile.last_name if profile else None,
-                "preferred_name": profile.preferred_name if profile else None,
-                "timezone": profile.timezone if profile else None,
-                "phone_number": profile.phone_number if profile else None,
-                "marital_status": profile.marital_status if profile else None,
-                "country": profile.country if profile else None,
-                "state": profile.state if profile else None,
-                "address_line1": profile.address_line1 if profile else None,
-                "address_line2": profile.address_line2 if profile else None,
-                "postal_code": profile.postal_code if profile else None,
-            }
-        )
+        user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
         return UserDetailResponse(user=user_summary, membership=membership, roles=roles)
 
     for field, value in list(updates.items()):
@@ -256,27 +274,5 @@ async def update_self_profile(
     await db.refresh(membership)
 
     roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
-    user_summary = UserSummary.model_validate(
-        {
-            "id": user.id,
-            "org_id": ctx.org_id,
-            "email": user.email,
-            "is_active": user.is_active,
-            "is_superuser": user.is_superuser,
-            "mfa_enabled": user.mfa_enabled,
-            "created_at": user.created_at,
-            "first_name": profile.first_name if profile else None,
-            "middle_name": profile.middle_name if profile else None,
-            "last_name": profile.last_name if profile else None,
-            "preferred_name": profile.preferred_name if profile else None,
-            "timezone": profile.timezone if profile else None,
-            "phone_number": profile.phone_number if profile else None,
-            "marital_status": profile.marital_status if profile else None,
-            "country": profile.country if profile else None,
-            "state": profile.state if profile else None,
-            "address_line1": profile.address_line1 if profile else None,
-            "address_line2": profile.address_line2 if profile else None,
-            "postal_code": profile.postal_code if profile else None,
-        }
-    )
+    user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
     return UserDetailResponse(user=user_summary, membership=membership, roles=roles)
