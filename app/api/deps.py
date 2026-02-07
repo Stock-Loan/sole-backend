@@ -139,6 +139,9 @@ async def get_tenant_context(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Tenant header does not match default org",
         )
+    org_stmt = select(Org.id).where(Org.id == default_org)
+    if (await db.execute(org_stmt)).scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
     set_tenant_id(default_org)
     return TenantContext(org_id=default_org)
 

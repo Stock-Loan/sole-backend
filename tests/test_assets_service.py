@@ -1,12 +1,3 @@
-import sys
-from unittest.mock import MagicMock
-
-# Mock settings BEFORE any app imports
-mock_settings = MagicMock()
-mock_settings.settings = MagicMock()
-mock_settings.settings.local_upload_dir = "local_uploads"
-sys.modules["app.core.settings"] = mock_settings
-
 import pytest
 from uuid import uuid4
 from unittest.mock import MagicMock, AsyncMock
@@ -14,15 +5,13 @@ from app.services.storage.key_generator import KeyGenerator
 from app.schemas.assets import UploadSessionRequest
 from app.models.asset import Asset
 
-# We need to manually import AssetService after mocking settings
-# But wait, AssetService imports LocalFileSystemAdapter which imports Path...
-# And KeyGenerator is pure logic.
-
-# Let's import AssetService safely
 from app.services.storage.service import AssetService
 
 # Mock storage adapter to avoid using real settings/local IO
 class MockAdapter:
+    provider = "local"
+    bucket = None
+
     def generate_upload_url(self, object_key, content_type, size_bytes):
         return {
             "upload_url": f"http://mock-upload/{object_key}",
@@ -87,7 +76,10 @@ def test_key_generator():
 @pytest.mark.asyncio
 async def test_asset_service_create_session(mock_db, monkeypatch):
     # Patch the adapter factory
-    monkeypatch.setattr("app.services.storage.service.get_storage_adapter", lambda config=None: MockAdapter())
+    monkeypatch.setattr(
+        "app.services.storage.service.get_storage_adapter",
+        lambda config=None, **kwargs: MockAdapter(),
+    )
     
     service = AssetService(mock_db)
     
@@ -111,29 +103,47 @@ async def test_asset_service_create_session(mock_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_asset_service_finalize(mock_db, monkeypatch):
-    monkeypatch.setattr("app.services.storage.service.get_storage_adapter", lambda config=None: MockAdapter())
+    monkeypatch.setattr(
+        "app.services.storage.service.get_storage_adapter",
+        lambda config=None, **kwargs: MockAdapter(),
+    )
     
     service = AssetService(mock_db)
     asset_id = uuid4()
+    service._get_asset = AsyncMock(
+        return_value=Asset(
+            id=asset_id,
+            org_id="org-1",
+            status="pending",
+            object_key="mock/key",
+            filename="test.pdf",
+        )
+    )
     
     # We rely on mock_db.get returning an asset
-    asset = await service.finalize_upload(asset_id)
+    asset = await service.finalize_upload(asset_id, org_id="org-1")
     
     assert asset.status == "uploaded"
     assert mock_db.commit.called
 
 @pytest.mark.asyncio
 async def test_asset_service_download(mock_db, monkeypatch):
-    monkeypatch.setattr("app.services.storage.service.get_storage_adapter", lambda config=None: MockAdapter())
+    monkeypatch.setattr(
+        "app.services.storage.service.get_storage_adapter",
+        lambda config=None, **kwargs: MockAdapter(),
+    )
     
     service = AssetService(mock_db)
     asset_id = uuid4()
-    
-    # Mock asset needs to be uploaded for download to work
-    async def mock_get_uploaded(model, id):
-        return Asset(id=id, status="uploaded", object_key="mock/key", org_id="org-1", filename="f.txt")
-        
-    mock_db.get = mock_get_uploaded
-    
-    url = await service.get_download_url(asset_id)
+    service._get_asset = AsyncMock(
+        return_value=Asset(
+            id=asset_id,
+            status="uploaded",
+            object_key="mock/key",
+            org_id="org-1",
+            filename="f.txt",
+        )
+    )
+
+    url = await service.get_download_url(asset_id, org_id="org-1")
     assert url == "http://mock-download/mock/key"

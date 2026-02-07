@@ -17,10 +17,11 @@ def normalize_database_url(url: str) -> str:
         scheme = "postgresql+psycopg"
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    ssl_val = query.get("ssl")
+    ssl_key = next((key for key in query if key.lower() == "ssl"), None)
+    ssl_val = query.get(ssl_key) if ssl_key else None
     if ssl_val is not None:
-        normalized = ssl_val.lower()
-        query.pop("ssl", None)
+        normalized = ssl_val.lower().strip()
+        query.pop(ssl_key, None)
         if "sslmode" not in query:
             if normalized in {"0", "false", "no", "off", "disable"}:
                 query["sslmode"] = "disable"

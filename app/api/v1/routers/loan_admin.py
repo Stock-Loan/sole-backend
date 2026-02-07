@@ -2215,7 +2215,6 @@ async def update_legal_stage(
 ) -> LoanWorkflowStageDTO:
     stage = await _get_legal_stage_or_404(db, ctx, loan_id)
     stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
-    stage.loan_application = await _get_application_or_404(db, ctx, loan_id)
     old_snapshot = model_snapshot(stage)
     if payload.status not in {
         LoanWorkflowStageStatus.IN_PROGRESS,

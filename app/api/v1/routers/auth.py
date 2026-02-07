@@ -740,7 +740,10 @@ async def refresh_tokens(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="CSRF validation failed",
             )
-    token_data = decode_token(refresh_token, expected_type="refresh")
+    try:
+        token_data = decode_token(refresh_token, expected_type="refresh")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     user_id = token_data.get("sub")
     token_version = token_data.get("tv")
     jti = token_data.get("jti")

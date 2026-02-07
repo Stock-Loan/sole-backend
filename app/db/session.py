@@ -1,7 +1,6 @@
 from collections.abc import AsyncGenerator
 import logging
 import os
-import ssl
 import time
 
 from sqlalchemy import event

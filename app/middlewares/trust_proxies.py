@@ -22,10 +22,10 @@ class TrustedProxiesMiddleware(BaseHTTPMiddleware):
                 # The header is a comma-separated list: "client, proxy1, proxy2"
                 ips = [ip.strip() for ip in x_forwarded_for.split(",")]
 
-                # If we have enough IPs in the chain, trust the Nth one from the end.
-                # Render/AWS LB guarantees appending to the end.
-                if len(ips) >= self.proxies_count:
-                    real_ip = ips[-self.proxies_count]
+                # X-Forwarded-For is: "client, proxy1, proxy2, ...".
+                # If we trust N proxies at the end, the client is at index -(N+1).
+                if len(ips) > self.proxies_count:
+                    real_ip = ips[-(self.proxies_count + 1)]
 
                     # Update the scope so that request.client.host returns this IP.
                     # This ensures 'slowapi' and logging see the correct address.
