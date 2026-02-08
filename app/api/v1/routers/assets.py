@@ -5,7 +5,7 @@ from app.schemas.assets import UploadSessionRequest, UploadSessionResponse, Asse
 from app.services.storage.service import AssetService
 from app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.services.storage.adapter import LocalFileSystemAdapter
+from app.services.storage.adapter import LocalFileSystemAdapter, verify_local_url_signature
 from app.core.settings import settings
 from app.api import deps
 from app.models import Asset, User
@@ -88,14 +88,19 @@ async def get_download_url(
 async def upload_local_content(
     request: Request,
     key: str = Query(...),
+    expires: int = Query(...),
+    signature: str = Query(...),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(deps.require_authenticated_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ):
-    # This simulates S3 PUT
-    # Security: In real dev, verify key structure.
     if settings.storage_provider != "local":
         raise HTTPException(status_code=404, detail="Not supported")
+    if not verify_local_url_signature(settings.secret_key, key, expires, signature):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or expired URL signature",
+        )
     await _require_asset_for_org(db, object_key=key, org_id=ctx.org_id)
     body = await request.body()
 
@@ -111,13 +116,19 @@ async def upload_local_content(
 @router.get("/local-content")
 async def get_local_content(
     key: str = Query(...),
+    expires: int = Query(...),
+    signature: str = Query(...),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(deps.require_authenticated_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ):
-    # This simulates S3 GET
     if settings.storage_provider != "local":
         raise HTTPException(status_code=404, detail="Not supported")
+    if not verify_local_url_signature(settings.secret_key, key, expires, signature):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or expired URL signature",
+        )
     await _require_asset_for_org(db, object_key=key, org_id=ctx.org_id)
     adapter = LocalFileSystemAdapter(base_path=settings.local_upload_dir, base_url="")
     try:
@@ -126,7 +137,6 @@ async def get_local_content(
         raise HTTPException(status_code=400, detail=str(e))
     if not path.exists():
         raise HTTPException(status_code=404)
-    # Simple file serve
     from fastapi.responses import FileResponse
 
     return FileResponse(path)

@@ -2,6 +2,33 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict
 from pathlib import Path, PurePosixPath
 from datetime import timedelta
+import hashlib
+import hmac
+import time
+from urllib.parse import urlencode
+
+
+def _sign_local_url(secret_key: str, object_key: str, expires: int) -> str:
+    """Create HMAC-SHA256 signature for a local storage URL."""
+    message = f"{object_key}:{expires}"
+    return hmac.new(
+        secret_key.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def verify_local_url_signature(
+    secret_key: str, object_key: str, expires: int, signature: str
+) -> bool:
+    """Verify HMAC signature and expiry for a local storage URL.
+
+    Returns False if the signature is invalid or the URL has expired.
+    """
+    if int(time.time()) > expires:
+        return False
+    expected = _sign_local_url(secret_key, object_key, expires)
+    return hmac.compare_digest(expected, signature)
 
 
 class StorageAdapter(ABC):
@@ -37,9 +64,10 @@ class StorageAdapter(ABC):
 
 
 class LocalFileSystemAdapter(StorageAdapter):
-    def __init__(self, base_path: str, base_url: str):
+    def __init__(self, base_path: str, base_url: str, *, signing_key: str = ""):
         self.base_path = Path(base_path)
         self.base_url = base_url.rstrip("/")
+        self.signing_key = signing_key
         self.provider = "local"
         self.bucket = "local"
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -62,34 +90,21 @@ class LocalFileSystemAdapter(StorageAdapter):
     def generate_upload_url(
         self, object_key: str, content_type: str, size_bytes: int
     ) -> Dict[str, Any]:
-        # For local, we direct them to a backend endpoint that handles the write
-        # We need to sign this or just use the asset ID if we trust the flow.
-        # Ideally, we return a URL like /api/v1/assets/local-upload?key=...&sig=...
-        # For simplicity in this prototype, we'll assume the API has a general handler.
-
-        # We'll encode the key in the URL.
-        # WARNING: In a real app, this should be a signed URL to prevent tampering.
-        # Since we don't have a signing mechanism handy here without circular deps,
-        # we will rely on the asset_id being checked at the endpoint.
-
-        # Actually, the user prompts says:
-        # "returns { assetId, uploadUrl, requiredHeadersOrFields }"
-        # And then "Client uploads directly to storage."
-
-        # For local, "storage" is the API server.
-        # Let's say we have an endpoint PUT /api/v1/assets/content/{object_key_base64}
-
-        # Minimal implementation:
+        expires = int(time.time()) + 900  # 15-minute window for upload
+        sig = _sign_local_url(self.signing_key, object_key, expires)
+        params = urlencode({"key": object_key, "expires": expires, "signature": sig})
         return {
-            "upload_url": f"{self.base_url}/api/v1/assets/local-content?key={object_key}",
+            "upload_url": f"{self.base_url}/api/v1/assets/local-content?{params}",
             "method": "PUT",
             "headers": {"Content-Type": content_type},
             "fields": {},
         }
 
     def generate_download_url(self, object_key: str, expires_in: int = 3600) -> str:
-        # Local download endpoint
-        return f"{self.base_url}/api/v1/assets/local-content?key={object_key}"
+        expires = int(time.time()) + expires_in
+        sig = _sign_local_url(self.signing_key, object_key, expires)
+        params = urlencode({"key": object_key, "expires": expires, "signature": sig})
+        return f"{self.base_url}/api/v1/assets/local-content?{params}"
 
     def delete_object(self, object_key: str):
         path = self._resolve_safe_path(object_key)

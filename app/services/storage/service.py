@@ -31,7 +31,11 @@ def get_storage_adapter(
         )
 
     base_url = settings.public_base_url
-    return LocalFileSystemAdapter(base_path=settings.local_upload_dir, base_url=base_url)
+    return LocalFileSystemAdapter(
+        base_path=settings.local_upload_dir,
+        base_url=base_url,
+        signing_key=settings.secret_key,
+    )
 
 
 class AssetService:
