@@ -36,8 +36,8 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Tenant-ID", "X-CSRF-Token", "X-Step-Up-Token"],
     )
     app.include_router(api_router, prefix="/api/v1")
     register_event_handlers(app)

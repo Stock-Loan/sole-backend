@@ -80,7 +80,7 @@ async def _cache_permissions(
 ) -> None:
     key = f"permissions:{org_id}:{user_id}"
     try:
-        await redis.setex(key, 3600, json.dumps(list(permissions)))  # 1 hour TTL
+        await redis.setex(key, 300, json.dumps(list(permissions)))  # 5 minute TTL
     except Exception as e:
         logger.error(f"Redis error caching permissions: {e}")
 
@@ -151,6 +151,21 @@ async def check_permission(
 ) -> bool:
     """Compute effective permissions from role buckets plus optional resource-scoped ACL entries."""
     if user.is_superuser:
+        target = (
+            permission_code.value
+            if isinstance(permission_code, PermissionCode)
+            else str(permission_code)
+        )
+        logger.warning(
+            "Superuser permission bypass",
+            extra={
+                "user_id": str(user.id),
+                "org_id": ctx.org_id,
+                "permission": target,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+            },
+        )
         return True
 
     target = (
@@ -337,6 +352,7 @@ async def ensure_user_in_role(db: AsyncSession, org_id: str, user_id, role: Role
         return
     db.add(UserRole(org_id=org_id, user_id=user_id, role_id=role.id))
     await db.commit()
+    await invalidate_permission_cache(str(user_id), org_id)
 
 
 async def ensure_org_admin_for_seed_user(

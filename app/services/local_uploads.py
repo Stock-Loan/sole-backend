@@ -7,6 +7,42 @@ from uuid import UUID
 from fastapi import UploadFile
 
 
+# Magic byte signatures for known binary file types.
+# Used to cross-check that uploaded file content matches the claimed extension.
+_MAGIC_SIGNATURES: dict[str, list[bytes]] = {
+    ".pdf": [b"%PDF"],
+    ".png": [b"\x89PNG\r\n\x1a\n"],
+    ".jpg": [b"\xff\xd8\xff"],
+    ".jpeg": [b"\xff\xd8\xff"],
+    ".gif": [b"GIF87a", b"GIF89a"],
+    ".webp": [b"RIFF"],
+    ".docx": [b"PK\x03\x04", b"PK\x05\x06"],
+    ".xlsx": [b"PK\x03\x04", b"PK\x05\x06"],
+    ".zip": [b"PK\x03\x04", b"PK\x05\x06"],
+}
+
+# Extensions whose content can execute scripts when rendered in a browser.
+_DANGEROUS_EXTENSIONS = {".html", ".htm", ".svg", ".xhtml", ".js", ".mjs", ".xml"}
+
+
+def _validate_content_type(header_bytes: bytes, ext: str) -> None:
+    """Validate that file content matches claimed extension via magic bytes.
+
+    Raises ValueError if the content does not match or the extension is dangerous.
+    """
+    if ext in _DANGEROUS_EXTENSIONS:
+        raise ValueError(
+            f"File type '{ext}' is not allowed because it may contain executable content"
+        )
+    signatures = _MAGIC_SIGNATURES.get(ext)
+    if signatures is None:
+        return  # Unknown binary type or text-based — skip magic-byte check
+    if not any(header_bytes.startswith(sig) for sig in signatures):
+        raise ValueError(
+            f"File content does not match the expected format for '{ext}'"
+        )
+
+
 def _safe_filename(filename: str | None, fallback: str) -> str:
     if not filename:
         return fallback
@@ -46,6 +82,10 @@ async def save_upload(
     dest_path = dest_dir / dest_name
 
     with dest_path.open("wb") as handle:
+        first_chunk = await file.read(1024 * 1024)
+        if first_chunk:
+            _validate_content_type(first_chunk, ext)
+            handle.write(first_chunk)
         while True:
             chunk = await file.read(1024 * 1024)
             if not chunk:

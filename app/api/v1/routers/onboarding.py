@@ -34,6 +34,7 @@ from app.models.user_role import UserRole
 from app.models.role import Role
 from app.models.department import Department
 from app.services import onboarding
+from app.services import authz
 from app.services.audit import model_snapshot, record_audit_log
 from app.services import settings as settings_service
 
@@ -500,6 +501,7 @@ async def update_membership(
         identity.token_version += 1
         db.add(identity)
         await db.commit()
+        await authz.invalidate_permission_cache(str(membership.user_id), ctx.org_id)
         for role in roles_to_remove:
             record_audit_log(
                 db,

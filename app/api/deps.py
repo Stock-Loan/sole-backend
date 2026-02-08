@@ -406,7 +406,7 @@ async def _require_mfa_for_request(
         payload = decode_token(token, expected_type="access")
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    logger.info(f"Token claims: mfa={payload.get('mfa')}, mfa_method={payload.get('mfa_method')}")
+    logger.debug(f"Token claims: mfa={payload.get('mfa')}, mfa_method={payload.get('mfa_method')}")
     if not payload.get("mfa"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA required")
 

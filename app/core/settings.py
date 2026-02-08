@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     auth_cookie_path: str = Field(default="/api/v1/auth/refresh", alias="AUTH_COOKIE_PATH")
     auth_cookie_secure: bool = Field(default=True, alias="AUTH_COOKIE_SECURE")
     auth_cookie_samesite: Literal["lax", "strict", "none"] = Field(
-        default="none", alias="AUTH_COOKIE_SAMESITE"
+        default="lax", alias="AUTH_COOKIE_SAMESITE"
     )
     content_security_policy: str | None = Field(default=None, alias="CONTENT_SECURITY_POLICY")
     content_security_policy_report_only: bool = Field(

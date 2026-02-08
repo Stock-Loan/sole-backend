@@ -106,10 +106,7 @@ class AssetService:
 
         adapter = get_storage_adapter(bucket_override=asset.bucket)
         if not adapter.object_exists(asset.object_key):
-            # For local dev, maybe the client calls the local-content endpoint which writes it?
-            # If using S3, we check HEAD.
-            pass
-            # raise ValueError("Object not found in storage")
+            raise ValueError("Object not found in storage")
 
         asset.status = "uploaded"
         asset.updated_at = datetime.now(timezone.utc)
