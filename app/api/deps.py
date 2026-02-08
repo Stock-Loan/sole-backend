@@ -365,7 +365,7 @@ async def require_authenticated_user(current_user: User = Depends(get_current_us
     return current_user
 
 
-def _extract_step_up_token(request: Request) -> str | None:
+def extract_step_up_token(request: Request) -> str | None:
     """Extract step-up token from X-Step-Up-Token header."""
     return request.headers.get("X-Step-Up-Token")
 
@@ -384,7 +384,7 @@ async def _require_mfa_for_request(
 
     # For action-level MFA, check for step-up token first
     if action is not None:
-        step_up_token = _extract_step_up_token(request)
+        step_up_token = extract_step_up_token(request)
         if step_up_token:
             try:
                 step_up_payload = decode_step_up_token(step_up_token)

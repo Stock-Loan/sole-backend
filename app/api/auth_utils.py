@@ -6,14 +6,9 @@ from app.core.security import verify_password, create_step_up_challenge_token, d
 from app.core.settings import settings
 from app.utils.login_security import check_lockout, rate_limit, register_login_attempt
 from app.models import User
-from app.api.deps import StepUpMfaRequired
+from app.api.deps import StepUpMfaRequired, extract_step_up_token
 
 _FAKE_HASH = "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWrn3ILAWO.P3K.fc8G2.0G7u6g.2"
-
-
-def _extract_step_up_token(request: Request) -> str | None:
-    """Extract step-up token from X-Step-Up-Token header."""
-    return request.headers.get("X-Step-Up-Token")
 
 
 async def require_step_up_mfa(
@@ -26,7 +21,7 @@ async def require_step_up_mfa(
     Require step-up MFA verification for a sensitive action.
     Raises StepUpMfaRequired if no valid step-up token is present.
     """
-    step_up_token = _extract_step_up_token(request)
+    step_up_token = extract_step_up_token(request)
     if step_up_token:
         try:
             step_up_payload = decode_step_up_token(step_up_token)
