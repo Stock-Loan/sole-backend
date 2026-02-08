@@ -129,7 +129,7 @@ async def create_role(
     )
     db.add(role)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
@@ -200,7 +200,7 @@ async def update_role(
         role.description = updates["description"]
 
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
@@ -208,14 +208,13 @@ async def update_role(
         ) from exc
     await db.refresh(role)
 
-    # Invalidate cache for all users with this role
+    # Collect users to invalidate cache for after commit
     user_role_stmt = select(UserRole.user_id).where(
         UserRole.org_id == ctx.org_id,
         UserRole.role_id == role.id,
     )
     user_role_result = await db.execute(user_role_stmt)
-    for user_id in user_role_result.scalars().all():
-        await invalidate_permission_cache(str(user_id), ctx.org_id)
+    users_to_invalidate = user_role_result.scalars().all()
 
     logger.info(
         "Role updated",
@@ -237,6 +236,10 @@ async def update_role(
         new_value=model_snapshot(role),
     )
     await db.commit()
+
+    for user_id in users_to_invalidate:
+        await invalidate_permission_cache(str(user_id), ctx.org_id)
+
     return role
 
 

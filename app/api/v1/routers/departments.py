@@ -79,7 +79,7 @@ async def create_department(
     )
     db.add(dept)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
@@ -124,7 +124,7 @@ async def update_department(
         dept.is_archived = updates["is_archived"]
 
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(

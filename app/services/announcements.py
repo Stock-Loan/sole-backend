@@ -65,7 +65,7 @@ async def create_announcement(
     )
     _apply_status_transition(announcement, status)
     db.add(announcement)
-    await db.commit()
+    await db.flush()
     await db.refresh(announcement)
     return announcement
 
@@ -86,7 +86,7 @@ async def update_announcement(
         _apply_status_transition(announcement, data["status"])
     if "type" in data and data["type"]:
         announcement.type = _normalize_type(data["type"])
-    await db.commit()
+    await db.flush()
     await db.refresh(announcement)
     return announcement
 

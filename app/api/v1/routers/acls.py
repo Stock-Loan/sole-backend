@@ -80,7 +80,7 @@ async def create_acl(
     )
     db.add(acl)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
@@ -138,7 +138,7 @@ async def update_acl(
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(acl, field, value)
-    await db.commit()
+    await db.flush()
     await db.refresh(acl)
     record_audit_log(
         db,
@@ -277,7 +277,7 @@ async def create_user_permission_assignment(
     )
     db.add(assignment)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
@@ -285,7 +285,6 @@ async def create_user_permission_assignment(
             detail="Direct permission assignment already exists for this user",
         ) from exc
     await db.refresh(assignment)
-    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
     record_audit_log(
         db,
         ctx,
@@ -297,6 +296,7 @@ async def create_user_permission_assignment(
         new_value=model_snapshot(assignment),
     )
     await db.commit()
+    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
     user_row = await db.execute(
         select(OrgUserProfile.full_name, User.email)
         .select_from(User)
@@ -356,9 +356,8 @@ async def update_user_permission_assignment(
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(assignment, field, value)
-    await db.commit()
+    await db.flush()
     await db.refresh(assignment)
-    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
     record_audit_log(
         db,
         ctx,
@@ -370,6 +369,7 @@ async def update_user_permission_assignment(
         new_value=model_snapshot(assignment),
     )
     await db.commit()
+    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
     user_row = await db.execute(
         select(OrgUserProfile.full_name, User.email)
         .select_from(User)
@@ -426,8 +426,7 @@ async def delete_user_permission_assignment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
     old_snapshot = model_snapshot(assignment)
     await db.delete(assignment)
-    await db.commit()
-    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
+    await db.flush()
     record_audit_log(
         db,
         ctx,
@@ -439,4 +438,5 @@ async def delete_user_permission_assignment(
         new_value=None,
     )
     await db.commit()
+    await invalidate_permission_cache(str(assignment.user_id), ctx.org_id)
     return None

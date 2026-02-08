@@ -384,7 +384,7 @@ async def delete_user(
         old_value={"membership": membership_snapshot, "user": user_snapshot},
         new_value=None,
     )
-    await db.commit()
+    await db.flush()
 
     # If user has no other memberships, delete user record
     other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
@@ -401,7 +401,7 @@ async def delete_user(
             old_value=user_snapshot,
             new_value=None,
         )
-        await db.commit()
+    await db.commit()
     return None
 
 
@@ -439,7 +439,7 @@ async def bulk_delete_users(
             old_value={"membership": membership_snapshot, "user": user_snapshot},
             new_value=None,
         )
-        await db.commit()
+        await db.flush()
         other_stmt = select(OrgMembership.id).where(OrgMembership.user_id == user.id)
         other_result = await db.execute(other_stmt)
         if not other_result.first():
@@ -454,7 +454,7 @@ async def bulk_delete_users(
                 old_value=user_snapshot,
                 new_value=None,
             )
-            await db.commit()
+        await db.commit()
         deleted += 1
     return {"deleted": deleted, "not_found": not_found}
 
@@ -493,8 +493,9 @@ async def update_membership(
         membership.platform_status = payload.platform_status
 
     db.add(membership)
-    await db.commit()
+    await db.flush()
     # Remove role assignments and revoke sessions if platform/employment status is not ACTIVE
+    _invalidate_user_id = None
     if (membership.platform_status and membership.platform_status.upper() != "ACTIVE") or (
         membership.employment_status and membership.employment_status.upper() != "ACTIVE"
     ):
@@ -506,8 +507,8 @@ async def update_membership(
         )
         identity.token_version += 1
         db.add(identity)
-        await db.commit()
-        await authz.invalidate_permission_cache(str(membership.user_id), ctx.org_id)
+        await db.flush()
+        _invalidate_user_id = str(membership.user_id)
         for role in roles_to_remove:
             record_audit_log(
                 db,
@@ -519,8 +520,6 @@ async def update_membership(
                 old_value={"user_id": str(user.id), "role_id": str(role.id)},
                 new_value=None,
             )
-        if roles_to_remove:
-            await db.commit()
         logger.info(
             "Auto-removed roles due to inactive status",
             extra={
@@ -544,6 +543,8 @@ async def update_membership(
         new_value=model_snapshot(membership),
     )
     await db.commit()
+    if _invalidate_user_id:
+        await authz.invalidate_permission_cache(_invalidate_user_id, ctx.org_id)
     return UserDetailResponse(
         user=_user_summary(user, profile, org_id=ctx.org_id, identity=identity),
         membership=membership,
@@ -620,7 +621,7 @@ async def update_user_profile(
     db.add(user)
     db.add(profile)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
