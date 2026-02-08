@@ -7,6 +7,7 @@ from app.core.permissions import PermissionCode
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.department import Department
+from app.models.identity import Identity
 from app.models.org import Org
 from app.models.role import Role
 from app.models.user import User
@@ -68,7 +69,7 @@ def _resolve_location_names(
     return country_name, state_name
 
 
-def _build_user_summary_payload(user: User, profile, org_id: str) -> dict:
+def _build_user_summary_payload(user: User, profile, org_id: str, identity=None) -> dict:
     country_code = profile.country if profile else None
     state_code = profile.state if profile else None
     country_name, state_name = _resolve_location_names(country_code, state_code)
@@ -80,7 +81,7 @@ def _build_user_summary_payload(user: User, profile, org_id: str) -> dict:
         "email": user.email,
         "is_active": user.is_active,
         "is_superuser": user.is_superuser,
-        "mfa_enabled": user.mfa_enabled,
+        "mfa_enabled": identity.mfa_enabled if identity else False,
         "created_at": user.created_at,
         "first_name": profile.first_name if profile else None,
         "middle_name": profile.middle_name if profile else None,
@@ -171,8 +172,9 @@ async def get_self_profile(
     from app.models.user import User as UserModel
 
     stmt = (
-        select(OrgMembership, UserModel, Department, OrgUserProfile)
+        select(OrgMembership, UserModel, Department, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Identity, Identity.id == UserModel.identity_id)
         .join(Department, OrgMembership.department_id == Department.id, isouter=True)
         .outerjoin(
             OrgUserProfile,
@@ -185,11 +187,11 @@ async def get_self_profile(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user, dept, profile = row
+    membership, user, dept, profile, identity = row
     membership.department_name = dept.name if dept else None
     roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
     org_name = await _load_org_name(db, ctx.org_id)
-    user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
+    user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id, identity))
     user_summary = user_summary.model_copy(update={"org_name": org_name})
     role_names = sorted({role.name for role in roles})
     return UserDetailResponse(
@@ -232,8 +234,9 @@ async def update_self_profile(
         )
 
     stmt = (
-        select(OrgMembership, UserModel, Department, OrgUserProfile)
+        select(OrgMembership, UserModel, Department, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Identity, Identity.id == UserModel.identity_id)
         .join(Department, OrgMembership.department_id == Department.id, isouter=True)
         .outerjoin(
             OrgUserProfile,
@@ -246,7 +249,7 @@ async def update_self_profile(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user, dept, profile = row
+    membership, user, dept, profile, identity = row
     membership.department_name = dept.name if dept else None
 
     updates = payload.model_dump(exclude_unset=True)
@@ -254,7 +257,7 @@ async def update_self_profile(
         roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
         org_name = await _load_org_name(db, ctx.org_id)
         user_summary = UserSummary.model_validate(
-            _build_user_summary_payload(user, profile, ctx.org_id)
+            _build_user_summary_payload(user, profile, ctx.org_id, identity)
         )
         user_summary = user_summary.model_copy(update={"org_name": org_name})
         role_names = sorted({role.name for role in roles})
@@ -301,7 +304,7 @@ async def update_self_profile(
 
     roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
     org_name = await _load_org_name(db, ctx.org_id)
-    user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
+    user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id, identity))
     user_summary = user_summary.model_copy(update={"org_name": org_name})
     role_names = sorted({role.name for role in roles})
     return UserDetailResponse(

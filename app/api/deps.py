@@ -7,14 +7,20 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.context import set_tenant_id
-from app.core.security import decode_token, create_step_up_challenge_token, decode_step_up_token
+from app.core.security import (
+    decode_token,
+    decode_pre_org_token,
+    create_step_up_challenge_token,
+    decode_step_up_token,
+)
 from app.core.permissions import PermissionCode
 from app.services import authz, settings as settings_service
 from app.core.settings import settings
 from app.db.session import get_db
-from app.models import Org, OrgMembership, User
+from app.models import Identity, Org, OrgMembership, User
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +80,66 @@ async def get_db_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
     return db
 
 
+async def get_current_identity(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+) -> Identity:
+    """Extract identity from pre_org_token or access_token.
+
+    Used for pre-org endpoints (login flow) and any endpoint that
+    needs to operate on the global identity record.
+    """
+    token = _extract_bearer_token(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication token",
+        )
+
+    try:
+        payload = decode_token(token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+        ) from exc
+
+    token_type = payload.get("type")
+
+    if token_type == "pre_org":
+        identity_id = payload.get("sub")
+        if not identity_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid pre-org token"
+            )
+        identity = await db.get(Identity, identity_id)
+        if not identity or not identity.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Identity not found or inactive",
+            )
+        return identity
+
+    if token_type == "access":
+        identity_id = payload.get("iid")
+        if not identity_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token missing identity claim",
+            )
+        identity = await db.get(Identity, identity_id)
+        if not identity or not identity.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Identity not found or inactive",
+            )
+        return identity
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unsupported token type for identity resolution",
+    )
+
+
 async def get_tenant_context(
     request: Request,
     org_id_header: str | None = Header(default=None, alias="X-Org-Id"),
@@ -85,6 +151,7 @@ async def get_tenant_context(
         token_org = None
         token_is_superuser = False
         token_user_id = None
+        token_type = None
         token = _extract_bearer_token(request)
         if token:
             try:
@@ -96,23 +163,40 @@ async def get_tenant_context(
             token_org = payload.get("org")
             token_is_superuser = bool(payload.get("su"))
             token_user_id = payload.get("sub")
+            token_type = payload.get("type")
 
-        header_org = org_id_header or legacy_tenant_id
-        if token_org:
-            if header_org and header_org != token_org:
-                if not token_is_superuser:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Tenant header does not match token",
-                    )
-                candidate = header_org
-            else:
-                candidate = token_org
-        else:
+        # pre_org tokens have no org claim — allow endpoints to bypass
+        # org resolution when they only need the identity.
+        if token_type == "pre_org":
+            # Pre-org endpoints should not require tenant context.
+            # If the caller specifically provided an org header, honour it;
+            # otherwise raise so that the endpoint can use get_current_identity
+            # instead.
+            header_org = org_id_header or legacy_tenant_id
+            if not header_org:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Pre-org token: provide X-Org-Id or use identity-only endpoints",
+                )
+            # Fall through — validate the provided header_org normally.
             candidate = header_org
+        else:
+            header_org = org_id_header or legacy_tenant_id
+            if token_org:
+                if header_org and header_org != token_org:
+                    if not token_is_superuser:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Tenant header does not match token",
+                        )
+                    candidate = header_org
+                else:
+                    candidate = token_org
+            else:
+                candidate = header_org
 
-        if not candidate and _refresh_paths_match(request.url.path):
-            candidate = _org_from_refresh_cookie(request)
+            if not candidate and _refresh_paths_match(request.url.path):
+                candidate = _org_from_refresh_cookie(request)
 
         if not candidate:
             raise HTTPException(
@@ -122,7 +206,7 @@ async def get_tenant_context(
         org_stmt = select(Org.id).where(Org.id == candidate)
         if (await db.execute(org_stmt)).scalar_one_or_none() is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
-        if token_user_id and not token_is_superuser:
+        if token_user_id and not token_is_superuser and token_type != "pre_org":
             membership = await get_membership(db, user_id=token_user_id, org_id=candidate)
             if not membership:
                 raise HTTPException(
@@ -211,6 +295,7 @@ async def _get_current_user(
     user_sub = payload.get("sub")
     token_version = payload.get("tv")
     token_org = payload.get("org")
+    identity_id = payload.get("iid")
     token_is_superuser = bool(payload.get("su"))
     if not user_sub:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
@@ -223,7 +308,7 @@ async def _get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
         )
 
-    stmt = select(User).where(User.id == user_sub)
+    stmt = select(User).options(selectinload(User.identity)).where(User.id == user_sub)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
@@ -231,7 +316,14 @@ async def _get_current_user(
 
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
-    if token_version is not None and user.token_version != token_version:
+
+    # Validate token_version against identity (global session revocation)
+    identity = user.identity
+    if not identity or not identity.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity inactive"
+        )
+    if token_version is not None and identity.token_version != token_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
 
     if not token_is_superuser:
@@ -246,12 +338,13 @@ async def _get_current_user(
             )
 
     now = datetime.now(timezone.utc)
-    enforce_inactivity(user.last_active_at, now)
-    user.last_active_at = now
-    db.add(user)
+    enforce_inactivity(identity.last_active_at, now)
+    identity.last_active_at = now
+    db.add(identity)
     await db.commit()
     await db.refresh(user)
-    if user.must_change_password and not allow_password_change:
+    await db.refresh(identity)
+    if identity.must_change_password and not allow_password_change:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Password change required",

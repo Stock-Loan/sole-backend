@@ -135,26 +135,21 @@ def _hash_recovery_code(code: str) -> str:
 async def generate_recovery_codes(
     db: AsyncSession,
     *,
-    org_id: str,
-    user_id,
+    identity_id,
 ) -> list[str]:
-    """Generate new recovery codes for a user, replacing any existing ones."""
-    # Delete ALL existing codes for this user first (important for re-enrollment)
+    """Generate new recovery codes for an identity, replacing any existing ones."""
     stmt = delete(UserMfaRecoveryCode).where(
-        UserMfaRecoveryCode.org_id == org_id,
-        UserMfaRecoveryCode.user_id == user_id,
+        UserMfaRecoveryCode.identity_id == identity_id,
     )
     await db.execute(stmt)
-    await db.flush()  # Ensure deletion is applied before generating new codes
+    await db.flush()
 
-    # Generate new codes
     plain_codes: list[str] = []
     for _ in range(RECOVERY_CODE_COUNT):
         code = _generate_recovery_code()
         plain_codes.append(code)
         recovery = UserMfaRecoveryCode(
-            org_id=org_id,
-            user_id=user_id,
+            identity_id=identity_id,
             code_hash=_hash_recovery_code(code),
         )
         db.add(recovery)
@@ -166,15 +161,13 @@ async def generate_recovery_codes(
 async def verify_recovery_code(
     db: AsyncSession,
     *,
-    org_id: str,
-    user_id,
+    identity_id,
     code: str,
 ) -> bool:
     """Verify and consume a recovery code. Returns True if valid."""
     code_hash = _hash_recovery_code(code)
     stmt = select(UserMfaRecoveryCode).where(
-        UserMfaRecoveryCode.org_id == org_id,
-        UserMfaRecoveryCode.user_id == user_id,
+        UserMfaRecoveryCode.identity_id == identity_id,
         UserMfaRecoveryCode.code_hash == code_hash,
         UserMfaRecoveryCode.used_at.is_(None),
     )
@@ -184,7 +177,6 @@ async def verify_recovery_code(
     if not recovery:
         return False
 
-    # Mark as used
     recovery.used_at = datetime.now(timezone.utc)
     db.add(recovery)
     await db.commit()
@@ -194,18 +186,16 @@ async def verify_recovery_code(
 async def get_remaining_recovery_codes_count(
     db: AsyncSession,
     *,
-    org_id: str,
-    user_id,
+    identity_id,
 ) -> int:
-    """Get the count of unused recovery codes for a user."""
+    """Get the count of unused recovery codes for an identity."""
     from sqlalchemy import func
 
     stmt = (
         select(func.count())
         .select_from(UserMfaRecoveryCode)
         .where(
-            UserMfaRecoveryCode.org_id == org_id,
-            UserMfaRecoveryCode.user_id == user_id,
+            UserMfaRecoveryCode.identity_id == identity_id,
             UserMfaRecoveryCode.used_at.is_(None),
         )
     )
@@ -216,16 +206,14 @@ async def get_remaining_recovery_codes_count(
 async def delete_user_recovery_codes(
     db: AsyncSession,
     *,
-    org_id: str,
-    user_id,
+    identity_id,
 ) -> None:
-    """Delete all recovery codes for a user."""
+    """Delete all recovery codes for an identity."""
     stmt = delete(UserMfaRecoveryCode).where(
-        UserMfaRecoveryCode.org_id == org_id,
-        UserMfaRecoveryCode.user_id == user_id,
+        UserMfaRecoveryCode.identity_id == identity_id,
     )
     await db.execute(stmt)
-    await db.flush()  # Ensure deletion is applied immediately
+    await db.flush()
 
 
 async def delete_user_devices(
@@ -234,7 +222,7 @@ async def delete_user_devices(
     org_id: str,
     user_id,
 ) -> None:
-    """Delete all trusted devices for a user."""
+    """Delete all trusted devices for a user in an org."""
     stmt = delete(UserMfaDevice).where(
         UserMfaDevice.org_id == org_id,
         UserMfaDevice.user_id == user_id,
@@ -244,17 +232,19 @@ async def delete_user_devices(
 
 async def clear_user_mfa(
     db: AsyncSession,
-    user,
+    identity,
     *,
     org_id: str,
+    user_id,
 ) -> None:
-    """Clear all MFA data for a user (secret, devices, recovery codes)."""
-    user.mfa_enabled = False
-    user.mfa_secret_encrypted = None
-    user.mfa_method = None
-    user.mfa_confirmed_at = None
-    db.add(user)
+    """Clear all MFA data for an identity (secret, recovery codes) and
+    per-org devices for the given user."""
+    identity.mfa_enabled = False
+    identity.mfa_secret_encrypted = None
+    identity.mfa_method = None
+    identity.mfa_confirmed_at = None
+    db.add(identity)
 
-    await delete_user_devices(db, org_id=org_id, user_id=user.id)
-    await delete_user_recovery_codes(db, org_id=org_id, user_id=user.id)
+    await delete_user_devices(db, org_id=org_id, user_id=user_id)
+    await delete_user_recovery_codes(db, identity_id=identity.id)
     await db.commit()

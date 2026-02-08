@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.core.security import get_password_hash
 from app.services.authz import assign_default_employee_role
+from app.models.identity import Identity
 from app.models.org_membership import OrgMembership
 from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User
@@ -301,27 +302,44 @@ async def onboard_single_user(
     payload: OnboardingUserCreate,
 ) -> OnboardingResult:
     payload = _normalize_payload(payload)
-    stmt = select(User).where(User.org_id == ctx.org_id, User.email == payload.email)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
+
+    # Check if a global identity exists for this email
+    identity_stmt = select(Identity).where(Identity.email == payload.email)
+    identity = (await db.execute(identity_stmt)).scalar_one_or_none()
+
     temporary_password: str | None = None
     now = datetime.now(timezone.utc)
     created_user = False
     created_membership = False
 
-    if not user:
-        created_user = True
+    if not identity:
+        # New identity — create one with temporary credentials
         temporary_password = payload.temporary_password or _generate_temp_password()
-        user = User(
-            org_id=ctx.org_id,
+        identity = Identity(
             email=payload.email,
             hashed_password=get_password_hash(temporary_password),
             is_active=True,
-            is_superuser=False,
-            token_version=0,
             mfa_enabled=False,
-            last_active_at=None,
+            token_version=0,
             must_change_password=True,
+        )
+        db.add(identity)
+        await db.flush()
+
+    # Check if a user record exists for this identity in this org
+    user_stmt = select(User).where(
+        User.org_id == ctx.org_id, User.identity_id == identity.id
+    )
+    user = (await db.execute(user_stmt)).scalar_one_or_none()
+
+    if not user:
+        created_user = True
+        user = User(
+            org_id=ctx.org_id,
+            identity_id=identity.id,
+            email=payload.email,
+            is_active=True,
+            is_superuser=False,
         )
         db.add(user)
         await db.flush()

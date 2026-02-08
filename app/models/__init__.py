@@ -1,5 +1,6 @@
 from app.models.audit_log import AuditLog
 from app.models.announcement import Announcement, AnnouncementRead
+from app.models.identity import Identity
 from app.models.journal_entry import JournalEntry
 from app.models.org import Org
 from app.models.org_membership import OrgMembership
@@ -30,6 +31,7 @@ __all__ = [
     "AuditLog",
     "Announcement",
     "AnnouncementRead",
+    "Identity",
     "JournalEntry",
     "Org",
     "OrgMembership",

@@ -10,6 +10,7 @@ from app.db.session import AsyncSessionLocal
 from app.models.org import Org
 from app.models.org_membership import OrgMembership
 from app.models.org_user_profile import OrgUserProfile
+from app.models.identity import Identity
 from app.models.user import User
 from app.services.authz import ensure_user_in_role, seed_system_roles
 from app.services.orgs import ensure_audit_partitions_for_orgs
@@ -112,6 +113,27 @@ async def _ensure_membership_and_profile(
     return membership
 
 
+async def _ensure_identity(
+    session: AsyncSession,
+    *,
+    email: str,
+    password: str,
+) -> Identity:
+    """Find or create a global Identity for the given email."""
+    stmt = select(Identity).where(Identity.email == email)
+    identity = (await session.execute(stmt)).scalar_one_or_none()
+    if identity:
+        return identity
+    identity = Identity(
+        email=email,
+        hashed_password=get_password_hash(password),
+        must_change_password=False,
+    )
+    session.add(identity)
+    await session.commit()
+    return identity
+
+
 async def _seed_user(
     session: AsyncSession,
     *,
@@ -125,18 +147,18 @@ async def _seed_user(
     is_superuser: bool,
     role_names: list[str],
 ) -> None:
+    identity = await _ensure_identity(session, email=email, password=password)
+
     stmt = select(User).where(User.org_id == org_id, User.email == email)
     result = await session.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
         user = User(
             org_id=org_id,
+            identity_id=identity.id,
             email=email,
-            hashed_password=get_password_hash(password),
             is_active=True,
             is_superuser=is_superuser,
-            token_version=0,
-            must_change_password=False,
         )
         session.add(user)
         await session.commit()

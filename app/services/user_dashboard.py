@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.models.department import Department
+from app.models.identity import Identity
 from app.models.org_membership import OrgMembership
 from app.models.org_user_profile import OrgUserProfile
 from app.models.role import Role
@@ -47,6 +48,7 @@ async def _count_users_with_filter(
         select(func.count())
         .select_from(User)
         .join(OrgMembership, OrgMembership.user_id == User.id)
+        .join(Identity, Identity.id == User.identity_id)
         .where(OrgMembership.org_id == ctx.org_id, *conditions)
     )
     return (await db.execute(stmt)).scalar_one() or 0
@@ -77,16 +79,18 @@ async def build_dashboard_summary(
     invited_pending = invitation_status_counts.get("PENDING", 0)
     accepted_invites = invitation_status_counts.get("ACCEPTED", 0)
 
-    mfa_enabled = await _count_users_with_filter(db, ctx, User.mfa_enabled.is_(True))
+    mfa_enabled = await _count_users_with_filter(db, ctx, Identity.mfa_enabled.is_(True))
     mfa_disabled = max(total_users - mfa_enabled, 0)
-    never_logged_in = await _count_users_with_filter(db, ctx, User.last_active_at.is_(None))
-    active_last_7_days = await _count_users_with_filter(db, ctx, User.last_active_at >= last_7)
-    active_last_30_days = await _count_users_with_filter(db, ctx, User.last_active_at >= last_30)
+    never_logged_in = await _count_users_with_filter(db, ctx, Identity.last_active_at.is_(None))
+    active_last_7_days = await _count_users_with_filter(db, ctx, Identity.last_active_at >= last_7)
+    active_last_30_days = await _count_users_with_filter(
+        db, ctx, Identity.last_active_at >= last_30
+    )
     stale_30_plus_days = await _count_users_with_filter(
-        db, ctx, User.last_active_at.is_not(None), User.last_active_at < last_30
+        db, ctx, Identity.last_active_at.is_not(None), Identity.last_active_at < last_30
     )
     users_with_temp_password = await _count_users_with_filter(
-        db, ctx, User.must_change_password.is_(True)
+        db, ctx, Identity.must_change_password.is_(True)
     )
 
     users_without_department_stmt = (

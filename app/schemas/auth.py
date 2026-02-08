@@ -21,55 +21,70 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+# ─── New login flow ──────────────────────────────────────────────────────────
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
 
-class LoginStartRequest(BaseModel):
-    email: EmailStr
+class LoginResponse(BaseModel):
+    pre_org_token: str
+    must_change_password: bool = False
 
 
-class LoginStartResponse(BaseModel):
-    challenge_token: str
+class OrgSummary(BaseModel):
+    org_id: str | None = None
+    name: str
+    slug: str | None = None
 
 
-class LoginCompleteRequest(BaseModel):
-    challenge_token: str
-    password: str
+class AuthOrgsResponse(BaseModel):
+    orgs: list[OrgSummary]
+    auto_selected: bool = False
+
+
+class SelectOrgRequest(BaseModel):
+    org_id: str
     remember_device_token: str | None = None
 
 
-class LoginCompleteResponse(BaseModel):
+class SelectOrgResponse(BaseModel):
     access_token: str | None = None
     refresh_token: str | None = None
     token_type: str = "bearer"
     csrf_token: str | None = None
     mfa_required: bool = False
     mfa_setup_required: bool = False
-    mfa_token: str | None = None
+    challenge_token: str | None = None
     setup_token: str | None = None
     remember_device_days: int | None = None
 
 
-class LoginMfaRequest(BaseModel):
-    mfa_token: str
+class MfaVerifyRequest(BaseModel):
+    challenge_token: str
     code: str
+    code_type: Literal["totp", "recovery"] = "totp"
     remember_device: bool = False
 
 
-class LoginMfaResponse(TokenPair):
+class MfaVerifyResponse(TokenPair):
     remember_device_token: str | None = None
+    recovery_codes: list[str] | None = None
 
 
-class LoginMfaSetupStartRequest(BaseModel):
+class MfaEnrollStartRequest(BaseModel):
     setup_token: str
 
 
-class LoginMfaSetupVerifyRequest(BaseModel):
+class MfaEnrollVerifyRequest(BaseModel):
     setup_token: str
     code: str
     remember_device: bool = False
+
+
+# ─── Post-login MFA setup/management ────────────────────────────────────────
 
 
 class MfaSetupStartResponse(BaseModel):
@@ -85,22 +100,15 @@ class MfaSetupVerifyRequest(BaseModel):
     remember_device: bool = False
 
 
-class OrgDiscoveryRequest(BaseModel):
-    email: EmailStr
+class MfaSetupCompleteResponse(BaseModel):
+    """Response after completing MFA setup, includes recovery codes."""
 
-
-class OrgSummary(BaseModel):
-    org_id: str | None = None
-    name: str
-    slug: str | None = None
-
-
-class OrgDiscoveryResponse(BaseModel):
-    orgs: list[OrgSummary]
-
-
-class OrgResolveResponse(BaseModel):
-    org: OrgSummary
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    csrf_token: str | None = None
+    remember_device_token: str | None = None
+    recovery_codes: list[str]
 
 
 class CsrfTokenResponse(BaseModel):
@@ -113,12 +121,15 @@ class UserOut(BaseModel):
     email: EmailStr
     is_active: bool
     is_superuser: bool
-    mfa_enabled: bool
+    mfa_enabled: bool = False
     last_active_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+# ─── Step-up MFA ─────────────────────────────────────────────────────────────
 
 
 class StepUpChallengeResponse(BaseModel):
@@ -145,25 +156,7 @@ class StepUpVerifyResponse(BaseModel):
     expires_in_seconds: int
 
 
-# ─── MFA Recovery ─────────────────────────────────────────────────────────────
-
-
-class MfaSetupCompleteResponse(BaseModel):
-    """Response after completing MFA setup, includes recovery codes."""
-
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-    csrf_token: str | None = None
-    remember_device_token: str | None = None
-    recovery_codes: list[str]
-
-
-class LoginMfaRecoveryRequest(BaseModel):
-    """Request to login using a recovery code instead of TOTP."""
-
-    mfa_token: str
-    recovery_code: str
+# ─── MFA Management ─────────────────────────────────────────────────────────
 
 
 class MfaResetRequest(BaseModel):

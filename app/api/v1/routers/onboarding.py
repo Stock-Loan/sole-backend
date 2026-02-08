@@ -11,6 +11,7 @@ from app.api import deps
 from app.db.session import get_db
 from app.core.permissions import PermissionCode
 from app.models import User
+from app.models.identity import Identity
 from app.schemas.onboarding import (
     BulkOnboardingResult,
     OnboardingResponse,
@@ -53,14 +54,14 @@ async def _load_roles_for_user_in_org(
     return (await db.execute(stmt)).scalars().all()
 
 
-def _user_summary(user: UserModel, profile: OrgUserProfile | None, *, org_id: str) -> UserSummary:
+def _user_summary(user: UserModel, profile: OrgUserProfile | None, *, org_id: str, identity=None) -> UserSummary:
     data = {
         "id": user.id,
         "org_id": org_id,
         "email": user.email,
         "is_active": user.is_active,
         "is_superuser": user.is_superuser,
-        "mfa_enabled": user.mfa_enabled,
+        "mfa_enabled": identity.mfa_enabled if identity else False,
         "created_at": user.created_at,
         "first_name": profile.first_name if profile else None,
         "middle_name": profile.middle_name if profile else None,
@@ -254,8 +255,9 @@ async def list_users(
     filters = [OrgMembership.org_id == ctx.org_id]
 
     base_stmt = (
-        select(OrgMembership, UserModel, Department, OrgUserProfile)
+        select(OrgMembership, UserModel, Department, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Identity, Identity.id == UserModel.identity_id)
         .outerjoin(Department, OrgMembership.department_id == Department.id)
         .outerjoin(
             OrgUserProfile,
@@ -283,11 +285,11 @@ async def list_users(
             roles_map.setdefault(str(user_role.user_id), []).append(role)
 
     items = []
-    for membership, user, dept, profile in rows:
+    for membership, user, dept, profile, identity in rows:
         membership.department_name = dept.name if dept else None
         items.append(
             {
-                "user": _user_summary(user, profile, org_id=ctx.org_id),
+                "user": _user_summary(user, profile, org_id=ctx.org_id, identity=identity),
                 "membership": membership,
                 "roles": roles_map.get(str(user.id), []),
             }
@@ -305,8 +307,9 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
-        select(OrgMembership, UserModel, Department, OrgUserProfile)
+        select(OrgMembership, UserModel, Department, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Identity, Identity.id == UserModel.identity_id)
         .outerjoin(Department, OrgMembership.department_id == Department.id)
         .outerjoin(
             OrgUserProfile,
@@ -319,7 +322,7 @@ async def get_user(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user, dept, profile = row
+    membership, user, dept, profile, identity = row
     membership.department_name = dept.name if dept else None
     roles_stmt = (
         select(Role)
@@ -328,7 +331,7 @@ async def get_user(
     )
     roles = (await db.execute(roles_stmt)).scalars().all()
     return UserDetailResponse(
-        user=_user_summary(user, profile, org_id=ctx.org_id),
+        user=_user_summary(user, profile, org_id=ctx.org_id, identity=identity),
         membership=membership,
         roles=roles,
     )
@@ -460,8 +463,9 @@ async def update_membership(
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     stmt = (
-        select(OrgMembership, UserModel, OrgUserProfile)
+        select(OrgMembership, UserModel, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Identity, Identity.id == UserModel.identity_id)
         .outerjoin(
             OrgUserProfile,
             (OrgUserProfile.membership_id == OrgMembership.id)
@@ -473,7 +477,7 @@ async def update_membership(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user, profile = row
+    membership, user, profile, identity = row
 
     old_membership = model_snapshot(membership)
     if payload.employment_status:
@@ -493,8 +497,8 @@ async def update_membership(
             .where(UserRole.org_id == ctx.org_id, UserRole.user_id == membership.user_id)
             .execution_options(synchronize_session=False)
         )
-        user.token_version += 1
-        db.add(user)
+        identity.token_version += 1
+        db.add(identity)
         await db.commit()
         for role in roles_to_remove:
             record_audit_log(
@@ -533,7 +537,7 @@ async def update_membership(
     )
     await db.commit()
     return UserDetailResponse(
-        user=_user_summary(user, profile, org_id=ctx.org_id),
+        user=_user_summary(user, profile, org_id=ctx.org_id, identity=identity),
         membership=membership,
         roles=user_roles,
     )
@@ -566,8 +570,9 @@ async def update_user_profile(
             detail="Profile editing is disabled for this organization",
         )
     stmt = (
-        select(OrgMembership, UserModel, OrgUserProfile)
+        select(OrgMembership, UserModel, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Identity, Identity.id == UserModel.identity_id)
         .outerjoin(
             OrgUserProfile,
             (OrgUserProfile.membership_id == OrgMembership.id)
@@ -579,7 +584,7 @@ async def update_user_profile(
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    membership, user, profile = row
+    membership, user, profile, identity = row
 
     old_user = model_snapshot(user, exclude={"hashed_password"})
     old_profile = model_snapshot(profile) if profile else None
@@ -637,7 +642,7 @@ async def update_user_profile(
     )
     await db.commit()
     return UserDetailResponse(
-        user=_user_summary(user, profile, org_id=ctx.org_id),
+        user=_user_summary(user, profile, org_id=ctx.org_id, identity=identity),
         membership=membership,
         roles=user_roles,
     )
@@ -668,7 +673,9 @@ async def admin_reset_user_mfa(
     # Get the target user via membership
     stmt = (
         select(OrgMembership)
-        .options(selectinload(OrgMembership.user))
+        .options(
+            selectinload(OrgMembership.user).selectinload(UserModel.identity)
+        )
         .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
     )
     result = await db.execute(stmt)
@@ -677,6 +684,7 @@ async def admin_reset_user_mfa(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     target_user = membership.user
+    target_identity = target_user.identity
 
     # Prevent resetting your own MFA via admin endpoint
     if target_user.id == current_user.id:
@@ -685,13 +693,13 @@ async def admin_reset_user_mfa(
             detail="Cannot reset your own MFA via admin endpoint. Use self-service reset.",
         )
 
-    if not target_user.mfa_enabled:
+    if not target_identity or not target_identity.mfa_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="User does not have MFA enabled"
         )
 
     # Clear all MFA data
-    await mfa_service.clear_user_mfa(db, org_id=ctx.org_id, user=target_user)
+    await mfa_service.clear_user_mfa(db, target_identity, org_id=ctx.org_id, user_id=target_user.id)
 
     record_audit_log(
         db,

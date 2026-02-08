@@ -6,16 +6,16 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, 
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.security import (
     create_access_token,
-    create_login_challenge_token,
     create_mfa_challenge_token,
     create_mfa_setup_token,
+    create_pre_org_token,
     create_refresh_token,
     create_step_up_token,
-    decode_login_challenge_token,
     decode_mfa_challenge_token,
     decode_mfa_setup_token,
     decode_step_up_challenge_token,
@@ -24,28 +24,25 @@ from app.core.security import (
 )
 from app.core.settings import settings
 from app.db.session import get_db
-from app.models import OrgMembership, User
+from app.models import Identity, OrgMembership, User
 from app.models.org import Org
 from app.schemas.auth import (
+    AuthOrgsResponse,
     ChangePasswordRequest,
-    LoginCompleteRequest,
-    LoginCompleteResponse,
-    LoginMfaRequest,
-    LoginMfaResponse,
-    LoginMfaRecoveryRequest,
-    LoginMfaSetupStartRequest,
-    LoginMfaSetupVerifyRequest,
-    LoginStartRequest,
-    LoginStartResponse,
+    CsrfTokenResponse,
+    LoginRequest,
+    LoginResponse,
+    MfaEnrollStartRequest,
+    MfaEnrollVerifyRequest,
     MfaSetupCompleteResponse,
     MfaSetupStartResponse,
     MfaSetupVerifyRequest,
-    OrgDiscoveryRequest,
-    OrgDiscoveryResponse,
-    OrgResolveResponse,
+    MfaVerifyRequest,
+    MfaVerifyResponse,
     OrgSummary,
-    CsrfTokenResponse,
     RefreshRequest,
+    SelectOrgRequest,
+    SelectOrgResponse,
     StepUpVerifyRequest,
     StepUpVerifyResponse,
     TokenPair,
@@ -65,26 +62,27 @@ def _issue_csrf_token() -> str:
 def _set_refresh_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
     if not settings.auth_refresh_cookie_enabled:
         return
-    cookie_kwargs = {
-        "httponly": True,
+    common_kwargs = {
         "secure": settings.auth_cookie_secure,
         "samesite": settings.auth_cookie_samesite,
         "path": settings.auth_cookie_path,
     }
     if settings.auth_cookie_domain:
-        cookie_kwargs["domain"] = settings.auth_cookie_domain
+        common_kwargs["domain"] = settings.auth_cookie_domain
     max_age = settings.refresh_token_expire_minutes * 60
     response.set_cookie(
         key=settings.auth_refresh_cookie_name,
         value=refresh_token,
         max_age=max_age,
-        **cookie_kwargs,
+        httponly=True,
+        **common_kwargs,
     )
     response.set_cookie(
         key=settings.auth_csrf_cookie_name,
         value=csrf_token,
         max_age=max_age,
-        **cookie_kwargs,
+        httponly=False,
+        **common_kwargs,
     )
 
 
@@ -113,19 +111,54 @@ def _maybe_attach_cookies(
     return csrf_token
 
 
+def _issue_tokens(
+    *,
+    user: User,
+    identity: Identity,
+    org_id: str,
+    mfa_authenticated: bool = False,
+    mfa_method: str | None = None,
+) -> tuple[str, str]:
+    """Create access + refresh token pair for an org-scoped session."""
+    access = create_access_token(
+        str(user.id),
+        org_id=org_id,
+        identity_id=str(identity.id),
+        is_superuser=user.is_superuser,
+        token_version=identity.token_version,
+        mfa_authenticated=mfa_authenticated,
+        mfa_method=mfa_method,
+    )
+    refresh = create_refresh_token(
+        str(user.id),
+        org_id=org_id,
+        identity_id=str(identity.id),
+        is_superuser=user.is_superuser,
+        token_version=identity.token_version,
+        mfa_authenticated=mfa_authenticated,
+        mfa_method=mfa_method,
+    )
+    return access, refresh
+
+
 async def _load_user_for_org(
     db: AsyncSession,
     *,
-    user_id: str,
-    ctx: deps.TenantContext,
+    identity_id,
+    org_id: str,
     allow_pending: bool,
 ) -> User:
-    stmt = select(User).where(User.id == user_id)
+    """Find the org-scoped User for a given identity, check membership status."""
+    stmt = (
+        select(User)
+        .options(selectinload(User.identity))
+        .where(User.identity_id == identity_id, User.org_id == org_id)
+    )
     user = (await db.execute(stmt)).scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not available")
     if not user.is_superuser:
-        membership = await deps.get_membership(db, user_id=user.id, org_id=ctx.org_id)
+        membership = await deps.get_membership(db, user_id=user.id, org_id=org_id)
         if not membership:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="User not available"
@@ -137,86 +170,169 @@ async def _load_user_for_org(
     return user
 
 
-@router.post(
-    "/org-discovery", response_model=OrgDiscoveryResponse, summary="Discover org(s) by email"
-)
-async def discover_orgs_by_email(
-    payload: OrgDiscoveryRequest,
+# ─── New login flow ──────────────────────────────────────────────────────────
+
+
+@router.post("/login", response_model=LoginResponse, summary="Authenticate with email + password")
+async def login(
+    payload: LoginRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> OrgDiscoveryResponse:
-    # Rate limit org discovery to prevent enumeration attacks
+) -> LoginResponse:
+    """
+    Step 1 of the login flow.  No X-Org-Id header required.
+
+    Verifies identity-level credentials and returns a short-lived pre_org_token
+    used to list orgs and select one.
+    """
     client_ip = request.client.host if request.client else "unknown"
     await enforce_login_limits(client_ip, payload.email)
 
+    stmt = select(Identity).where(Identity.email == payload.email)
+    identity = (await db.execute(stmt)).scalar_one_or_none()
+
+    if (
+        not identity
+        or not identity.is_active
+        or not constant_time_verify(identity.hashed_password if identity else None, payload.password)
+    ):
+        await record_login_attempt(payload.email, success=False)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+        )
+
+    await record_login_attempt(payload.email, success=True)
+
+    pre_org_token = create_pre_org_token(str(identity.id))
+    return LoginResponse(
+        pre_org_token=pre_org_token,
+        must_change_password=identity.must_change_password,
+    )
+
+
+@router.get("/orgs", response_model=AuthOrgsResponse, summary="List orgs for authenticated identity")
+async def list_orgs(
+    identity: Identity = Depends(deps.get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> AuthOrgsResponse:
+    """
+    Step 2 of the login flow.  Requires pre_org_token or access_token.
+
+    Returns the list of orgs the identity has active memberships in.
+    """
     stmt = (
         select(Org)
-        .join(OrgMembership, OrgMembership.org_id == Org.id)
-        .join(User, User.id == OrgMembership.user_id)
-        .where(User.email == payload.email, Org.status == "ACTIVE")
+        .join(User, User.org_id == Org.id)
+        .join(OrgMembership, OrgMembership.user_id == User.id)
+        .where(
+            User.identity_id == identity.id,
+            User.is_active.is_(True),
+            Org.status == "ACTIVE",
+            OrgMembership.org_id == Org.id,
+        )
         .order_by(Org.name.asc())
     )
-    orgs = (await db.execute(stmt)).scalars().all()
+    orgs = (await db.execute(stmt)).scalars().unique().all()
     summaries = [OrgSummary(org_id=org.id, name=org.name, slug=org.slug) for org in orgs]
-    return OrgDiscoveryResponse(orgs=summaries)
+    auto_selected = len(summaries) == 1
+    return AuthOrgsResponse(orgs=summaries, auto_selected=auto_selected)
 
 
-@router.get("/orgs/resolve", response_model=OrgResolveResponse, summary="Resolve org by id or slug")
-async def resolve_org(
-    org_id: str | None = None,
-    slug: str | None = None,
-    db: AsyncSession = Depends(get_db),
-) -> OrgResolveResponse:
-    if not org_id and not slug:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="org_id or slug is required"
-        )
-    stmt = select(Org).where(Org.status == "ACTIVE")
-    if org_id:
-        stmt = stmt.where(Org.id == org_id)
-    if slug:
-        stmt = stmt.where(Org.slug == slug)
-    org = (await db.execute(stmt)).scalar_one_or_none()
-    if not org:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
-    summary = OrgSummary(org_id=org.id, name=org.name, slug=org.slug)
-    return OrgResolveResponse(org=summary)
-
-
-@router.post("/login/start", response_model=LoginStartResponse)
-async def login_start(
-    payload: LoginStartRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-) -> LoginStartResponse:
-    client_ip = request.client.host if request.client else "unknown"
-    await enforce_login_limits(client_ip, payload.email)
-
-    stmt = select(User).where(User.org_id == ctx.org_id, User.email == payload.email)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-
-    # Always return a challenge to avoid user enumeration; inactive or missing users will fail at completion.
-    target_email = payload.email if user else payload.email
-    challenge = create_login_challenge_token(target_email, ctx.org_id)
-    return LoginStartResponse(challenge_token=challenge)
-
-
-@router.post("/login/complete", response_model=LoginCompleteResponse)
-async def login_complete(
-    payload: LoginCompleteRequest,
+@router.post(
+    "/select-org", response_model=SelectOrgResponse, summary="Select org and evaluate MFA policy"
+)
+async def select_org(
+    payload: SelectOrgRequest,
     request: Request,
     response: Response,
+    identity: Identity = Depends(deps.get_current_identity),
     db: AsyncSession = Depends(get_db),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-) -> LoginCompleteResponse:
-    result = await _complete_login_flow(
-        challenge_token=payload.challenge_token,
-        password=payload.password,
-        remember_device_token=payload.remember_device_token,
-        ctx=ctx,
-        db=db,
+) -> SelectOrgResponse:
+    """
+    Step 3 of the login flow.  Requires pre_org_token.
+
+    Evaluates the org's MFA policy and either:
+    - Issues full access+refresh tokens (no MFA needed or device remembered)
+    - Returns mfa_required=True with a challenge_token
+    - Returns mfa_setup_required=True with a setup_token
+    """
+    user = await _load_user_for_org(
+        db, identity_id=identity.id, org_id=payload.org_id, allow_pending=True
+    )
+
+    ctx = deps.TenantContext(org_id=payload.org_id)
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    has_sensitive = await authz_service.has_sensitive_permissions(db, user, payload.org_id)
+
+    mfa_required = bool(org_settings.require_two_factor or identity.mfa_enabled or has_sensitive)
+    remember_days = org_settings.remember_device_days
+    require_login_mfa = settings_service.is_mfa_action_required(org_settings, "LOGIN")
+
+    # If org requires MFA (or user has sensitive perms) but identity hasn't set it up yet
+    if (org_settings.require_two_factor or has_sensitive) and not identity.mfa_enabled:
+        setup_token = create_mfa_setup_token(str(identity.id), payload.org_id)
+        return SelectOrgResponse(
+            mfa_setup_required=True,
+            setup_token=setup_token,
+            remember_device_days=remember_days,
+        )
+
+    now = datetime.now(timezone.utc)
+    identity.last_active_at = now
+    db.add(identity)
+    await db.commit()
+    await db.refresh(identity)
+
+    if mfa_required:
+        if require_login_mfa:
+            # Force MFA at login regardless of remembered devices
+            remember_device_token = None
+        else:
+            remember_device_token = payload.remember_device_token
+
+        if remember_device_token and org_settings.remember_device_days > 0:
+            device = await mfa_service.find_valid_device(
+                db,
+                org_id=payload.org_id,
+                user_id=user.id,
+                remember_token=remember_device_token,
+            )
+            if device:
+                access, refresh = _issue_tokens(
+                    user=user,
+                    identity=identity,
+                    org_id=payload.org_id,
+                    mfa_authenticated=True,
+                    mfa_method="remember_device",
+                )
+                result = SelectOrgResponse(
+                    access_token=access,
+                    refresh_token=refresh,
+                    remember_device_days=remember_days,
+                )
+                csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+                if csrf_token:
+                    result = result.model_copy(update={"csrf_token": csrf_token})
+                return result
+
+        challenge_token = create_mfa_challenge_token(str(identity.id), payload.org_id)
+        return SelectOrgResponse(
+            mfa_required=True,
+            challenge_token=challenge_token,
+            remember_device_days=remember_days,
+        )
+
+    # No MFA required — issue tokens directly
+    access, refresh = _issue_tokens(
+        user=user,
+        identity=identity,
+        org_id=payload.org_id,
+        mfa_authenticated=False,
+    )
+    result = SelectOrgResponse(
+        access_token=access,
+        refresh_token=refresh,
+        remember_device_days=remember_days,
     )
     csrf_token = _maybe_attach_cookies(response, result.refresh_token)
     if csrf_token:
@@ -224,105 +340,93 @@ async def login_complete(
     return result
 
 
-@router.post("/refresh/csrf", response_model=CsrfTokenResponse)
-async def refresh_csrf(
+@router.post(
+    "/mfa/verify",
+    response_model=MfaVerifyResponse,
+    summary="Verify MFA during login (TOTP or recovery)",
+)
+async def mfa_verify(
+    payload: MfaVerifyRequest,
     request: Request,
     response: Response,
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-) -> CsrfTokenResponse:
-    refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
-    if not refresh_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token required"
-        )
-    try:
-        token_data = decode_token(refresh_token, expected_type="refresh")
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    token_org = token_data.get("org")
-    if token_org and token_org != ctx.org_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
-        )
-    csrf_token = _issue_csrf_token()
-    _set_refresh_cookies(response, refresh_token, csrf_token)
-    return CsrfTokenResponse(csrf_token=csrf_token)
-
-
-@router.post("/login/mfa", response_model=LoginMfaResponse)
-async def login_mfa(
-    payload: LoginMfaRequest,
-    request: Request,
-    response: Response,
+    identity: Identity = Depends(deps.get_current_identity),
     db: AsyncSession = Depends(get_db),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-) -> LoginMfaResponse:
-    # Rate limit MFA attempts to prevent brute-forcing the 6-digit code
-    await enforce_mfa_rate_limit(payload.mfa_token)
+) -> MfaVerifyResponse:
+    """
+    Step 4a of the login flow. Verify TOTP or recovery code during login.
+    Requires pre_org_token.
+    """
+    await enforce_mfa_rate_limit(payload.challenge_token)
 
     try:
-        challenge = decode_mfa_challenge_token(payload.mfa_token)
+        challenge = decode_mfa_challenge_token(payload.challenge_token)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired MFA token"
         ) from exc
 
-    if challenge.get("org") != ctx.org_id:
+    challenge_identity_id = challenge.get("sub")
+    challenge_org_id = challenge.get("org")
+    if str(identity.id) != challenge_identity_id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="MFA token does not match tenant"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Challenge does not match identity"
         )
 
-    user_id = challenge.get("sub")
-    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
-    if not user.mfa_enabled:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA not available")
-    if not user.mfa_secret_encrypted:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA secret missing")
+    user = await _load_user_for_org(
+        db, identity_id=identity.id, org_id=challenge_org_id, allow_pending=True
+    )
 
-    secret = mfa_service.decrypt_secret(user.mfa_secret_encrypted)
-    if not mfa_service.verify_totp(secret, payload.code):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code")
+    if not identity.mfa_enabled:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA not available")
+
+    if payload.code_type == "recovery":
+        is_valid = await mfa_service.verify_recovery_code(
+            db, identity_id=identity.id, code=payload.code
+        )
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid recovery code"
+            )
+    else:
+        if not identity.mfa_secret_encrypted:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="MFA secret missing"
+            )
+        secret = mfa_service.decrypt_secret(identity.mfa_secret_encrypted)
+        if not mfa_service.verify_totp(secret, payload.code):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code"
+            )
 
     now = datetime.now(timezone.utc)
-    user.last_active_at = now
-    db.add(user)
+    identity.last_active_at = now
+    db.add(identity)
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(identity)
 
     remember_device_token = None
     if payload.remember_device:
+        ctx = deps.TenantContext(org_id=challenge_org_id)
         org_settings = await settings_service.get_org_settings(db, ctx)
         days = org_settings.remember_device_days
-        if days <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Remember device is disabled"
+        if days > 0:
+            remember_device_token = await mfa_service.create_remember_device(
+                db,
+                org_id=challenge_org_id,
+                user_id=user.id,
+                expires_at=mfa_service.compute_device_expiry(days),
+                user_agent=request.headers.get("user-agent"),
+                ip_address=request.client.host if request.client else None,
             )
-        remember_device_token = await mfa_service.create_remember_device(
-            db,
-            org_id=ctx.org_id,
-            user_id=user.id,
-            expires_at=mfa_service.compute_device_expiry(days),
-            user_agent=request.headers.get("user-agent"),
-            ip_address=request.client.host if request.client else None,
-        )
 
-    access = create_access_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
+    access, refresh = _issue_tokens(
+        user=user,
+        identity=identity,
+        org_id=challenge_org_id,
         mfa_authenticated=True,
-        mfa_method="totp",
+        mfa_method=payload.code_type,
     )
-    refresh = create_refresh_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
-        mfa_authenticated=True,
-        mfa_method="totp",
-    )
-    result = LoginMfaResponse(
+    result = MfaVerifyResponse(
         access_token=access,
         refresh_token=refresh,
         remember_device_token=remember_device_token,
@@ -333,86 +437,20 @@ async def login_mfa(
     return result
 
 
-@router.post("/login/mfa/recovery", response_model=LoginMfaResponse)
-async def login_mfa_recovery(
-    payload: LoginMfaRecoveryRequest,
-    request: Request,
-    response: Response,
+@router.post(
+    "/mfa/enroll/start",
+    response_model=MfaSetupStartResponse,
+    summary="Start MFA enrollment during login",
+)
+async def mfa_enroll_start(
+    payload: MfaEnrollStartRequest,
+    identity: Identity = Depends(deps.get_current_identity),
     db: AsyncSession = Depends(get_db),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
-) -> LoginMfaResponse:
-    """
-    Complete MFA login using a recovery code instead of TOTP.
-    Recovery codes are one-time use.
-    """
-    # Rate limit recovery code attempts
-    await enforce_mfa_rate_limit(payload.mfa_token)
-
-    try:
-        challenge = decode_mfa_challenge_token(payload.mfa_token)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired MFA token"
-        ) from exc
-
-    if challenge.get("org") != ctx.org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="MFA token does not match tenant"
-        )
-
-    user_id = challenge.get("sub")
-    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
-    if not user.mfa_enabled:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA not available")
-
-    # Verify recovery code (marks it as used if valid)
-    is_valid = await mfa_service.verify_recovery_code(
-        db, org_id=ctx.org_id, user_id=user.id, code=payload.recovery_code
-    )
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid recovery code"
-        )
-
-    now = datetime.now(timezone.utc)
-    user.last_active_at = now
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-
-    access = create_access_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
-        mfa_authenticated=True,
-        mfa_method="recovery",
-    )
-    refresh = create_refresh_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
-        mfa_authenticated=True,
-        mfa_method="recovery",
-    )
-    result = LoginMfaResponse(
-        access_token=access,
-        refresh_token=refresh,
-        remember_device_token=None,  # No remember device for recovery code login
-    )
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
-
-
-@router.post("/login/mfa/setup/start", response_model=MfaSetupStartResponse)
-async def login_mfa_setup_start(
-    payload: LoginMfaSetupStartRequest,
-    db: AsyncSession = Depends(get_db),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> MfaSetupStartResponse:
+    """
+    Step 4b of the login flow. Generate TOTP secret for first-time MFA setup.
+    Requires pre_org_token.
+    """
     try:
         setup = decode_mfa_setup_token(payload.setup_token)
     except ValueError as exc:
@@ -420,46 +458,54 @@ async def login_mfa_setup_start(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired setup token"
         ) from exc
 
-    if setup.get("org") != ctx.org_id:
+    setup_identity_id = setup.get("sub")
+    setup_org_id = setup.get("org")
+    if str(identity.id) != setup_identity_id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Setup token does not match tenant"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Setup token does not match identity"
         )
 
-    user_id = setup.get("sub")
-    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
-    if user.mfa_enabled:
+    if identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA already enabled")
 
     secret = mfa_service.generate_totp_secret()
-    user.mfa_secret_encrypted = mfa_service.encrypt_secret(secret)
-    user.mfa_method = "TOTP"
-    user.mfa_enabled = False
-    db.add(user)
+    identity.mfa_secret_encrypted = mfa_service.encrypt_secret(secret)
+    identity.mfa_method = "TOTP"
+    identity.mfa_enabled = False
+    db.add(identity)
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(identity)
 
-    org = (await db.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
-    issuer = org.name if org else ctx.org_id
-    otpauth_url = mfa_service.build_totp_uri(secret, user.email, issuer)
+    org = (await db.execute(select(Org).where(Org.id == setup_org_id))).scalar_one_or_none()
+    issuer = org.name if org else setup_org_id
+    otpauth_url = mfa_service.build_totp_uri(secret, identity.email, issuer)
+    ctx = deps.TenantContext(org_id=setup_org_id)
     org_settings = await settings_service.get_org_settings(db, ctx)
     return MfaSetupStartResponse(
         secret=secret,
         otpauth_url=otpauth_url,
         issuer=issuer,
-        account=user.email,
+        account=identity.email,
         remember_device_days=org_settings.remember_device_days,
     )
 
 
-@router.post("/login/mfa/setup/verify", response_model=MfaSetupCompleteResponse)
-async def login_mfa_setup_verify(
-    payload: LoginMfaSetupVerifyRequest,
+@router.post(
+    "/mfa/enroll/verify",
+    response_model=MfaSetupCompleteResponse,
+    summary="Verify TOTP code to complete MFA enrollment during login",
+)
+async def mfa_enroll_verify(
+    payload: MfaEnrollVerifyRequest,
     request: Request,
     response: Response,
+    identity: Identity = Depends(deps.get_current_identity),
     db: AsyncSession = Depends(get_db),
-    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> MfaSetupCompleteResponse:
-    # Rate limit MFA setup verification attempts
+    """
+    Step 4c of the login flow. Verify TOTP code, enable MFA, issue tokens.
+    Requires pre_org_token.
+    """
     await enforce_mfa_rate_limit(payload.setup_token)
 
     try:
@@ -469,62 +515,53 @@ async def login_mfa_setup_verify(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired setup token"
         ) from exc
 
-    if setup.get("org") != ctx.org_id:
+    setup_identity_id = setup.get("sub")
+    setup_org_id = setup.get("org")
+    if str(identity.id) != setup_identity_id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Setup token does not match tenant"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Setup token does not match identity"
         )
 
-    user_id = setup.get("sub")
-    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
-    if not user.mfa_secret_encrypted:
+    if not identity.mfa_secret_encrypted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not initialized")
 
-    secret = mfa_service.decrypt_secret(user.mfa_secret_encrypted)
+    secret = mfa_service.decrypt_secret(identity.mfa_secret_encrypted)
     if not mfa_service.verify_totp(secret, payload.code):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code")
 
-    user.mfa_enabled = True
-    user.mfa_method = "TOTP"
-    user.mfa_confirmed_at = datetime.now(timezone.utc)
-    db.add(user)
+    identity.mfa_enabled = True
+    identity.mfa_method = "TOTP"
+    identity.mfa_confirmed_at = datetime.now(timezone.utc)
+    db.add(identity)
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(identity)
+
+    user = await _load_user_for_org(
+        db, identity_id=identity.id, org_id=setup_org_id, allow_pending=True
+    )
 
     # Generate recovery codes
-    recovery_codes = await mfa_service.generate_recovery_codes(
-        db, org_id=ctx.org_id, user_id=user.id
-    )
+    recovery_codes = await mfa_service.generate_recovery_codes(db, identity_id=identity.id)
 
     remember_device_token = None
     if payload.remember_device:
+        ctx = deps.TenantContext(org_id=setup_org_id)
         org_settings = await settings_service.get_org_settings(db, ctx)
         days = org_settings.remember_device_days
-        if days <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Remember device is disabled"
+        if days > 0:
+            remember_device_token = await mfa_service.create_remember_device(
+                db,
+                org_id=setup_org_id,
+                user_id=user.id,
+                expires_at=mfa_service.compute_device_expiry(days),
+                user_agent=request.headers.get("user-agent"),
+                ip_address=request.client.host if request.client else None,
             )
-        remember_device_token = await mfa_service.create_remember_device(
-            db,
-            org_id=ctx.org_id,
-            user_id=user.id,
-            expires_at=mfa_service.compute_device_expiry(days),
-            user_agent=request.headers.get("user-agent"),
-            ip_address=request.client.host if request.client else None,
-        )
 
-    access = create_access_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
-        mfa_authenticated=True,
-        mfa_method="totp",
-    )
-    refresh = create_refresh_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
+    access, refresh = _issue_tokens(
+        user=user,
+        identity=identity,
+        org_id=setup_org_id,
         mfa_authenticated=True,
         mfa_method="totp",
     )
@@ -540,31 +577,35 @@ async def login_mfa_setup_verify(
     return result
 
 
+# ─── Post-login MFA management ──────────────────────────────────────────────
+
+
 @router.post("/mfa/setup/start", response_model=MfaSetupStartResponse)
 async def mfa_setup_start(
     current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupStartResponse:
-    if current_user.mfa_enabled:
+    identity = current_user.identity
+    if identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA already enabled")
 
     secret = mfa_service.generate_totp_secret()
-    current_user.mfa_secret_encrypted = mfa_service.encrypt_secret(secret)
-    current_user.mfa_method = "TOTP"
-    current_user.mfa_enabled = False
-    db.add(current_user)
+    identity.mfa_secret_encrypted = mfa_service.encrypt_secret(secret)
+    identity.mfa_method = "TOTP"
+    identity.mfa_enabled = False
+    db.add(identity)
     await db.commit()
-    await db.refresh(current_user)
+    await db.refresh(identity)
 
     org = (await db.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
     issuer = org.name if org else ctx.org_id
-    otpauth_url = mfa_service.build_totp_uri(secret, current_user.email, issuer)
+    otpauth_url = mfa_service.build_totp_uri(secret, identity.email, issuer)
     return MfaSetupStartResponse(
         secret=secret,
         otpauth_url=otpauth_url,
         issuer=issuer,
-        account=current_user.email,
+        account=identity.email,
     )
 
 
@@ -577,24 +618,23 @@ async def mfa_setup_verify(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupCompleteResponse:
-    if not current_user.mfa_secret_encrypted:
+    identity = current_user.identity
+    if not identity.mfa_secret_encrypted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not initialized")
 
-    secret = mfa_service.decrypt_secret(current_user.mfa_secret_encrypted)
+    secret = mfa_service.decrypt_secret(identity.mfa_secret_encrypted)
     if not mfa_service.verify_totp(secret, payload.code):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code")
 
-    current_user.mfa_enabled = True
-    current_user.mfa_method = "TOTP"
-    current_user.mfa_confirmed_at = datetime.now(timezone.utc)
-    db.add(current_user)
+    identity.mfa_enabled = True
+    identity.mfa_method = "TOTP"
+    identity.mfa_confirmed_at = datetime.now(timezone.utc)
+    db.add(identity)
     await db.commit()
-    await db.refresh(current_user)
+    await db.refresh(identity)
 
     # Generate recovery codes
-    recovery_codes = await mfa_service.generate_recovery_codes(
-        db, org_id=ctx.org_id, user_id=current_user.id
-    )
+    recovery_codes = await mfa_service.generate_recovery_codes(db, identity_id=identity.id)
 
     remember_device_token = None
     if payload.remember_device:
@@ -613,19 +653,10 @@ async def mfa_setup_verify(
             ip_address=request.client.host if request.client else None,
         )
 
-    access = create_access_token(
-        str(current_user.id),
+    access, refresh = _issue_tokens(
+        user=current_user,
+        identity=identity,
         org_id=ctx.org_id,
-        is_superuser=current_user.is_superuser,
-        token_version=current_user.token_version,
-        mfa_authenticated=True,
-        mfa_method="totp",
-    )
-    refresh = create_refresh_token(
-        str(current_user.id),
-        org_id=ctx.org_id,
-        is_superuser=current_user.is_superuser,
-        token_version=current_user.token_version,
         mfa_authenticated=True,
         mfa_method="totp",
     )
@@ -652,12 +683,11 @@ async def get_recovery_codes_count(
     db: AsyncSession = Depends(get_db),
 ) -> RecoveryCodesCountResponse:
     """Get the number of remaining (unused) recovery codes."""
-    if not current_user.mfa_enabled:
+    identity = current_user.identity
+    if not identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
 
-    count = await mfa_service.get_remaining_recovery_codes_count(
-        db, org_id=ctx.org_id, user_id=current_user.id
-    )
+    count = await mfa_service.get_remaining_recovery_codes_count(db, identity_id=identity.id)
     return RecoveryCodesCountResponse(remaining_count=count)
 
 
@@ -676,7 +706,8 @@ async def regenerate_recovery_codes(
     Regenerate recovery codes. Requires step-up MFA verification.
     This invalidates all existing recovery codes.
     """
-    if not current_user.mfa_enabled:
+    identity = current_user.identity
+    if not identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
 
     # Require step-up MFA verification
@@ -684,9 +715,7 @@ async def regenerate_recovery_codes(
 
     await require_step_up_mfa(request, current_user, ctx.org_id, action="RECOVERY_CODES_REGENERATE")
 
-    recovery_codes = await mfa_service.generate_recovery_codes(
-        db, org_id=ctx.org_id, user_id=current_user.id
-    )
+    recovery_codes = await mfa_service.generate_recovery_codes(db, identity_id=identity.id)
     return RegenerateRecoveryCodesResponse(recovery_codes=recovery_codes)
 
 
@@ -701,7 +730,8 @@ async def self_mfa_reset(
     Self-service MFA reset. User must verify via step-up MFA.
     After reset, user will need to set up MFA again.
     """
-    if not current_user.mfa_enabled:
+    identity = current_user.identity
+    if not identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
 
     # Require step-up MFA verification
@@ -709,10 +739,40 @@ async def self_mfa_reset(
 
     await require_step_up_mfa(request, current_user, ctx.org_id, action="SELF_MFA_RESET")
 
-    # Clear all MFA data
-    await mfa_service.clear_user_mfa(db, org_id=ctx.org_id, user=current_user)
+    # Clear all MFA data on identity, delete per-org devices
+    await mfa_service.clear_user_mfa(
+        db, identity, org_id=ctx.org_id, user_id=current_user.id
+    )
 
     return {"message": "MFA has been reset. Please set up MFA again."}
+
+
+# ─── Session management ─────────────────────────────────────────────────────
+
+
+@router.post("/refresh/csrf", response_model=CsrfTokenResponse)
+async def refresh_csrf(
+    request: Request,
+    response: Response,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+) -> CsrfTokenResponse:
+    refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token required"
+        )
+    try:
+        token_data = decode_token(refresh_token, expected_type="refresh")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    token_org = token_data.get("org")
+    if token_org and token_org != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
+        )
+    csrf_token = _issue_csrf_token()
+    _set_refresh_cookies(response, refresh_token, csrf_token)
+    return CsrfTokenResponse(csrf_token=csrf_token)
 
 
 @router.post("/refresh", response_model=TokenPair)
@@ -749,6 +809,7 @@ async def refresh_tokens(
     jti = token_data.get("jti")
     exp_ts = token_data.get("exp")
     token_org = token_data.get("org")
+    token_identity_id = token_data.get("iid")
     token_is_superuser = bool(token_data.get("su"))
     token_mfa = bool(token_data.get("mfa"))
     token_mfa_method = token_data.get("mfa_method")
@@ -765,40 +826,70 @@ async def refresh_tokens(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
         )
 
-    user = await _load_user_for_org(db, user_id=user_id, ctx=ctx, allow_pending=True)
-    if user.token_version != token_version:
+    # Load identity for token_version check
+    identity = None
+    if token_identity_id:
+        identity = await db.get(Identity, token_identity_id)
+    if not identity:
+        # Fallback: load via user
+        stmt = (
+            select(User)
+            .options(selectinload(User.identity))
+            .where(User.id == user_id)
+        )
+        user = (await db.execute(stmt)).scalar_one_or_none()
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
+            )
+        identity = user.identity
+    else:
+        stmt = select(User).where(User.id == user_id)
+        user = (await db.execute(stmt)).scalar_one_or_none()
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
+            )
+
+    if not identity or not identity.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity inactive"
+        )
+    if identity.token_version != token_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
 
+    if not user.is_superuser:
+        membership = await deps.get_membership(db, user_id=user.id, org_id=ctx.org_id)
+        if not membership:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not a member of org"
+            )
+        if not deps.membership_allows_auth(membership, allow_pending=True):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Membership is not active"
+            )
+
     now = datetime.now(timezone.utc)
-    deps.enforce_inactivity(user.last_active_at, now)
-    user.last_active_at = now
-    db.add(user)
+    deps.enforce_inactivity(identity.last_active_at, now)
+    identity.last_active_at = now
+    db.add(identity)
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(identity)
 
     # Refresh token rotation: reject reused tokens
     if await is_refresh_used(jti):
-        user.token_version += 1
-        db.add(user)
+        identity.token_version += 1
+        db.add(identity)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token reuse detected"
         )
     await mark_refresh_used(jti, datetime.fromtimestamp(exp_ts, tz=timezone.utc))
 
-    access = create_access_token(
-        str(user.id),
+    access, refresh = _issue_tokens(
+        user=user,
+        identity=identity,
         org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
-        mfa_authenticated=token_mfa,
-        mfa_method=token_mfa_method,
-    )
-    refresh = create_refresh_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
         mfa_authenticated=token_mfa,
         mfa_method=token_mfa_method,
     )
@@ -809,149 +900,16 @@ async def refresh_tokens(
     return result
 
 
-async def _complete_login_flow(
-    *,
-    challenge_token: str,
-    password: str,
-    remember_device_token: str | None,
-    ctx: deps.TenantContext,
-    db: AsyncSession,
-) -> LoginCompleteResponse:
-    try:
-        challenge = decode_login_challenge_token(challenge_token)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired challenge"
-        ) from exc
-
-    if challenge.get("org") != ctx.org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Challenge does not match tenant"
-        )
-
-    email = challenge.get("sub")
-    stmt = select(User).where(User.org_id == ctx.org_id, User.email == email)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    if (
-        not user
-        or not user.is_active
-        or not constant_time_verify(user.hashed_password if user else None, password)
-    ):
-        await record_login_attempt(email, success=False)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-
-    membership = None
-    if not user.is_superuser:
-        membership = await deps.get_membership(db, user_id=user.id, org_id=ctx.org_id)
-        if not membership:
-            await record_login_attempt(email, success=False)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
-            )
-        if not deps.membership_allows_auth(membership, allow_pending=True):
-            await record_login_attempt(email, success=False)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
-            )
-
-    org_settings = await settings_service.get_org_settings(db, ctx)
-
-    # Check for sensitive permissions which mandate MFA
-    has_sensitive = await authz_service.has_sensitive_permissions(db, user, ctx.org_id)
-
-    # MFA is required if org mandates it, OR user has enabled it, OR user has sensitive permissions
-    mfa_required = bool(org_settings.require_two_factor or user.mfa_enabled or has_sensitive)
-    remember_days = org_settings.remember_device_days
-    require_login_mfa = settings_service.is_mfa_action_required(org_settings, "LOGIN")
-
-    # If org requires MFA or user has sensitive permissions, but user hasn't set it up yet, prompt for setup
-    if (org_settings.require_two_factor or has_sensitive) and not user.mfa_enabled:
-        setup_token = create_mfa_setup_token(str(user.id), ctx.org_id)
-        await record_login_attempt(email, success=True)
-        return LoginCompleteResponse(
-            mfa_setup_required=True,
-            setup_token=setup_token,
-            remember_device_days=remember_days,
-        )
-
-    now = datetime.now(timezone.utc)
-    user.last_active_at = now
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-
-    await record_login_attempt(email, success=True)
-
-    if mfa_required:
-        if require_login_mfa:
-            remember_device_token = None
-        if remember_device_token and org_settings.remember_device_days > 0:
-            device = await mfa_service.find_valid_device(
-                db,
-                org_id=ctx.org_id,
-                user_id=user.id,
-                remember_token=remember_device_token,
-            )
-            if device:
-                access = create_access_token(
-                    str(user.id),
-                    org_id=ctx.org_id,
-                    is_superuser=user.is_superuser,
-                    token_version=user.token_version,
-                    mfa_authenticated=True,
-                    mfa_method="remember_device",
-                )
-                refresh = create_refresh_token(
-                    str(user.id),
-                    org_id=ctx.org_id,
-                    is_superuser=user.is_superuser,
-                    token_version=user.token_version,
-                    mfa_authenticated=True,
-                    mfa_method="remember_device",
-                )
-                return LoginCompleteResponse(
-                    access_token=access,
-                    refresh_token=refresh,
-                    remember_device_days=remember_days,
-                )
-
-        mfa_token = create_mfa_challenge_token(str(user.id), ctx.org_id)
-        return LoginCompleteResponse(
-            mfa_required=True,
-            mfa_token=mfa_token,
-            remember_device_days=remember_days,
-        )
-
-    access = create_access_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
-        mfa_authenticated=False,
-    )
-    refresh = create_refresh_token(
-        str(user.id),
-        org_id=ctx.org_id,
-        is_superuser=user.is_superuser,
-        token_version=user.token_version,
-        mfa_authenticated=False,
-    )
-    return LoginCompleteResponse(
-        access_token=access,
-        refresh_token=refresh,
-        remember_device_days=remember_days,
-    )
-
-
 @router.post("/logout", status_code=204)
 async def logout(
     response: Response,
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    current_user.token_version += 1
-    db.add(current_user)
+    # Bump identity token_version — revokes ALL org sessions for this identity
+    identity = current_user.identity
+    identity.token_version += 1
+    db.add(identity)
     await db.commit()
     _clear_refresh_cookies(response)
     return None
@@ -962,7 +920,14 @@ async def read_current_user(
     current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> UserOut:
-    return UserOut.model_validate(current_user).model_copy(update={"org_id": ctx.org_id})
+    identity = current_user.identity
+    return UserOut.model_validate(current_user).model_copy(
+        update={
+            "org_id": ctx.org_id,
+            "mfa_enabled": identity.mfa_enabled if identity else False,
+            "last_active_at": identity.last_active_at if identity else None,
+        }
+    )
 
 
 @router.post("/change-password", response_model=TokenPair)
@@ -973,7 +938,8 @@ async def change_password(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> TokenPair:
-    if not constant_time_verify(current_user.hashed_password, payload.current_password):
+    identity = current_user.identity
+    if not constant_time_verify(identity.hashed_password, payload.current_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect"
         )
@@ -984,15 +950,15 @@ async def change_password(
         )
 
     try:
-        current_user.hashed_password = get_password_hash(payload.new_password)
+        identity.hashed_password = get_password_hash(payload.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     now = datetime.now(timezone.utc)
-    was_first_login = current_user.must_change_password
-    current_user.token_version += 1
-    current_user.last_active_at = now
-    current_user.must_change_password = False
+    was_first_login = identity.must_change_password
+    identity.token_version += 1
+    identity.last_active_at = now
+    identity.must_change_password = False
 
     # If this is the first-time login flow, mark membership as accepted/active
     if was_first_login:
@@ -1014,30 +980,26 @@ async def change_password(
             if updated:
                 db.add(membership)
 
-    db.add(current_user)
+    db.add(identity)
 
     await db.commit()
+    await db.refresh(identity)
     await db.refresh(current_user)
 
-    access = create_access_token(
-        str(current_user.id),
+    access, refresh = _issue_tokens(
+        user=current_user,
+        identity=identity,
         org_id=ctx.org_id,
-        is_superuser=current_user.is_superuser,
-        token_version=current_user.token_version,
-        mfa_authenticated=current_user.mfa_enabled,
-    )
-    refresh = create_refresh_token(
-        str(current_user.id),
-        org_id=ctx.org_id,
-        is_superuser=current_user.is_superuser,
-        token_version=current_user.token_version,
-        mfa_authenticated=current_user.mfa_enabled,
+        mfa_authenticated=identity.mfa_enabled,
     )
     result = TokenPair(access_token=access, refresh_token=refresh)
     csrf_token = _maybe_attach_cookies(response, result.refresh_token)
     if csrf_token:
         result = result.model_copy(update={"csrf_token": csrf_token})
     return result
+
+
+# ─── Step-up MFA ─────────────────────────────────────────────────────────────
 
 
 @router.post(
@@ -1089,8 +1051,9 @@ async def verify_step_up_mfa(
             detail="Invalid challenge token: missing action",
         )
 
-    # Verify the code (TOTP or recovery code)
-    if not current_user.mfa_enabled or not current_user.mfa_secret_encrypted:
+    # Verify the code against identity's MFA
+    identity = current_user.identity
+    if not identity.mfa_enabled or not identity.mfa_secret_encrypted:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="MFA is not enabled for this user",
@@ -1099,7 +1062,7 @@ async def verify_step_up_mfa(
     if payload.code_type == "recovery":
         # Verify and consume recovery code
         is_valid = await mfa_service.verify_recovery_code(
-            db, org_id=ctx.org_id, user_id=current_user.id, code=payload.code
+            db, identity_id=identity.id, code=payload.code
         )
         if not is_valid:
             raise HTTPException(
@@ -1108,7 +1071,7 @@ async def verify_step_up_mfa(
             )
     else:
         # Verify TOTP code
-        secret = mfa_service.decrypt_secret(current_user.mfa_secret_encrypted)
+        secret = mfa_service.decrypt_secret(identity.mfa_secret_encrypted)
         if not mfa_service.verify_totp(secret, payload.code):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

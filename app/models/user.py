@@ -5,7 +5,6 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
-    Integer,
     String,
     UniqueConstraint,
     func,
@@ -18,21 +17,19 @@ from app.db.base import Base
 
 class User(Base):
     __tablename__ = "users"
-    __table_args__ = (UniqueConstraint("org_id", "email", name="uq_users_org_email"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "email", name="uq_users_org_email"),
+        UniqueConstraint("org_id", "identity_id", name="uq_users_org_identity"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True)
+    identity_id = Column(
+        UUID(as_uuid=True), ForeignKey("identities.id"), nullable=False, index=True
+    )
     email = Column(String(255), nullable=False)
-    hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, nullable=False, server_default="true")
     is_superuser = Column(Boolean, nullable=False, server_default="false")
-    mfa_enabled = Column(Boolean, nullable=False, server_default="false")
-    mfa_method = Column(String(50), nullable=True)
-    mfa_secret_encrypted = Column(String(255), nullable=True)
-    mfa_confirmed_at = Column(DateTime(timezone=True), nullable=True)
-    token_version = Column(Integer, nullable=False, server_default="0")
-    last_active_at = Column(DateTime(timezone=True), nullable=True)
-    must_change_password = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),
@@ -41,6 +38,7 @@ class User(Base):
         onupdate=func.now(),
     )
 
+    identity = relationship("Identity", back_populates="users")
     memberships = relationship("OrgMembership", back_populates="user", cascade="all, delete-orphan")
     roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan")
 

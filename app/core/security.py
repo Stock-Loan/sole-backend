@@ -67,10 +67,34 @@ def _read_key(path: str) -> str:
         return key_file.read()
 
 
+def create_pre_org_token(identity_id: str, *, ttl_minutes: int = 5) -> str:
+    """Create a short-lived token for the pre-org-selection lobby phase."""
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=ttl_minutes)
+    to_encode: dict[str, Any] = {
+        "sub": identity_id,
+        "type": "pre_org",
+        "iat": now,
+        "exp": expire,
+    }
+    private_key = _load_private_key()
+    return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
+
+
+def decode_pre_org_token(token: str) -> dict[str, Any]:
+    """Decode and validate a pre-org token."""
+    payload = decode_token(token, expected_type="pre_org")
+    identity_id = payload.get("sub")
+    if not identity_id:
+        raise ValueError("Invalid pre-org token")
+    return payload
+
+
 def create_access_token(
     subject: str,
     *,
     org_id: str,
+    identity_id: str,
     is_superuser: bool,
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
@@ -82,6 +106,7 @@ def create_access_token(
     to_encode: dict[str, Any] = {
         "sub": subject,
         "org": org_id,
+        "iid": identity_id,
         "su": bool(is_superuser),
         "mfa": bool(mfa_authenticated),
         "exp": expire,
@@ -100,6 +125,7 @@ def create_refresh_token(
     subject: str,
     *,
     org_id: str,
+    identity_id: str,
     is_superuser: bool,
     expires_delta: timedelta | None = None,
     token_version: int | None = None,
@@ -112,6 +138,7 @@ def create_refresh_token(
     to_encode: dict[str, Any] = {
         "sub": subject,
         "org": org_id,
+        "iid": identity_id,
         "su": bool(is_superuser),
         "mfa": bool(mfa_authenticated),
         "exp": expire,
@@ -140,25 +167,11 @@ def decode_token(token: str, expected_type: str | None = None) -> dict[str, Any]
         raise ValueError("Invalid token") from exc
 
 
-def create_login_challenge_token(email: str, org_id: str, *, ttl_minutes: int = 5) -> str:
+def create_mfa_challenge_token(identity_id: str, org_id: str, *, ttl_minutes: int = 5) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=ttl_minutes)
     to_encode: dict[str, Any] = {
-        "sub": email,
-        "org": org_id,
-        "type": "login_challenge",
-        "iat": now,
-        "exp": expire,
-    }
-    private_key = _load_private_key()
-    return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
-
-
-def create_mfa_challenge_token(user_id: str, org_id: str, *, ttl_minutes: int = 5) -> str:
-    now = datetime.now(timezone.utc)
-    expire = now + timedelta(minutes=ttl_minutes)
-    to_encode: dict[str, Any] = {
-        "sub": user_id,
+        "sub": identity_id,
         "org": org_id,
         "type": "mfa_challenge",
         "iat": now,
@@ -170,18 +183,18 @@ def create_mfa_challenge_token(user_id: str, org_id: str, *, ttl_minutes: int = 
 
 def decode_mfa_challenge_token(token: str) -> dict[str, Any]:
     payload = decode_token(token, expected_type="mfa_challenge")
-    user_id = payload.get("sub")
+    identity_id = payload.get("sub")
     org_id = payload.get("org")
-    if not user_id or not org_id:
+    if not identity_id or not org_id:
         raise ValueError("Invalid MFA challenge token")
     return payload
 
 
-def create_mfa_setup_token(user_id: str, org_id: str, *, ttl_minutes: int = 10) -> str:
+def create_mfa_setup_token(identity_id: str, org_id: str, *, ttl_minutes: int = 10) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=ttl_minutes)
     to_encode: dict[str, Any] = {
-        "sub": user_id,
+        "sub": identity_id,
         "org": org_id,
         "type": "mfa_setup",
         "iat": now,
@@ -193,19 +206,10 @@ def create_mfa_setup_token(user_id: str, org_id: str, *, ttl_minutes: int = 10) 
 
 def decode_mfa_setup_token(token: str) -> dict[str, Any]:
     payload = decode_token(token, expected_type="mfa_setup")
-    user_id = payload.get("sub")
+    identity_id = payload.get("sub")
     org_id = payload.get("org")
-    if not user_id or not org_id:
+    if not identity_id or not org_id:
         raise ValueError("Invalid MFA setup token")
-    return payload
-
-
-def decode_login_challenge_token(token: str) -> dict[str, Any]:
-    payload = decode_token(token, expected_type="login_challenge")
-    email = payload.get("sub")
-    org_id = payload.get("org")
-    if not email or not org_id:
-        raise ValueError("Invalid challenge token")
     return payload
 
 

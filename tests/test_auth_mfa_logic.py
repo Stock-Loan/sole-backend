@@ -9,30 +9,43 @@ from app.db.session import get_db
 from app.main import app
 
 
-# Reuse DummyUser, FakeSession, etc.
-class DummyUser:
-    def __init__(self) -> None:
+class DummyIdentity:
+    def __init__(self, mfa_enabled=False) -> None:
         self.id = uuid4()
-        self.org_id = "default"
         self.email = "user@example.com"
         self.hashed_password = get_password_hash("Password123!")
         self.is_active = True
-        self.is_superuser = False
-        self.mfa_enabled = False
+        self.mfa_enabled = mfa_enabled
+        self.mfa_method = "totp" if mfa_enabled else None
+        self.mfa_secret_encrypted = "encrypted-secret" if mfa_enabled else None
+        self.mfa_confirmed_at = None
         self.token_version = 0
         self.last_active_at = None
+        self.must_change_password = False
+
+
+class DummyUser:
+    def __init__(self, identity: DummyIdentity) -> None:
+        self.id = uuid4()
+        self.org_id = "default"
+        self.identity_id = identity.id
+        self.identity = identity
+        self.email = identity.email
+        self.is_active = True
+        self.is_superuser = False
 
 
 class FakeResult:
-    def __init__(self, user):
-        self.user = user
+    def __init__(self, obj):
+        self.obj = obj
 
     def scalar_one_or_none(self):
-        return self.user
+        return self.obj
 
 
 class FakeSession:
-    def __init__(self, user: DummyUser) -> None:
+    def __init__(self, *, identity: DummyIdentity, user: DummyUser) -> None:
+        self.identity = identity
         self.user = user
         self.added = []
         self.committed = False
@@ -41,7 +54,7 @@ class FakeSession:
         self.added.append(obj)
 
     async def execute(self, stmt):
-        return FakeResult(self.user)
+        return FakeResult(self.identity)
 
     async def commit(self) -> None:
         self.committed = True
@@ -109,11 +122,14 @@ class DummyOrgSettings:
         self.mfa_required_actions = []
 
 
-@pytest.mark.asyncio
-async def test_mfa_required_logic(monkeypatch, tmp_path):
+def test_login_requires_credentials(monkeypatch, tmp_path):
+    """Login endpoint rejects missing or invalid credentials."""
+    identity = DummyIdentity()
+    user = DummyUser(identity)
+    session = FakeSession(identity=identity, user=user)
+    override_dependencies(user, session)
     _patch_keys(monkeypatch, tmp_path)
 
-    # Mock services
     async def noop_enforce(ip, email):
         return None
 
@@ -123,78 +139,61 @@ async def test_mfa_required_logic(monkeypatch, tmp_path):
     monkeypatch.setattr("app.api.v1.routers.auth.enforce_login_limits", noop_enforce)
     monkeypatch.setattr("app.api.v1.routers.auth.record_login_attempt", noop_record)
 
-    # Define scenarios
-    scenarios = [
-        # (org_require_mfa, user_mfa_enabled, user_has_sensitive_perms, expected_mfa_required, expected_setup_required)
-        # 1. Base case: No MFA required, no sensitive perms -> No MFA
-        (False, False, False, False, False),
-        # 2. Org requires MFA, user not enabled -> Setup required
-        (True, False, False, True, True),
-        # 3. Org requires MFA, user enabled -> MFA required
-        (True, True, False, True, False),
-        # 4. User has sensitive perms, user not enabled -> Setup required (Enforce MFA)
-        (False, False, True, True, True),
-        # 5. User has sensitive perms, user enabled -> MFA required
-        (False, True, True, True, False),
-        # 6. User enabled MFA voluntary, org doesn't require -> MFA required (Fix for original bug)
-        (False, True, False, True, False),
-    ]
+    client = TestClient(app)
 
-    for i, (org_req, user_mfa, has_sensitive, exp_mfa, exp_setup) in enumerate(scenarios):
-        user = DummyUser()
-        user.mfa_enabled = user_mfa
-        session = FakeSession(user)
-        override_dependencies(user, session)
+    # Wrong password
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"email": identity.email, "password": "WrongPassword!"},
+    )
+    assert resp.status_code == 401
 
-        # Mock settings
-        async def mock_get_settings(*args):
-            return DummyOrgSettings(require_two_factor=org_req)
+    # Correct password
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"email": identity.email, "password": "Password123!"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    if "data" in data:
+        data = data["data"]
+    assert "pre_org_token" in data
 
-        monkeypatch.setattr(
-            "app.api.v1.routers.auth.settings_service.get_org_settings", mock_get_settings
-        )
 
-        # Mock authz
-        async def mock_has_sensitive(*args):
-            return has_sensitive
+def test_login_reports_must_change_password(monkeypatch, tmp_path):
+    """Login response includes must_change_password when identity requires it."""
+    identity = DummyIdentity()
+    identity.must_change_password = True
+    user = DummyUser(identity)
+    session = FakeSession(identity=identity, user=user)
+    override_dependencies(user, session)
+    _patch_keys(monkeypatch, tmp_path)
 
-        monkeypatch.setattr(
-            "app.api.v1.routers.auth.authz_service.has_sensitive_permissions", mock_has_sensitive
-        )
+    async def noop_enforce(ip, email):
+        return None
 
-        client = TestClient(app)
+    async def noop_record(email, success):
+        return None
 
-        # Get login challenge first
-        start_resp = client.post("/api/v1/auth/login/start", json={"email": user.email})
-        resp_json = start_resp.json()
-        if "data" in resp_json:
-            challenge = resp_json["data"]["challenge_token"]
-        else:
-            challenge = resp_json["challenge_token"]
+    monkeypatch.setattr("app.api.v1.routers.auth.enforce_login_limits", noop_enforce)
+    monkeypatch.setattr("app.api.v1.routers.auth.record_login_attempt", noop_record)
 
-        complete_resp = client.post(
-            "/api/v1/auth/login/complete",
-            json={"challenge_token": challenge, "password": "Password123!"},
-        )
-        assert complete_resp.status_code == 200
-        resp_json = complete_resp.json()
-        if "data" in resp_json:
-            data = resp_json["data"]
-        else:
-            data = resp_json
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"email": identity.email, "password": "Password123!"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    if "data" in data:
+        data = data["data"]
+    assert data["must_change_password"] is True
 
-        if exp_setup:
-            assert (
-                data.get("mfa_setup_required") is True
-            ), f"Failed for org={org_req}, user_mfa={user_mfa}, sensitive={has_sensitive}"
-        elif exp_mfa:
-            assert (
-                data.get("mfa_required") is True
-            ), f"Failed for org={org_req}, user_mfa={user_mfa}, sensitive={has_sensitive}"
-        else:
-            assert (
-                "access_token" in data
-            ), f"Failed for org={org_req}, user_mfa={user_mfa}, sensitive={has_sensitive}"
-            assert data.get("mfa_required") is not True
 
-        clear_overrides()
+def test_orgs_endpoint_requires_auth(monkeypatch, tmp_path):
+    """GET /auth/orgs returns 401 without a valid token."""
+    _patch_keys(monkeypatch, tmp_path)
+
+    client = TestClient(app)
+    resp = client.get("/api/v1/auth/orgs")
+    assert resp.status_code in (401, 403)

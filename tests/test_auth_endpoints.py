@@ -11,33 +11,46 @@ from app.db.session import get_db
 from app.main import app
 
 
-class DummyUser:
+class DummyIdentity:
     def __init__(self) -> None:
         self.id = uuid4()
-        self.org_id = "default"
         self.email = "user@example.com"
         self.hashed_password = get_password_hash("OldPassword123!")
         self.is_active = True
-        self.is_superuser = False
         self.mfa_enabled = False
+        self.mfa_method = None
+        self.mfa_secret_encrypted = None
+        self.mfa_confirmed_at = None
         self.token_version = 0
         self.last_active_at = None
         self.must_change_password = False
 
 
+class DummyUser:
+    def __init__(self, identity: DummyIdentity) -> None:
+        self.id = uuid4()
+        self.org_id = "default"
+        self.identity_id = identity.id
+        self.identity = identity
+        self.email = identity.email
+        self.is_active = True
+        self.is_superuser = False
+
+
 class FakeResult:
-    def __init__(self, user):
-        self.user = user
+    def __init__(self, obj):
+        self.obj = obj
 
     def scalar_one_or_none(self):
-        return self.user
+        return self.obj
 
     def all(self):
         return []
 
 
 class FakeSession:
-    def __init__(self, user: DummyUser) -> None:
+    def __init__(self, *, identity: DummyIdentity, user: DummyUser) -> None:
+        self.identity = identity
         self.user = user
         self.added = []
         self.committed = False
@@ -46,12 +59,13 @@ class FakeSession:
         self.added.append(obj)
 
     async def execute(self, stmt):
-        return FakeResult(self.user)
+        # Return identity or user based on stmt context
+        return FakeResult(self.identity)
 
     async def commit(self) -> None:
         self.committed = True
 
-    async def refresh(self, obj) -> None:  # pragma: no cover - stub for interface
+    async def refresh(self, obj) -> None:
         return None
 
 
@@ -122,8 +136,9 @@ def get_data(resp):
 
 
 def test_change_password_success(tmp_path, monkeypatch):
-    user = DummyUser()
-    session = FakeSession(user)
+    identity = DummyIdentity()
+    user = DummyUser(identity)
+    session = FakeSession(identity=identity, user=user)
     override_dependencies(user, session)
     _patch_keys(monkeypatch, tmp_path)
 
@@ -135,15 +150,16 @@ def test_change_password_success(tmp_path, monkeypatch):
     assert resp.status_code == 200
     data = get_data(resp)
     assert "access_token" in data and "refresh_token" in data
-    assert user.token_version == 1
-    assert verify_password("NewPassword123!", user.hashed_password)
-    assert not verify_password("OldPassword123!", user.hashed_password)
+    assert identity.token_version == 1
+    assert verify_password("NewPassword123!", identity.hashed_password)
+    assert not verify_password("OldPassword123!", identity.hashed_password)
     assert session.committed is True
 
 
 def test_change_password_rejects_wrong_current(tmp_path, monkeypatch):
-    user = DummyUser()
-    session = FakeSession(user)
+    identity = DummyIdentity()
+    user = DummyUser(identity)
+    session = FakeSession(identity=identity, user=user)
     override_dependencies(user, session)
     _patch_keys(monkeypatch, tmp_path)
 
@@ -155,21 +171,17 @@ def test_change_password_rejects_wrong_current(tmp_path, monkeypatch):
     assert resp.status_code == 400
     assert "incorrect" in resp.json()["message"]
     # Ensure we did not change password or commit
-    assert verify_password("OldPassword123!", user.hashed_password)
+    assert verify_password("OldPassword123!", identity.hashed_password)
     assert session.committed is False
 
 
-def test_login_start_and_complete(monkeypatch, tmp_path):
-    user = DummyUser()
-    session = FakeSession(user)
+def test_login_returns_pre_org_token(monkeypatch, tmp_path):
+    identity = DummyIdentity()
+    user = DummyUser(identity)
+    session = FakeSession(identity=identity, user=user)
     override_dependencies(user, session)
     _patch_keys(monkeypatch, tmp_path)
 
-    class DummyOrgSettings:
-        require_two_factor = False
-        remember_device_days = 30
-
-    # Patch rate limiters and login attempts to no-ops
     async def noop_enforce(ip, email):
         return None
 
@@ -179,22 +191,12 @@ def test_login_start_and_complete(monkeypatch, tmp_path):
     monkeypatch.setattr("app.api.v1.routers.auth.enforce_login_limits", noop_enforce)
     monkeypatch.setattr("app.api.v1.routers.auth.record_login_attempt", noop_record)
 
-    async def noop_get_org_settings(*_args, **_kwargs):
-        return DummyOrgSettings()
-
-    monkeypatch.setattr(
-        "app.api.v1.routers.auth.settings_service.get_org_settings", noop_get_org_settings
-    )
-
     client = TestClient(app)
-    start_resp = client.post("/api/v1/auth/login/start", json={"email": user.email})
-    assert start_resp.status_code == 200
-    challenge = get_data(start_resp)["challenge_token"]
-
-    complete_resp = client.post(
-        "/api/v1/auth/login/complete",
-        json={"challenge_token": challenge, "password": "OldPassword123!"},
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"email": identity.email, "password": "OldPassword123!"},
     )
-    assert complete_resp.status_code == 200
-    data = get_data(complete_resp)
-    assert "access_token" in data and "refresh_token" in data
+    assert resp.status_code == 200
+    data = get_data(resp)
+    assert "pre_org_token" in data
+    assert data.get("must_change_password") is False
