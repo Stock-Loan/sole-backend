@@ -264,22 +264,25 @@ def membership_allows_auth(membership: OrgMembership, *, allow_pending: bool) ->
 
 
 async def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db_session),
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> User:
-    return await _get_current_user(token, db, ctx, allow_password_change=False)
+    return await _get_current_user(request, token, db, ctx, allow_password_change=False)
 
 
 async def get_current_user_allow_password_change(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db_session),
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> User:
-    return await _get_current_user(token, db, ctx, allow_password_change=True)
+    return await _get_current_user(request, token, db, ctx, allow_password_change=True)
 
 
 async def _get_current_user(
+    request: Request,
     token: str,
     db: AsyncSession,
     ctx: TenantContext,
@@ -339,9 +342,14 @@ async def _get_current_user(
 
     now = datetime.now(timezone.utc)
     enforce_inactivity(identity.last_active_at, now)
-    identity.last_active_at = now
-    db.add(identity)
-    await db.commit()
+    # Only update last_active_at for user-initiated requests.
+    # Background polling (marked with X-Background-Request header) should not
+    # reset the inactivity timer to ensure the timeout is meaningful.
+    is_background = request.headers.get("X-Background-Request", "").lower() in {"1", "true"}
+    if not is_background:
+        identity.last_active_at = now
+        db.add(identity)
+        await db.commit()
     await db.refresh(user)
     await db.refresh(identity)
     if identity.must_change_password and not allow_password_change:

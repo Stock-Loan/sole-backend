@@ -44,6 +44,9 @@ def _org_slug_for_seed(org_id: str) -> str:
     return org_id
 
 
+_DEFAULT_SEED_PASSWORDS = {"ChangeMe123!", "password", "admin123", "changeme"}
+
+
 def _is_production() -> bool:
     return settings.environment.lower() in {"production", "prod"}
 
@@ -186,6 +189,13 @@ async def init_db() -> None:
     """
     async with AsyncSessionLocal() as session:
         print("Seeding database...")
+
+        if _is_production() and settings.seed_admin_password in _DEFAULT_SEED_PASSWORDS:
+            raise RuntimeError(
+                "SEED_ADMIN_PASSWORD is set to a well-known default. "
+                "Set a strong, unique password before running in production."
+            )
+
         try:
             await session.execute(select(Org).limit(1))
         except ProgrammingError as exc:

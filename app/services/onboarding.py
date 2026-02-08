@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 import re
 import secrets
 import string
@@ -33,6 +34,8 @@ from app.schemas.onboarding import (
     OnboardingUserCreate,
 )
 from app.resources.countries import COUNTRIES, SUBDIVISIONS
+
+logger = logging.getLogger(__name__)
 
 
 UserStatus = Literal["new", "existing"]
@@ -409,8 +412,11 @@ async def onboard_single_user(
     try:
         await assign_default_employee_role(db, ctx.org_id, user.id)
     except Exception:
-        # Best-effort; do not fail onboarding if role assignment fails
-        pass
+        logger.error(
+            "Failed to assign default EMPLOYEE role during onboarding",
+            exc_info=True,
+            extra={"org_id": ctx.org_id, "user_id": str(user.id)},
+        )
     user_status: UserStatus = "new" if created_user else "existing"
     membership_status: MembershipStatus = "created" if created_membership else "already_exists"
     return OnboardingResult(

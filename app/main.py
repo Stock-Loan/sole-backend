@@ -17,7 +17,14 @@ from app.middlewares.trust_proxies import TrustedProxiesMiddleware
 
 def create_app() -> FastAPI:
     configure_logging()
-    app = FastAPI(title="SOLE Backend", version="0.1.0")
+    is_dev = settings.environment.lower() in {"development", "dev"}
+    app = FastAPI(
+        title="SOLE Backend",
+        version="0.1.0",
+        docs_url="/docs" if is_dev else None,
+        redoc_url="/redoc" if is_dev else None,
+        openapi_url="/openapi.json" if is_dev else None,
+    )
     register_exception_handlers(app)
     register_response_envelope(app)
     app.state.limiter = limiter
@@ -37,7 +44,7 @@ def create_app() -> FastAPI:
         allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Tenant-ID", "X-CSRF-Token", "X-Step-Up-Token"],
+        allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Tenant-ID", "X-CSRF-Token", "X-Step-Up-Token", "X-Background-Request"],
     )
     app.include_router(api_router, prefix="/api/v1")
     register_event_handlers(app)

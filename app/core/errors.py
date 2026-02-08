@@ -115,7 +115,7 @@ async def validation_exception_handler(
         status_code=422,
         code="validation_error",
         message=message,
-        details={"errors": errors, "body": exc.body},
+        details={"errors": errors},
     )
 
 

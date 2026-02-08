@@ -125,6 +125,7 @@ async def _save_local_document(
             base_dir=base_dir,
             subdir=loan_documents_subdir(ctx.org_id, loan_id),
             allowed_extensions=SAFE_EXTENSIONS,
+            max_size_bytes=settings.max_upload_size_mb * 1024 * 1024,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -923,6 +924,7 @@ async def record_loan_repayment_with_evidence(
                 base_dir=Path(settings.local_upload_dir),
                 subdir=loan_repayments_subdir(ctx.org_id, loan_id),
                 allowed_extensions=SAFE_EXTENSIONS,
+                max_size_bytes=settings.max_upload_size_mb * 1024 * 1024,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -2517,6 +2519,7 @@ async def upload_legal_issuance_document_file(
             base_dir=base_dir,
             subdir=loan_documents_subdir(ctx.org_id, loan_id),
             allowed_extensions=SAFE_EXTENSIONS,
+            max_size_bytes=settings.max_upload_size_mb * 1024 * 1024,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

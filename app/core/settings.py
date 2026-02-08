@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     login_attempt_limit: int = Field(default=5, alias="LOGIN_ATTEMPT_LIMIT")
     login_lockout_minutes: int = Field(default=15, alias="LOGIN_LOCKOUT_MINUTES")
     default_password_min_length: int = Field(default=12, alias="DEFAULT_PASSWORD_MIN_LENGTH")
-    proxies_count: int = Field(default=0, alias="PROXIES_COUNT")
+    proxies_count: int = Field(default=1, alias="PROXIES_COUNT")
     extra_seed_org_ids: str = Field(
         default="",
         alias="EXTRA_SEED_ORG_IDS",
@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     seed_admin_email: str = Field(alias="SEED_ADMIN_EMAIL")
     seed_admin_password: str = Field(alias="SEED_ADMIN_PASSWORD")
     seed_admin_full_name: str = Field(default="Admin User", alias="SEED_ADMIN_FULL_NAME")
+    max_upload_size_mb: int = Field(default=50, alias="MAX_UPLOAD_SIZE_MB")
     local_upload_dir: str = Field(default="local_uploads", alias="LOCAL_UPLOAD_DIR")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
     storage_provider: Literal["local", "gcs"] = Field(default="local", alias="STORAGE_PROVIDER")
@@ -84,7 +85,9 @@ class Settings(BaseSettings):
     auth_cookie_samesite: Literal["lax", "strict", "none"] = Field(
         default="lax", alias="AUTH_COOKIE_SAMESITE"
     )
-    content_security_policy: str | None = Field(default=None, alias="CONTENT_SECURITY_POLICY")
+    content_security_policy: str | None = Field(
+        default="default-src 'self'", alias="CONTENT_SECURITY_POLICY"
+    )
     content_security_policy_report_only: bool = Field(
         default=False, alias="CONTENT_SECURITY_POLICY_REPORT_ONLY"
     )
@@ -105,6 +108,11 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """Load application settings from environment variables.
+
+    Settings are cached for the process lifetime. Any environment variable
+    changes require a full process restart to take effect.
+    """
     return Settings()
 
 

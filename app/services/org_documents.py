@@ -193,6 +193,7 @@ async def create_template_from_upload(
         base_dir=base_dir,
         subdir=subdir,
         allowed_extensions=ALLOWED_TEMPLATE_EXTENSIONS,
+        max_size_bytes=settings.max_upload_size_mb * 1024 * 1024,
     )
     template = OrgDocumentTemplate(
         org_id=ctx.org_id,

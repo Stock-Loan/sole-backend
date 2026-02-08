@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
@@ -114,6 +114,7 @@ def _onboarding_user(
 )
 async def onboard_user(
     payload: OnboardingUserCreate,
+    response: Response,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
     db: AsyncSession = Depends(get_db),
@@ -150,6 +151,8 @@ async def onboard_user(
             },
         )
     await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     return OnboardingResponse(
         user=_onboarding_user(result.user, result.profile, org_id=ctx.org_id),
         membership=result.membership,
@@ -180,6 +183,7 @@ async def download_template() -> StreamingResponse:
 )
 async def bulk_onboard(
     file: UploadFile,
+    response: Response,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
     db: AsyncSession = Depends(get_db),
@@ -226,6 +230,8 @@ async def bulk_onboard(
             )
         if result.successes:
             await db.commit()
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
         return result
     except onboarding.BulkOnboardCSVError as exc:
         return JSONResponse(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 import uuid
 from functools import lru_cache
@@ -7,9 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from passlib.context import CryptContext
-from jose import JWTError, ExpiredSignatureError, jwt
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 
 from app.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -56,6 +60,11 @@ def _resolve_key_path(path: str) -> Path:
         project_root = Path(__file__).resolve().parents[2]
         # Fallback for host-absolute paths inside containers (e.g. /home/.../secrets/*.pem)
         fallback = project_root / "secrets" / candidate.name
+        logger.warning(
+            "Configured key path %s does not exist; falling back to %s",
+            candidate,
+            fallback,
+        )
         return fallback.resolve()
     project_root = Path(__file__).resolve().parents[2]
     return (project_root / candidate).resolve()
@@ -74,6 +83,7 @@ def create_pre_org_token(identity_id: str, *, ttl_minutes: int = 5) -> str:
     to_encode: dict[str, Any] = {
         "sub": identity_id,
         "type": "pre_org",
+        "aud": "sole-backend",
         "iat": now,
         "exp": expire,
     }
@@ -109,6 +119,7 @@ def create_access_token(
         "iid": identity_id,
         "su": bool(is_superuser),
         "mfa": bool(mfa_authenticated),
+        "aud": "sole-backend",
         "exp": expire,
         "iat": now,
         "type": "access",
@@ -141,6 +152,7 @@ def create_refresh_token(
         "iid": identity_id,
         "su": bool(is_superuser),
         "mfa": bool(mfa_authenticated),
+        "aud": "sole-backend",
         "exp": expire,
         "iat": now,
         "type": "refresh",
@@ -157,13 +169,15 @@ def create_refresh_token(
 def decode_token(token: str, expected_type: str | None = None) -> dict[str, Any]:
     public_key = _load_public_key()
     try:
-        payload = jwt.decode(token, public_key, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token, public_key, algorithms=[settings.jwt_algorithm], audience="sole-backend"
+        )
         if expected_type and payload.get("type") != expected_type:
             raise ValueError(f"Unexpected token type: {payload.get('type')}")
         return payload
     except ExpiredSignatureError as exc:
         raise ValueError("Token expired") from exc
-    except JWTError as exc:  # pragma: no cover - basic placeholder
+    except InvalidTokenError as exc:  # pragma: no cover - basic placeholder
         raise ValueError("Invalid token") from exc
 
 
@@ -174,6 +188,7 @@ def create_mfa_challenge_token(identity_id: str, org_id: str, *, ttl_minutes: in
         "sub": identity_id,
         "org": org_id,
         "type": "mfa_challenge",
+        "aud": "sole-backend",
         "iat": now,
         "exp": expire,
     }
@@ -197,6 +212,7 @@ def create_mfa_setup_token(identity_id: str, org_id: str, *, ttl_minutes: int = 
         "sub": identity_id,
         "org": org_id,
         "type": "mfa_setup",
+        "aud": "sole-backend",
         "iat": now,
         "exp": expire,
     }
@@ -228,6 +244,7 @@ def create_step_up_challenge_token(
         "org": org_id,
         "action": action,
         "type": "step_up_challenge",
+        "aud": "sole-backend",
         "iat": now,
         "exp": expire,
     }
@@ -261,6 +278,7 @@ def create_step_up_token(
         "org": org_id,
         "action": action,
         "type": "step_up",
+        "aud": "sole-backend",
         "iat": now,
         "exp": expire,
     }

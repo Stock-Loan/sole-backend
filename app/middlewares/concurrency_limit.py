@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
-class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, limit: int, timeout_seconds: float | None = None) -> None:
-        super().__init__(app)
+class ConcurrencyLimitMiddleware:
+    def __init__(self, app: ASGIApp, limit: int, timeout_seconds: float | None = None) -> None:
+        self.app = app
         self._limit = limit
         self._timeout = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
         self._semaphore = asyncio.Semaphore(limit) if limit > 0 else None
 
-    async def dispatch(self, request, call_next):  # type: ignore[override]
-        if not self._semaphore:
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not self._semaphore:
+            await self.app(scope, receive, send)
+            return
 
         acquired = False
         try:
@@ -24,19 +25,27 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
             else:
                 await asyncio.wait_for(self._semaphore.acquire(), timeout=self._timeout)
             acquired = True
-            return await call_next(request)
+            await self.app(scope, receive, send)
         except asyncio.TimeoutError:
             retry_after = str(int(self._timeout)) if self._timeout else "1"
-            return JSONResponse(
-                status_code=429,
-                headers={"Retry-After": retry_after},
-                content={
-                    "code": "server_busy",
-                    "message": "Server is handling too many requests",
-                    "data": None,
-                    "details": {"detail": "Concurrency limit reached. Please retry."},
-                },
-            )
+            body = json.dumps({
+                "code": "server_busy",
+                "message": "Server is handling too many requests",
+                "data": None,
+                "details": {"detail": "Concurrency limit reached. Please retry."},
+            }).encode()
+            await send({
+                "type": "http.response.start",
+                "status": 429,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"retry-after", retry_after.encode()),
+                ],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": body,
+            })
         finally:
             if acquired:
                 self._semaphore.release()

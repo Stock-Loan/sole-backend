@@ -54,6 +54,7 @@ async def save_upload(
     base_dir: Path,
     subdir: Path,
     allowed_extensions: set[str] | None = None,
+    max_size_bytes: int = 0,
 ) -> tuple[str, str]:
     base_dir = base_dir.resolve()
     dest_dir = (base_dir / subdir).resolve()
@@ -80,18 +81,35 @@ async def save_upload(
 
     dest_name = f"{uuid4().hex}{ext}"
     dest_path = dest_dir / dest_name
+    bytes_written = 0
 
-    with dest_path.open("wb") as handle:
-        first_chunk = await file.read(1024 * 1024)
-        if first_chunk:
-            _validate_content_type(first_chunk, ext)
-            handle.write(first_chunk)
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            handle.write(chunk)
-    await file.close()
+    try:
+        with dest_path.open("wb") as handle:
+            first_chunk = await file.read(1024 * 1024)
+            if first_chunk:
+                _validate_content_type(first_chunk, ext)
+                bytes_written += len(first_chunk)
+                if max_size_bytes and bytes_written > max_size_bytes:
+                    raise ValueError(
+                        f"File exceeds maximum allowed size of {max_size_bytes // (1024 * 1024)} MB"
+                    )
+                handle.write(first_chunk)
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if max_size_bytes and bytes_written > max_size_bytes:
+                    raise ValueError(
+                        f"File exceeds maximum allowed size of {max_size_bytes // (1024 * 1024)} MB"
+                    )
+                handle.write(chunk)
+    except ValueError:
+        # Clean up partial file on validation/size failure
+        dest_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
 
     relative_path = dest_path.relative_to(base_dir).as_posix()
     return relative_path, original_name
