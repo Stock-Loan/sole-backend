@@ -14,8 +14,8 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 
 # Install dependencies to a specific prefix
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir --prefix=/install ".[prod]"
+RUN pip install --default-timeout=100 --no-cache-dir --upgrade pip \
+    && pip install --default-timeout=100 --no-cache-dir --prefix=/install ".[prod]"
 
 FROM python:3.11-slim AS runtime
 
@@ -56,3 +56,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import os, ht
 
 # Production start command
 CMD ["sh", "-c", "gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers 1 --timeout 300 --graceful-timeout 30 --keep-alive 5 --log-level info --access-logfile - --error-logfile -"]
+

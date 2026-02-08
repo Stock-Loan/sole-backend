@@ -219,10 +219,12 @@ def _org_admin_permissions() -> list[str]:
 
 SYSTEM_ROLE_DEFINITIONS = {
     "ORG_ADMIN": {
+        "name": "ORG ADMIN",
         "description": "Full control within the organization",
         "permissions": _org_admin_permissions(),
     },
     "HR": {
+        "name": "Human Resource",
         "description": "HR role with user management and HR loan workflow permissions",
         "permissions": PermissionCode.normalize(
             [
@@ -300,21 +302,26 @@ async def seed_system_roles(db: AsyncSession, org_id: str) -> dict[str, Role]:
     existing = {role.name: role for role in existing_result.scalars().all()}
 
     created: dict[str, Role] = {}
-    for name, definition in SYSTEM_ROLE_DEFINITIONS.items():
-        role = existing.get(name)
+    for role_key, definition in SYSTEM_ROLE_DEFINITIONS.items():
+        role_name = str(definition.get("name") or role_key)
+        role = existing.get(role_name)
+        if role is None and role_key != role_name:
+            # Backward-compatibility for legacy seed name.
+            role = existing.get(role_key)
         if role:
+            role.name = role_name
             role.permissions = definition["permissions"]
             role.description = definition["description"]
         else:
             role = Role(
                 org_id=org_id,
-                name=name,
+                name=role_name,
                 description=definition["description"],
                 is_system_role=True,
                 permissions=definition["permissions"],
             )
             db.add(role)
-        created[name] = role
+        created[role_key] = role
     await db.commit()
     for role in created.values():
         await db.refresh(role)

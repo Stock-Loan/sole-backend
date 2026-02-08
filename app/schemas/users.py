@@ -15,6 +15,7 @@ class UserSummary(BaseModel):
 
     id: UUID
     org_id: str | None = None
+    org_name: str | None = None
     email: EmailStr
     first_name: str | None = None
     middle_name: str | None = None
@@ -79,7 +80,8 @@ class UserListResponse(BaseModel):
 
 
 class UserDetailResponse(UserListItem):
-    pass
+    organization_name: str | None = None
+    role_names: list[str] = []
 
 
 class UpdateMembershipRequest(BaseModel):

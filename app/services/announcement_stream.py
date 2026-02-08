@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -29,6 +30,10 @@ async def subscribe(channel: str) -> PubSub:
 
 async def unsubscribe(pubsub: PubSub, channel: str) -> None:
     try:
-        await pubsub.unsubscribe(channel)
+        # Redis/network blips should not block app shutdown/reload.
+        await asyncio.wait_for(pubsub.unsubscribe(channel), timeout=2.0)
     finally:
-        await pubsub.close()
+        try:
+            await asyncio.wait_for(pubsub.close(), timeout=2.0)
+        except Exception:
+            pass

@@ -141,7 +141,7 @@ async def create_role(
         extra={
             "org_id": ctx.org_id,
             "role_id": str(role.id),
-            "name": role.name,
+            "role_name": role.name,
             "system": role.is_system_role,
         },
     )
@@ -222,7 +222,7 @@ async def update_role(
         extra={
             "org_id": ctx.org_id,
             "role_id": str(role.id),
-            "name": role.name,
+            "role_name": role.name,
             "system": role.is_system_role,
         },
     )
@@ -266,6 +266,14 @@ async def delete_role(
     users_to_invalidate = user_role_result.scalars().all()
 
     old_snapshot = model_snapshot(role)
+
+    # Remove assignments first so custom roles can be deleted even when currently assigned.
+    await db.execute(
+        delete(UserRole).where(
+            UserRole.org_id == ctx.org_id,
+            UserRole.role_id == role.id,
+        )
+    )
     await db.delete(role)
     record_audit_log(
         db,
@@ -284,7 +292,7 @@ async def delete_role(
 
     logger.info(
         "Role deleted",
-        extra={"org_id": ctx.org_id, "role_id": str(role.id), "name": role.name},
+        extra={"org_id": ctx.org_id, "role_id": str(role.id), "role_name": role.name},
     )
     return None
 

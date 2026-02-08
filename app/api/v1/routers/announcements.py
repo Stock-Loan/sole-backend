@@ -2,7 +2,7 @@ import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, exists
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,6 +95,7 @@ async def list_announcements(
     summary="Stream published announcements (SSE)",
 )
 async def stream_announcements(
+    request: Request,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     _: User = Depends(deps.require_authenticated_user),
 ):
@@ -105,7 +106,10 @@ async def stream_announcements(
         try:
             yield ": connected\n\n"
             while True:
-                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15.0)
+                # Exit quickly on disconnect/reload so dev hot-reload is not blocked by long-lived SSE.
+                if await request.is_disconnected():
+                    break
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message and message.get("data"):
                     yield "event: announcement.published\n"
                     raw = message["data"]
@@ -120,6 +124,9 @@ async def stream_announcements(
                 else:
                     yield ": keep-alive\n\n"
                 await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            logger.info("Announcement stream cancelled", extra={"org_id": ctx.org_id})
+            raise
         finally:
             await announcement_stream.unsubscribe(pubsub, channel)
 

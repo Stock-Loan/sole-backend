@@ -11,6 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.exc import ProgrammingError as SqlAlchemyProgrammingError
 from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -134,6 +135,7 @@ def register_exception_handlers(app) -> None:
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)
     app.add_exception_handler(SqlAlchemyTimeoutError, db_pool_timeout_handler)
+    app.add_exception_handler(SqlAlchemyProgrammingError, db_programming_error_handler)
     app.add_exception_handler(StepUpMfaRequired, step_up_mfa_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
@@ -181,3 +183,30 @@ async def db_pool_timeout_handler(request: Request, exc: SqlAlchemyTimeoutError)
     retry_after = max(1, settings.db_pool_retry_after_seconds)
     response.headers["Retry-After"] = str(retry_after)
     return response
+
+
+def _is_undefined_table_error(exc: SqlAlchemyProgrammingError) -> bool:
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if sqlstate == "42P01":
+        return True
+    message = str(orig or exc).lower()
+    return "undefinedtable" in message or "does not exist" in message
+
+
+async def db_programming_error_handler(
+    request: Request, exc: SqlAlchemyProgrammingError
+) -> JSONResponse:
+    if _is_undefined_table_error(exc):
+        return _build_response(
+            status_code=503,
+            code="schema_not_ready",
+            message="Database schema is not ready",
+            details={"detail": "Missing database table(s). Run migrations and retry."},
+        )
+    return _build_response(
+        status_code=500,
+        code="db_programming_error",
+        message="Database query failed",
+        details={"detail": "Unexpected database programming error"},
+    )

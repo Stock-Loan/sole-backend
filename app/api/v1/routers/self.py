@@ -76,6 +76,7 @@ def _build_user_summary_payload(user: User, profile, org_id: str) -> dict:
     return {
         "id": user.id,
         "org_id": org_id,
+        "org_name": None,
         "email": user.email,
         "is_active": user.is_active,
         "is_superuser": user.is_superuser,
@@ -99,6 +100,11 @@ def _build_user_summary_payload(user: User, profile, org_id: str) -> dict:
         "address_line2": profile.address_line2 if profile else None,
         "postal_code": profile.postal_code if profile else None,
     }
+
+
+async def _load_org_name(db: AsyncSession, org_id: str) -> str | None:
+    stmt = select(Org.name).where(Org.id == org_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 @router.get(
@@ -182,8 +188,17 @@ async def get_self_profile(
     membership, user, dept, profile = row
     membership.department_name = dept.name if dept else None
     roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
+    org_name = await _load_org_name(db, ctx.org_id)
     user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
-    return UserDetailResponse(user=user_summary, membership=membership, roles=roles)
+    user_summary = user_summary.model_copy(update={"org_name": org_name})
+    role_names = sorted({role.name for role in roles})
+    return UserDetailResponse(
+        user=user_summary,
+        membership=membership,
+        roles=roles,
+        organization_name=org_name,
+        role_names=role_names,
+    )
 
 
 @router.patch(
@@ -237,8 +252,19 @@ async def update_self_profile(
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
-        user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
-        return UserDetailResponse(user=user_summary, membership=membership, roles=roles)
+        org_name = await _load_org_name(db, ctx.org_id)
+        user_summary = UserSummary.model_validate(
+            _build_user_summary_payload(user, profile, ctx.org_id)
+        )
+        user_summary = user_summary.model_copy(update={"org_name": org_name})
+        role_names = sorted({role.name for role in roles})
+        return UserDetailResponse(
+            user=user_summary,
+            membership=membership,
+            roles=roles,
+            organization_name=org_name,
+            role_names=role_names,
+        )
 
     for field, value in list(updates.items()):
         if isinstance(value, str):
@@ -274,5 +300,14 @@ async def update_self_profile(
     await db.refresh(membership)
 
     roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
+    org_name = await _load_org_name(db, ctx.org_id)
     user_summary = UserSummary.model_validate(_build_user_summary_payload(user, profile, ctx.org_id))
-    return UserDetailResponse(user=user_summary, membership=membership, roles=roles)
+    user_summary = user_summary.model_copy(update={"org_name": org_name})
+    role_names = sorted({role.name for role in roles})
+    return UserDetailResponse(
+        user=user_summary,
+        membership=membership,
+        roles=roles,
+        organization_name=org_name,
+        role_names=role_names,
+    )
