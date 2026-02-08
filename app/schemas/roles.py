@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, field_validator
 
 from app.core.permissions import PermissionCode
+from app.schemas.common import normalize_description_text, normalize_title_text
 
 
 class RoleBase(BaseModel):
@@ -13,11 +14,16 @@ class RoleBase(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, v: str) -> str:
-        value = v.strip()
+    def normalize_name(cls, v: str) -> str:
+        value = normalize_title_text(v)
         if not value:
             raise ValueError("Role name cannot be empty")
         return value
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, v: str | None) -> str | None:
+        return normalize_description_text(v)
 
     @field_validator("permissions")
     @classmethod
@@ -36,8 +42,18 @@ class RoleUpdate(BaseModel):
 
     @field_validator("name")
     @classmethod
-    def strip_name(cls, v: str | None) -> str | None:
-        return v.strip() if v else v
+    def normalize_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = normalize_title_text(v)
+        if not normalized:
+            raise ValueError("Role name cannot be empty")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, v: str | None) -> str | None:
+        return normalize_description_text(v)
 
     @field_validator("permissions")
     @classmethod
@@ -54,6 +70,16 @@ class RoleOut(BaseModel):
     permissions: list[str]
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_output_name(cls, v: str) -> str:
+        return normalize_title_text(v) or v
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_output_description(cls, v: str | None) -> str | None:
+        return normalize_description_text(v)
 
     class Config:
         from_attributes = True

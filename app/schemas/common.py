@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from enum import Enum
+import re
+
+
+_MULTISPACE_RE = re.compile(r"\s+")
+_DEPT_CODE_SPACES_RE = re.compile(r"\s+")
+_DEPT_CODE_MULTI_UNDERSCORE_RE = re.compile(r"_+")
+_DEPT_CODE_ALLOWED_RE = re.compile(r"^[A-Z0-9_-]+$")
 
 
 class MaritalStatus(str, Enum):
@@ -91,3 +98,37 @@ def normalize_employment_status(value: str | EmploymentStatus | None) -> Employm
     if member is not None:
         return member
     raise ValueError("Invalid employment_status value")
+
+
+def normalize_text_whitespace(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = _MULTISPACE_RE.sub(" ", str(value)).strip()
+    return cleaned or None
+
+
+def normalize_title_text(value: str | None) -> str | None:
+    cleaned = normalize_text_whitespace(value)
+    if not cleaned:
+        return None
+    return cleaned.title()
+
+
+def normalize_description_text(value: str | None) -> str | None:
+    cleaned = normalize_text_whitespace(value)
+    if not cleaned:
+        return None
+    return cleaned[0].upper() + cleaned[1:]
+
+
+def normalize_department_code(value: str | None) -> str | None:
+    cleaned = normalize_text_whitespace(value)
+    if not cleaned:
+        return None
+    normalized = _DEPT_CODE_SPACES_RE.sub("_", cleaned.upper())
+    normalized = _DEPT_CODE_MULTI_UNDERSCORE_RE.sub("_", normalized).strip("_")
+    if not normalized:
+        return None
+    if not _DEPT_CODE_ALLOWED_RE.match(normalized):
+        raise ValueError("Department code may only contain letters, numbers, '_' and '-'")
+    return normalized
