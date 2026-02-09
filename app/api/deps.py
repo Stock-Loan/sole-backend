@@ -218,7 +218,8 @@ async def get_tenant_context(
             )
         org_stmt = select(Org.id).where(Org.id == candidate)
         if (await db.execute(org_stmt)).scalar_one_or_none() is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+            logger.warning("Tenant resolution failed: org %r not found in database", candidate)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Org not found: {candidate}")
         if token_user_id and not token_is_superuser and token_type != "pre_org":
             membership = await get_membership(db, user_id=token_user_id, org_id=candidate)
             if not membership:
@@ -238,7 +239,8 @@ async def get_tenant_context(
         )
     org_stmt = select(Org.id).where(Org.id == default_org)
     if (await db.execute(org_stmt)).scalar_one_or_none() is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+        logger.warning("Tenant resolution failed: default org %r not found in database", default_org)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Org not found: {default_org}")
     set_tenant_id(default_org)
     return TenantContext(org_id=default_org)
 
