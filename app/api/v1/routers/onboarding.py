@@ -572,12 +572,8 @@ async def update_user_profile(
         db,
         action=MfaEnforcementAction.USER_PROFILE_EDIT.value,
     )
-    org_settings = await settings_service.get_org_settings(db, ctx)
-    if not org_settings.allow_profile_edit:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Profile editing is disabled for this organization",
-        )
+    # Note: allow_profile_edit only gates self-service edits (PATCH /self/profile).
+    # Admins with user.manage can always update user profiles.
     stmt = (
         select(OrgMembership, UserModel, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
