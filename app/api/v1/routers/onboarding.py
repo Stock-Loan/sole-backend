@@ -656,6 +656,66 @@ async def update_user_profile(
     )
 
 
+@router.post(
+    "/{membership_id}/force-password-reset",
+    status_code=200,
+    summary="Force password reset for a user",
+)
+async def force_password_reset(
+    membership_id: str,
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """
+    Admin endpoint to force a password reset for a user. Requires USER_MANAGE permission.
+    Sets must_change_password=True so the user is prompted to change their password
+    on next login. Invalidates existing sessions by bumping token_version.
+    The user's current password remains valid for login.
+    """
+    stmt = (
+        select(OrgMembership)
+        .options(
+            selectinload(OrgMembership.user).selectinload(UserModel.identity)
+        )
+        .where(OrgMembership.org_id == ctx.org_id, OrgMembership.id == membership_id)
+    )
+    result = await db.execute(stmt)
+    membership = result.scalar_one_or_none()
+    if not membership or not membership.user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    target_user = membership.user
+    target_identity = target_user.identity
+
+    if target_user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot force-reset your own password. Use change-password instead.",
+        )
+
+    if not target_identity:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="User has no identity record"
+        )
+
+    target_identity.must_change_password = True
+    target_identity.token_version += 1
+    db.add(target_identity)
+
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user.password.force_reset",
+        resource_type="user",
+        resource_id=str(target_user.id),
+    )
+    await db.commit()
+
+    return {"message": f"Password reset required for {target_user.email}"}
+
+
 @router.post("/{membership_id}/mfa/reset", status_code=200, summary="Admin reset of user MFA")
 async def admin_reset_user_mfa(
     membership_id: str,
