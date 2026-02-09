@@ -28,11 +28,13 @@ from app.schemas.users import (
 )
 from app.schemas.settings import MfaEnforcementAction
 from app.models.org_membership import OrgMembership
+from app.models.org import Org
 from app.models.org_user_profile import OrgUserProfile
 from app.models.user import User as UserModel
 from app.models.user_role import UserRole
 from app.models.role import Role
 from app.models.department import Department
+from app.resources.countries import COUNTRIES, SUBDIVISIONS
 from app.services import onboarding
 from app.services import authz
 from app.services.audit import model_snapshot, record_audit_log
@@ -40,6 +42,37 @@ from app.services import settings as settings_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/org/users", tags=["users"])
+
+COUNTRY_NAME_BY_CODE = {entry["code"].upper(): entry["name"] for entry in COUNTRIES}
+SUBDIVISION_NAME_BY_COUNTRY_AND_CODE = {
+    country_code.upper(): {sub["code"].upper(): sub["name"] for sub in subdivisions}
+    for country_code, subdivisions in SUBDIVISIONS.items()
+}
+
+
+def _resolve_location_names(
+    country_code: str | None, state_code: str | None
+) -> tuple[str | None, str | None]:
+    normalized_country = country_code.upper() if country_code else None
+    normalized_state = state_code.upper() if state_code else None
+
+    country_name = (
+        COUNTRY_NAME_BY_CODE.get(normalized_country, country_code) if country_code else None
+    )
+    state_name = None
+    if normalized_country and normalized_state:
+        state_name = SUBDIVISION_NAME_BY_COUNTRY_AND_CODE.get(normalized_country, {}).get(
+            normalized_state
+        )
+    if not state_name and state_code:
+        state_name = state_code
+
+    return country_name, state_name
+
+
+async def _load_org_name(db: AsyncSession, org_id: str) -> str | None:
+    stmt = select(Org.name).where(Org.id == org_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 async def _load_roles_for_user_in_org(
@@ -55,10 +88,21 @@ async def _load_roles_for_user_in_org(
     return (await db.execute(stmt)).scalars().all()
 
 
-def _user_summary(user: UserModel, profile: OrgUserProfile | None, *, org_id: str, identity=None) -> UserSummary:
+def _user_summary(
+    user: UserModel,
+    profile: OrgUserProfile | None,
+    *,
+    org_id: str,
+    org_name: str | None = None,
+    identity=None,
+) -> UserSummary:
+    country_code = profile.country if profile else None
+    state_code = profile.state if profile else None
+    country_name, state_name = _resolve_location_names(country_code, state_code)
     data = {
         "id": user.id,
         "org_id": org_id,
+        "org_name": org_name,
         "email": user.email,
         "is_active": user.is_active,
         "is_superuser": user.is_superuser,
@@ -71,8 +115,13 @@ def _user_summary(user: UserModel, profile: OrgUserProfile | None, *, org_id: st
         "timezone": profile.timezone if profile else None,
         "phone_number": profile.phone_number if profile else None,
         "marital_status": profile.marital_status if profile else None,
-        "country": profile.country if profile else None,
-        "state": profile.state if profile else None,
+        # Keep display values and raw codes together for frontend table + edit flows.
+        "country": country_name,
+        "state": state_name,
+        "country_code": country_code,
+        "state_code": state_code,
+        "country_name": country_name,
+        "state_name": state_name,
         "address_line1": profile.address_line1 if profile else None,
         "address_line2": profile.address_line2 if profile else None,
         "postal_code": profile.postal_code if profile else None,
@@ -282,6 +331,7 @@ async def list_users(
 
     result = await db.execute(base_stmt.offset(offset).limit(page_size))
     rows = result.all()
+    org_name = await _load_org_name(db, ctx.org_id)
     user_ids = [row[1].id for row in rows]
     roles_map: dict[str, list[Role]] = {}
     if user_ids:
@@ -299,7 +349,13 @@ async def list_users(
         membership.department_name = dept.name if dept else None
         items.append(
             {
-                "user": _user_summary(user, profile, org_id=ctx.org_id, identity=identity),
+                "user": _user_summary(
+                    user,
+                    profile,
+                    org_id=ctx.org_id,
+                    org_name=org_name,
+                    identity=identity,
+                ),
                 "membership": membership,
                 "roles": roles_map.get(str(user.id), []),
             }
@@ -340,10 +396,19 @@ async def get_user(
         .where(UserRole.org_id == ctx.org_id, UserRole.user_id == user.id)
     )
     roles = (await db.execute(roles_stmt)).scalars().all()
+    org_name = await _load_org_name(db, ctx.org_id)
     return UserDetailResponse(
-        user=_user_summary(user, profile, org_id=ctx.org_id, identity=identity),
+        user=_user_summary(
+            user,
+            profile,
+            org_id=ctx.org_id,
+            org_name=org_name,
+            identity=identity,
+        ),
         membership=membership,
         roles=roles,
+        organization_name=org_name,
+        role_names=sorted({role.name for role in roles}),
     )
 
 
@@ -548,10 +613,19 @@ async def update_membership(
     await db.commit()
     if _invalidate_user_id:
         await authz.invalidate_permission_cache(_invalidate_user_id, ctx.org_id)
+    org_name = await _load_org_name(db, ctx.org_id)
     return UserDetailResponse(
-        user=_user_summary(user, profile, org_id=ctx.org_id, identity=identity),
+        user=_user_summary(
+            user,
+            profile,
+            org_id=ctx.org_id,
+            org_name=org_name,
+            identity=identity,
+        ),
         membership=membership,
         roles=user_roles,
+        organization_name=org_name,
+        role_names=sorted({role.name for role in user_roles}),
     )
 
 
@@ -649,10 +723,19 @@ async def update_user_profile(
         },
     )
     await db.commit()
+    org_name = await _load_org_name(db, ctx.org_id)
     return UserDetailResponse(
-        user=_user_summary(user, profile, org_id=ctx.org_id, identity=identity),
+        user=_user_summary(
+            user,
+            profile,
+            org_id=ctx.org_id,
+            org_name=org_name,
+            identity=identity,
+        ),
         membership=membership,
         roles=user_roles,
+        organization_name=org_name,
+        role_names=sorted({role.name for role in user_roles}),
     )
 
 
