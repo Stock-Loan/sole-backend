@@ -48,6 +48,7 @@ async def update_org_settings(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await db.commit()
     latest_rate = await pbgc_rates.get_latest_annual_rate(db)
     response = OrgSettingsResponse.model_validate(settings)
     if latest_rate is not None:
@@ -69,6 +70,7 @@ async def refresh_pbgc_rates(
     await check_pbgc_refresh_cooldown(ctx.org_id)
 
     updated_rows, fetched_at = await pbgc_rates.upsert_current_year_rates(db)
+    await db.commit()
 
     # Record successful refresh to start the 24-hour cooldown
     await record_pbgc_refresh(ctx.org_id)

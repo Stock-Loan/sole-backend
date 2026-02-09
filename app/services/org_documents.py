@@ -105,7 +105,7 @@ async def create_folder(
 ) -> OrgDocumentFolder:
     folder = OrgDocumentFolder(org_id=ctx.org_id, name=name, is_system=False)
     db.add(folder)
-    await db.commit()
+    await db.flush()
     await db.refresh(folder)
     return folder
 
@@ -118,7 +118,7 @@ async def update_folder(
 ) -> OrgDocumentFolder:
     folder.name = name
     db.add(folder)
-    await db.commit()
+    await db.flush()
     await db.refresh(folder)
     return folder
 
@@ -140,7 +140,7 @@ async def delete_folder(
     if count:
         raise ValueError("Folder contains templates")
     await db.delete(folder)
-    await db.commit()
+    await db.flush()
 
 
 async def list_templates(
@@ -211,7 +211,7 @@ async def create_template_from_upload(
         uploaded_by_user_id=actor_id,
     )
     db.add(template)
-    await db.commit()
+    await db.flush()
     await db.refresh(template)
     return template
 
@@ -249,7 +249,7 @@ async def create_template_from_storage(
         uploaded_by_user_id=actor_id,
     )
     db.add(template)
-    await db.commit()
+    await db.flush()
     await db.refresh(template)
     return template
 
@@ -268,7 +268,7 @@ async def delete_template(
             # Best effort cleanup; keep going so deletes are not blocked.
             pass
     await db.delete(template)
-    await db.commit()
+    await db.flush()
 
 
 def _adapter_for_template(provider: str | None, bucket: str | None):

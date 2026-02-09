@@ -335,7 +335,7 @@ async def update_org_settings(
         and previous_remember_days
     ):
         await mfa_service.delete_org_devices(db, org_id=ctx.org_id)
-    await db.commit()
+    await db.flush()
     await db.refresh(settings)
     from app.services import stock_dashboard, stock_summary
 

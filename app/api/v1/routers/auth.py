@@ -298,6 +298,7 @@ async def select_org(
                 remember_token=remember_device_token,
             )
             if device:
+                await db.commit()
                 access, refresh = _issue_tokens(
                     user=user,
                     identity=identity,
@@ -419,6 +420,7 @@ async def mfa_verify(
                 ip_address=request.client.host if request.client else None,
             )
 
+    await db.commit()
     access, refresh = _issue_tokens(
         user=user,
         identity=identity,
@@ -558,6 +560,7 @@ async def mfa_enroll_verify(
                 ip_address=request.client.host if request.client else None,
             )
 
+    await db.commit()
     access, refresh = _issue_tokens(
         user=user,
         identity=identity,
@@ -653,6 +656,7 @@ async def mfa_setup_verify(
             ip_address=request.client.host if request.client else None,
         )
 
+    await db.commit()
     access, refresh = _issue_tokens(
         user=current_user,
         identity=identity,
@@ -716,6 +720,7 @@ async def regenerate_recovery_codes(
     await require_step_up_mfa(request, current_user, ctx.org_id, action="RECOVERY_CODES_REGENERATE")
 
     recovery_codes = await mfa_service.generate_recovery_codes(db, identity_id=identity.id)
+    await db.commit()
     return RegenerateRecoveryCodesResponse(recovery_codes=recovery_codes)
 
 
@@ -743,6 +748,7 @@ async def self_mfa_reset(
     await mfa_service.clear_user_mfa(
         db, identity, org_id=ctx.org_id, user_id=current_user.id
     )
+    await db.commit()
 
     return {"message": "MFA has been reset. Please set up MFA again."}
 
@@ -1078,6 +1084,7 @@ async def verify_step_up_mfa(
                 detail="Invalid TOTP code",
             )
 
+    await db.commit()
     # Create step-up token valid for 5 minutes
     step_up_token = create_step_up_token(
         str(current_user.id),

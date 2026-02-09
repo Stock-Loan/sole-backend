@@ -173,7 +173,7 @@ async def upsert_current_year_rates(db: AsyncSession) -> tuple[int, datetime]:
         )
         await db.execute(next_stmt)
 
-    await db.commit()
+    await db.flush()
     return result.rowcount or 0, fetched_at
 
 

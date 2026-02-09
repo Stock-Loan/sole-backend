@@ -75,7 +75,7 @@ async def create_remember_device(
         last_used_at=datetime.now(timezone.utc),
     )
     db.add(device)
-    await db.commit()
+    await db.flush()
     await db.refresh(device)
     return raw_token
 
@@ -102,7 +102,7 @@ async def find_valid_device(
         return None
     device.last_used_at = now
     db.add(device)
-    await db.commit()
+    await db.flush()
     await db.refresh(device)
     return device
 
@@ -154,7 +154,7 @@ async def generate_recovery_codes(
         )
         db.add(recovery)
 
-    await db.commit()
+    await db.flush()
     return plain_codes
 
 
@@ -179,7 +179,7 @@ async def verify_recovery_code(
 
     recovery.used_at = datetime.now(timezone.utc)
     db.add(recovery)
-    await db.commit()
+    await db.flush()
     return True
 
 
@@ -247,4 +247,4 @@ async def clear_user_mfa(
 
     await delete_user_devices(db, org_id=org_id, user_id=user_id)
     await delete_user_recovery_codes(db, identity_id=identity.id)
-    await db.commit()
+    await db.flush()

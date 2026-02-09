@@ -69,6 +69,7 @@ async def create_folder(
     db: AsyncSession = Depends(get_db),
 ) -> OrgDocumentFolderDTO:
     folder = await org_documents.create_folder(db, ctx, payload.name)
+    await db.commit()
     return OrgDocumentFolderDTO.model_validate(folder)
 
 
@@ -92,6 +93,7 @@ async def update_folder(
             status_code=status.HTTP_400_BAD_REQUEST, detail="System folders cannot be renamed"
         )
     updated = await org_documents.update_folder(db, ctx, folder, payload.name)
+    await db.commit()
     return OrgDocumentFolderDTO.model_validate(updated)
 
 
@@ -115,6 +117,7 @@ async def delete_folder(
         )
     try:
         await org_documents.delete_folder(db, ctx, folder)
+        await db.commit()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return None
@@ -166,6 +169,7 @@ async def upload_template(
             actor_id=current_user.id,
             base_dir=Path(settings.local_upload_dir),
         )
+        await db.commit()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return OrgDocumentTemplateDTO.model_validate(template)
@@ -275,6 +279,7 @@ async def create_template(
             checksum=payload.checksum,
             actor_id=current_user.id,
         )
+        await db.commit()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return OrgDocumentTemplateDTO.model_validate(template)
@@ -369,4 +374,5 @@ async def delete_template(
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
     await org_documents.delete_template(db, ctx, template)
+    await db.commit()
     return None

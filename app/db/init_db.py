@@ -181,6 +181,8 @@ async def _seed_user(
         first_name=first_name,
         last_name=last_name,
     )
+    # Ensure role assignments from ensure_user_in_role() (which only flushes) are committed
+    await session.commit()
 
 
 async def init_db() -> None:
