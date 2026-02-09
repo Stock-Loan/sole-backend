@@ -16,6 +16,10 @@ _shutdown_event = asyncio.Event()
 _running_tasks: set[asyncio.Task] = set()
 
 
+def is_shutting_down() -> bool:
+    return _shutdown_event.is_set()
+
+
 async def _run_pbgc_scrape() -> None:
     task = asyncio.current_task()
     if task:

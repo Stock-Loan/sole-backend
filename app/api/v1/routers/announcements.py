@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.core.permissions import PermissionCode
 from app.db.session import get_db
+from app.events import is_shutting_down
 from app.models.announcement import Announcement, AnnouncementRead
 from app.models.user import User
 from app.schemas.announcements import (
@@ -107,8 +108,7 @@ async def stream_announcements(
         try:
             yield ": connected\n\n"
             while True:
-                # Exit quickly on disconnect/reload so dev hot-reload is not blocked by long-lived SSE.
-                if await request.is_disconnected():
+                if is_shutting_down() or await request.is_disconnected():
                     break
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message and message.get("data"):
