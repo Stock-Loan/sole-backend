@@ -122,6 +122,7 @@ class UserOut(BaseModel):
     is_active: bool
     is_superuser: bool
     mfa_enabled: bool = False
+    full_name: str | None = None
     last_active_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 

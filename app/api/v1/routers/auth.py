@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import secrets
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import deps
+from app.core.permissions import PermissionCode
 from app.core.security import (
     create_access_token,
     create_mfa_challenge_token,
@@ -118,6 +119,10 @@ def _issue_tokens(
     org_id: str,
     mfa_authenticated: bool = False,
     mfa_method: str | None = None,
+    impersonator_user_id: str | None = None,
+    impersonator_identity_id: str | None = None,
+    access_expires_delta: timedelta | None = None,
+    refresh_expires_delta: timedelta | None = None,
 ) -> tuple[str, str]:
     """Create access + refresh token pair for an org-scoped session."""
     access = create_access_token(
@@ -128,6 +133,9 @@ def _issue_tokens(
         token_version=identity.token_version,
         mfa_authenticated=mfa_authenticated,
         mfa_method=mfa_method,
+        impersonator_user_id=impersonator_user_id,
+        impersonator_identity_id=impersonator_identity_id,
+        expires_delta=access_expires_delta,
     )
     refresh = create_refresh_token(
         str(user.id),
@@ -137,6 +145,9 @@ def _issue_tokens(
         token_version=identity.token_version,
         mfa_authenticated=mfa_authenticated,
         mfa_method=mfa_method,
+        impersonator_user_id=impersonator_user_id,
+        impersonator_identity_id=impersonator_identity_id,
+        expires_delta=refresh_expires_delta,
     )
     return access, refresh
 
@@ -585,6 +596,9 @@ async def mfa_setup_start(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupStartResponse:
+    deps.reject_during_impersonation(
+        current_user, detail="Cannot modify MFA settings during impersonation"
+    )
     identity = current_user.identity
     if identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA already enabled")
@@ -616,6 +630,9 @@ async def mfa_setup_verify(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupCompleteResponse:
+    deps.reject_during_impersonation(
+        current_user, detail="Cannot modify MFA settings during impersonation"
+    )
     identity = current_user.identity
     if not identity.mfa_secret_encrypted:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not initialized")
@@ -704,6 +721,9 @@ async def regenerate_recovery_codes(
     Regenerate recovery codes. Requires step-up MFA verification.
     This invalidates all existing recovery codes.
     """
+    deps.reject_during_impersonation(
+        current_user, detail="Cannot regenerate recovery codes during impersonation"
+    )
     identity = current_user.identity
     if not identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
@@ -729,6 +749,9 @@ async def self_mfa_reset(
     Self-service MFA reset. User must verify via step-up MFA.
     After reset, user will need to set up MFA again.
     """
+    deps.reject_during_impersonation(
+        current_user, detail="Cannot reset MFA during impersonation"
+    )
     identity = current_user.identity
     if not identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
@@ -887,12 +910,32 @@ async def refresh_tokens(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token reuse detected"
         )
 
+    imp_user = token_data.get("imp")
+    imp_iid = token_data.get("imp_iid")
+
+    # When refreshing an impersonation session, cap token TTL to the
+    # configured impersonation max so the session cannot be extended
+    # indefinitely through repeated refreshes.
+    imp_access_delta = None
+    imp_refresh_delta = None
+    if imp_user:
+        imp_max = timedelta(minutes=settings.impersonation_max_minutes)
+        imp_access_delta = min(
+            imp_max,
+            timedelta(minutes=settings.access_token_expire_minutes),
+        )
+        imp_refresh_delta = imp_max
+
     access, refresh = _issue_tokens(
         user=user,
         identity=identity,
         org_id=ctx.org_id,
         mfa_authenticated=token_mfa,
         mfa_method=token_mfa_method,
+        impersonator_user_id=imp_user,
+        impersonator_identity_id=imp_iid,
+        access_expires_delta=imp_access_delta,
+        refresh_expires_delta=imp_refresh_delta,
     )
     result = TokenPair(access_token=access, refresh_token=refresh)
     csrf_token = _maybe_attach_cookies(response, result.refresh_token)
@@ -907,6 +950,13 @@ async def logout(
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    # During impersonation, the impersonator should use /impersonate/stop
+    # instead of logout. Logging out would bump the admin's token_version,
+    # revoking all admin sessions.
+    deps.reject_during_impersonation(
+        current_user,
+        detail="Use impersonate/stop to end an impersonation session",
+    )
     # Bump identity token_version — revokes ALL org sessions for this identity
     identity = current_user.identity
     identity.token_version += 1
@@ -939,6 +989,9 @@ async def change_password(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> TokenPair:
+    deps.reject_during_impersonation(
+        current_user, detail="Cannot change password during impersonation"
+    )
     identity = current_user.identity
     if not constant_time_verify(identity.hashed_password, payload.current_password):
         raise HTTPException(
@@ -1091,3 +1144,238 @@ async def verify_step_up_mfa(
         action=action,
         expires_in_seconds=300,  # 5 minutes
     )
+
+
+# ─── Impersonation ───────────────────────────────────────────────────────────
+
+
+class ImpersonateStartRequest(BaseModel):
+    target_membership_id: str
+
+
+class ImpersonateStartResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    refresh_token: str | None = None
+    csrf_token: str | None = None
+    target_user: UserOut
+    impersonator_user_id: str
+
+
+@router.post("/impersonate/start", response_model=ImpersonateStartResponse)
+async def impersonate_start(
+    request: Request,
+    response: Response,
+    payload: ImpersonateStartRequest,
+    current_user: User = Depends(
+        deps.require_permission_with_mfa(
+            PermissionCode.IMPERSONATION_PERFORM,
+            action="USER_IMPERSONATE",
+        )
+    ),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> ImpersonateStartResponse:
+    """
+    Start impersonating another user.
+
+    Security requirements:
+    - Caller must have ``impersonation.perform`` permission
+    - Step-up MFA is enforced for the ``USER_IMPERSONATE`` action
+    - ``allow_impersonation`` must be enabled in org settings
+    - Cannot impersonate yourself
+    - Cannot impersonate another superuser
+    - Target user must be active with an active membership
+    - Full audit trail is recorded
+    """
+    from app.services.audit import record_audit_log
+
+    # Check org-level feature flag
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    if not org_settings.allow_impersonation:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Impersonation is not enabled for this organization",
+        )
+
+    # Block if caller is already impersonating
+    if getattr(current_user, "_is_impersonated", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot start impersonation while already impersonating",
+        )
+
+    # Load target membership → user → identity
+    target_membership = await deps.get_membership_by_id(
+        db, membership_id=payload.target_membership_id, org_id=ctx.org_id
+    )
+    if not target_membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Target user not found"
+        )
+    if not deps.membership_allows_auth(target_membership, allow_pending=False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target user membership is not active",
+        )
+
+    target_stmt = (
+        select(User)
+        .options(selectinload(User.identity))
+        .where(User.id == target_membership.user_id, User.org_id == ctx.org_id)
+    )
+    target_user = (await db.execute(target_stmt)).scalar_one_or_none()
+    if not target_user or not target_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Target user not found or inactive"
+        )
+
+    # Self-impersonation check
+    if str(target_user.id) == str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot impersonate yourself",
+        )
+
+    # Cannot impersonate superusers
+    if target_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot impersonate a superuser",
+        )
+
+    target_identity = target_user.identity
+    if not target_identity or not target_identity.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target user identity is inactive",
+        )
+
+    impersonator_identity = current_user.identity
+
+    # Issue tokens scoped to the *target* user, with impersonation claims
+    # pointing back to the *admin*. Token version is pinned to the admin's
+    # identity so revoking the admin's session kills impersonation too.
+    # Cap impersonation session duration to impersonation_max_minutes.
+    imp_max = timedelta(minutes=settings.impersonation_max_minutes)
+    imp_access_delta = min(
+        imp_max,
+        timedelta(minutes=settings.access_token_expire_minutes),
+    )
+    access, refresh = _issue_tokens(
+        user=target_user,
+        identity=impersonator_identity,  # use admin's identity for tv
+        org_id=ctx.org_id,
+        mfa_authenticated=True,  # already passed step-up MFA
+        impersonator_user_id=str(current_user.id),
+        impersonator_identity_id=str(impersonator_identity.id),
+        access_expires_delta=imp_access_delta,
+        refresh_expires_delta=imp_max,
+    )
+
+    # Audit
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="impersonation.start",
+        resource_type="user",
+        resource_id=str(target_user.id),
+        new_value={
+            "impersonator_email": current_user.email,
+            "target_email": target_user.email,
+        },
+    )
+    await db.commit()
+
+    target_user_out = UserOut(
+        id=str(target_user.id),
+        org_id=target_user.org_id,
+        email=target_user.email,
+        is_active=target_user.is_active,
+        is_superuser=target_user.is_superuser,
+        mfa_enabled=target_identity.mfa_enabled if target_identity else False,
+        full_name=target_user.full_name,
+    )
+
+    result = ImpersonateStartResponse(
+        access_token=access,
+        refresh_token=refresh,
+        target_user=target_user_out,
+        impersonator_user_id=str(current_user.id),
+    )
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result
+
+
+@router.post("/impersonate/stop", response_model=TokenPair)
+async def impersonate_stop(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(deps.require_authenticated_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> TokenPair:
+    """
+    Stop impersonation and return to the admin's own session.
+
+    Only callable during an active impersonation session (``imp`` claim present
+    in token). Returns fresh tokens scoped to the impersonator's own user.
+    """
+    from app.services.audit import record_audit_log
+
+    impersonator_user_id = getattr(current_user, "_impersonator_user_id", None)
+    if not impersonator_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not currently impersonating",
+        )
+
+    # Load the impersonator's user + identity
+    imp_stmt = (
+        select(User)
+        .options(selectinload(User.identity))
+        .where(User.id == impersonator_user_id, User.org_id == ctx.org_id)
+    )
+    impersonator = (await db.execute(imp_stmt)).scalar_one_or_none()
+    if not impersonator or not impersonator.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Impersonator user not found or inactive",
+        )
+    imp_identity = impersonator.identity
+    if not imp_identity or not imp_identity.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Impersonator identity inactive",
+        )
+
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=impersonator.id,
+        action="impersonation.stop",
+        resource_type="user",
+        resource_id=str(current_user.id),
+        new_value={
+            "impersonator_email": impersonator.email,
+            "target_email": current_user.email,
+        },
+    )
+    await db.commit()
+
+    # Issue fresh tokens for the impersonator's own session (no imp claims)
+    access, refresh = _issue_tokens(
+        user=impersonator,
+        identity=imp_identity,
+        org_id=ctx.org_id,
+        mfa_authenticated=True,
+    )
+
+    result = TokenPair(access_token=access, refresh_token=refresh)
+    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
+    if csrf_token:
+        result = result.model_copy(update={"csrf_token": csrf_token})
+    return result

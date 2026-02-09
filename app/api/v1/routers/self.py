@@ -213,6 +213,9 @@ async def update_self_profile(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
+    deps.reject_during_impersonation(
+        current_user, detail="Cannot edit profile during impersonation"
+    )
     await deps.require_mfa_for_action(
         request,
         current_user,

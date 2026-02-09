@@ -22,6 +22,7 @@ class OrgSettings(Base):
     org_id = Column(String, ForeignKey("orgs.id", ondelete="CASCADE"), primary_key=True)
     allow_user_data_export = Column(Boolean, nullable=False, default=True, server_default="true")
     allow_profile_edit = Column(Boolean, nullable=False, default=True, server_default="true")
+    allow_impersonation = Column(Boolean, nullable=False, default=False, server_default="false")
     require_two_factor = Column(Boolean, nullable=False, default=False, server_default="false")
     mfa_required_actions = Column(
         JSONB,

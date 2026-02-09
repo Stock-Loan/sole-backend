@@ -258,6 +258,19 @@ async def get_membership(
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def get_membership_by_id(
+    db: AsyncSession,
+    *,
+    membership_id: str,
+    org_id: str,
+) -> OrgMembership | None:
+    stmt = select(OrgMembership).where(
+        OrgMembership.id == membership_id,
+        OrgMembership.org_id == org_id,
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 def membership_allows_auth(membership: OrgMembership, *, allow_pending: bool) -> bool:
     employment = (membership.employment_status or "").upper()
     platform = (membership.platform_status or "").upper()
@@ -315,6 +328,8 @@ async def _get_current_user(
     token_org = payload.get("org")
     identity_id = payload.get("iid")
     token_is_superuser = bool(payload.get("su"))
+    impersonator_user_id = payload.get("imp")
+    impersonator_identity_id = payload.get("imp_iid")
     if not user_sub:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     if not token_org:
@@ -326,6 +341,61 @@ async def _get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tenant mismatch"
         )
 
+    # When impersonating, validate against the *impersonator*'s identity for
+    # session revocation, then load and return the *target* user.
+    if impersonator_user_id and impersonator_identity_id:
+        # Validate impersonator identity is still active / not revoked
+        imp_identity = await db.get(Identity, impersonator_identity_id)
+        if not imp_identity or not imp_identity.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Impersonator identity inactive",
+            )
+        if token_version is not None and imp_identity.token_version != token_version:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Impersonation session revoked",
+            )
+        now = datetime.now(timezone.utc)
+        enforce_inactivity(imp_identity.last_active_at, now)
+        is_background = request.headers.get("X-Background-Request", "").lower() in {"1", "true"}
+        if not is_background:
+            imp_identity.last_active_at = now
+            db.add(imp_identity)
+            await db.commit()
+
+        # Load the target user being impersonated
+        stmt = select(User).options(selectinload(User.identity)).where(User.id == user_sub)
+        result = await db.execute(stmt)
+        user = result.scalar_one_or_none()
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Impersonated user not found or inactive",
+            )
+
+        # Validate the target user still has an active membership.
+        # The membership may have been revoked after impersonation started.
+        if not user.is_superuser:
+            membership = await get_membership(db, user_id=user.id, org_id=ctx.org_id)
+            if not membership:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Impersonated user is not a member of org",
+                )
+            if not membership_allows_auth(membership, allow_pending=False):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Impersonated user membership is not active",
+                )
+
+        # Tag the user object with impersonation metadata for audit logging
+        user._impersonator_user_id = impersonator_user_id  # type: ignore[attr-defined]
+        user._impersonator_identity_id = impersonator_identity_id  # type: ignore[attr-defined]
+        user._is_impersonated = True  # type: ignore[attr-defined]
+        return user
+
+    # ── Normal (non-impersonation) flow ──
     stmt = select(User).options(selectinload(User.identity)).where(User.id == user_sub)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -370,12 +440,32 @@ async def _get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Password change required",
         )
+    user._is_impersonated = False  # type: ignore[attr-defined]
     return user
 
 
 async def require_authenticated_user(current_user: User = Depends(get_current_user)) -> User:
     """Simple guard to require an authenticated user (no permission checks)."""
     return current_user
+
+
+def reject_during_impersonation(
+    current_user: User,
+    *,
+    detail: str = "This action is not allowed during impersonation",
+) -> None:
+    """Raise 403 if the current session is an impersonation session.
+
+    Use this guard at the top of endpoints that modify the target user's
+    credentials, MFA state, or session (password change, MFA reset, logout,
+    etc.) to prevent an impersonator from tampering with the real user's
+    account.
+    """
+    if getattr(current_user, "_is_impersonated", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+        )
 
 
 def extract_step_up_token(request: Request) -> str | None:

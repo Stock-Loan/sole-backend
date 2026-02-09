@@ -27,6 +27,7 @@ class MfaEnforcementAction(str, Enum):
     ROLE_ASSIGNMENT = "ROLE_ASSIGNMENT"
     USER_MFA_RESET = "USER_MFA_RESET"
     ACL_ASSIGNMENT = "ACL_ASSIGNMENT"
+    USER_IMPERSONATE = "USER_IMPERSONATE"
 
 
 class OrgSettingsBase(BaseModel):
@@ -34,6 +35,7 @@ class OrgSettingsBase(BaseModel):
 
     allow_user_data_export: bool = Field(default=True)
     allow_profile_edit: bool = Field(default=True)
+    allow_impersonation: bool = Field(default=False)
     require_two_factor: bool = Field(default=False)
     mfa_required_actions: list[MfaEnforcementAction] = Field(default_factory=list)
     remember_device_days: int = Field(default=30, ge=0)
@@ -88,6 +90,7 @@ class OrgPolicyResponse(BaseModel):
     policy_version: int
     allow_user_data_export: bool
     allow_profile_edit: bool
+    allow_impersonation: bool
     require_two_factor: bool
     mfa_required_actions: list[MfaEnforcementAction] = Field(default_factory=list)
     remember_device_days: int
@@ -112,6 +115,7 @@ class OrgSettingsUpdate(BaseModel):
 
     allow_user_data_export: bool | None = None
     allow_profile_edit: bool | None = None
+    allow_impersonation: bool | None = None
     require_two_factor: bool | None = None
     mfa_required_actions: list[MfaEnforcementAction] | None = None
     remember_device_days: int | None = Field(default=None, ge=0)

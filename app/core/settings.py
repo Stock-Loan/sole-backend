@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     pbgc_rate_scrape_day: int = Field(default=30, alias="PBGC_RATE_SCRAPE_DAY")
     pbgc_rate_scrape_hour: int = Field(default=0, alias="PBGC_RATE_SCRAPE_HOUR")
     pbgc_rate_scrape_minute: int = Field(default=0, alias="PBGC_RATE_SCRAPE_MINUTE")
+    impersonation_max_minutes: int = Field(default=60, alias="IMPERSONATION_MAX_MINUTES")
     auth_refresh_cookie_enabled: bool = Field(default=True, alias="AUTH_REFRESH_COOKIE_ENABLED")
     auth_refresh_cookie_name: str = Field(default="sole_refresh", alias="AUTH_REFRESH_COOKIE_NAME")
     auth_csrf_cookie_name: str = Field(default="sole_csrf", alias="AUTH_CSRF_COOKIE_NAME")

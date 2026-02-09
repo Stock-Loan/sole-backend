@@ -110,6 +110,8 @@ def create_access_token(
     token_version: int | None = None,
     mfa_authenticated: bool = False,
     mfa_method: str | None = None,
+    impersonator_user_id: str | None = None,
+    impersonator_identity_id: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
@@ -128,6 +130,10 @@ def create_access_token(
         to_encode["tv"] = token_version
     if mfa_method:
         to_encode["mfa_method"] = str(mfa_method)
+    if impersonator_user_id:
+        to_encode["imp"] = impersonator_user_id
+    if impersonator_identity_id:
+        to_encode["imp_iid"] = impersonator_identity_id
     private_key = _load_private_key()
     return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
 
@@ -142,6 +148,8 @@ def create_refresh_token(
     token_version: int | None = None,
     mfa_authenticated: bool = False,
     mfa_method: str | None = None,
+    impersonator_user_id: str | None = None,
+    impersonator_identity_id: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.refresh_token_expire_minutes))
@@ -162,6 +170,10 @@ def create_refresh_token(
         to_encode["tv"] = token_version
     if mfa_method:
         to_encode["mfa_method"] = str(mfa_method)
+    if impersonator_user_id:
+        to_encode["imp"] = impersonator_user_id
+    if impersonator_identity_id:
+        to_encode["imp_iid"] = impersonator_identity_id
     private_key = _load_private_key()
     return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
 
