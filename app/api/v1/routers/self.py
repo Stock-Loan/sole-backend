@@ -1,4 +1,8 @@
+import csv
+from io import StringIO
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,8 +13,11 @@ from app.db.session import get_db
 from app.models.department import Department
 from app.models.identity import Identity
 from app.models.org import Org
+from app.models.org_membership import OrgMembership
+from app.models.org_user_profile import OrgUserProfile
 from app.models.role import Role
 from app.models.user import User
+from app.models.user import User as UserModel
 from app.models.user_role import UserRole
 from app.resources.countries import COUNTRIES, SUBDIVISIONS
 from app.schemas.self import OrgSummary, RoleSummary, SelfContextResponse, SelfProfileUpdateRequest
@@ -162,10 +169,6 @@ async def get_self_profile(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
-    from app.models.org_membership import OrgMembership
-    from app.models.org_user_profile import OrgUserProfile
-    from app.models.user import User as UserModel
-
     stmt = (
         select(OrgMembership, UserModel, Department, OrgUserProfile, Identity)
         .join(UserModel, OrgMembership.user_id == UserModel.id)
@@ -210,10 +213,6 @@ async def update_self_profile(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
-    from app.models.org_membership import OrgMembership
-    from app.models.org_user_profile import OrgUserProfile
-    from app.models.user import User as UserModel
-
     await deps.require_mfa_for_action(
         request,
         current_user,
@@ -308,4 +307,102 @@ async def update_self_profile(
         roles=roles,
         organization_name=org_name,
         role_names=role_names,
+    )
+
+
+@router.get(
+    "/export",
+    response_class=StreamingResponse,
+    summary="Export current user's personal data as CSV",
+)
+async def export_self_data(
+    current_user: User = Depends(deps.require_authenticated_user),
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    org_settings = await settings_service.get_org_settings(db, ctx)
+    if not org_settings.allow_user_data_export:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User data export is disabled for this organization",
+        )
+
+    stmt = (
+        select(OrgMembership, UserModel, Department, OrgUserProfile, Identity)
+        .join(UserModel, OrgMembership.user_id == UserModel.id)
+        .join(Identity, Identity.id == UserModel.identity_id)
+        .join(Department, OrgMembership.department_id == Department.id, isouter=True)
+        .outerjoin(
+            OrgUserProfile,
+            (OrgUserProfile.membership_id == OrgMembership.id)
+            & (OrgUserProfile.org_id == OrgMembership.org_id),
+        )
+        .where(OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == current_user.id)
+    )
+    result = await db.execute(stmt)
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    membership, user, dept, profile, identity = row
+
+    roles = await _load_roles_for_user_in_org(db, user.id, ctx.org_id)
+    org_name = await _load_org_name(db, ctx.org_id)
+    country_name, state_name = _resolve_location_names(
+        profile.country if profile else None,
+        profile.state if profile else None,
+    )
+
+    csv_headers = [
+        "Field",
+        "Value",
+    ]
+    rows = [
+        ["Email", user.email or ""],
+        ["First Name", profile.first_name if profile else ""],
+        ["Middle Name", profile.middle_name if profile else ""],
+        ["Last Name", profile.last_name if profile else ""],
+        ["Preferred Name", profile.preferred_name if profile else ""],
+        ["Phone Number", profile.phone_number if profile else ""],
+        ["Timezone", profile.timezone if profile else ""],
+        ["Marital Status", profile.marital_status if profile else ""],
+        ["Country", country_name or ""],
+        ["State", state_name or ""],
+        ["Address Line 1", profile.address_line1 if profile else ""],
+        ["Address Line 2", profile.address_line2 if profile else ""],
+        ["Postal Code", profile.postal_code if profile else ""],
+        ["Organization", org_name or ""],
+        ["Employee ID", membership.employee_id or ""],
+        ["Department", dept.name if dept else ""],
+        ["Employment Status", membership.employment_status or ""],
+        ["Platform Status", membership.platform_status or ""],
+        ["Invitation Status", membership.invitation_status or ""],
+        ["Employment Start Date", membership.employment_start_date.isoformat() if membership.employment_start_date else ""],
+        ["Invited At", membership.invited_at.isoformat() if membership.invited_at else ""],
+        ["Accepted At", membership.accepted_at.isoformat() if membership.accepted_at else ""],
+        ["Roles", ", ".join(sorted(r.name for r in roles))],
+        ["MFA Enabled", "Yes" if identity.mfa_enabled else "No"],
+        ["Account Created", user.created_at.isoformat() if user.created_at else ""],
+    ]
+
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(csv_headers)
+    for row_data in rows:
+        writer.writerow([str(v) if v is not None else "" for v in row_data])
+    content = buffer.getvalue()
+
+    record_audit_log(
+        db,
+        ctx,
+        actor_id=current_user.id,
+        action="user.data.exported",
+        resource_type="org_membership",
+        resource_id=str(membership.id),
+    )
+    await db.commit()
+
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="my_data_export.csv"'},
     )
