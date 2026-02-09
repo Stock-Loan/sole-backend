@@ -3,47 +3,13 @@ import uuid
 
 import pytest
 
+from conftest import FakeAsyncSession, FakeResult, make_identity, make_user, sequence_handler
+
 from app.api import deps
 from app.models.org_membership import OrgMembership
 from app.models.org_user_profile import OrgUserProfile
-from app.models.user import User
 from app.schemas.onboarding import OnboardingUserCreate
 from app.services import onboarding
-
-
-class FakeResult:
-    def __init__(self, value):
-        self._value = value
-
-    def scalar_one_or_none(self):
-        return self._value
-
-
-class FakeSession:
-    def __init__(self, results):
-        self._results = list(results)
-        self.added = []
-
-    async def execute(self, _stmt):
-        if not self._results:
-            raise AssertionError("Unexpected query in FakeSession")
-        return FakeResult(self._results.pop(0))
-
-    def add(self, obj):
-        self.added.append(obj)
-        if getattr(obj, "id", None) is None:
-            obj.id = uuid.uuid4()
-
-    async def flush(self):
-        for obj in self.added:
-            if getattr(obj, "id", None) is None:
-                obj.id = uuid.uuid4()
-
-    async def commit(self):
-        return None
-
-    async def refresh(self, _obj):
-        return None
 
 
 @pytest.mark.asyncio
@@ -62,7 +28,13 @@ async def test_onboard_single_user_new(monkeypatch):
         employment_status="ACTIVE",
     )
 
-    db = FakeSession([None, None, None, None])
+    db = FakeAsyncSession()
+    db.on_execute(sequence_handler([
+        FakeResult(scalar=None),
+        FakeResult(scalar=None),
+        FakeResult(scalar=None),
+        FakeResult(scalar=None),
+    ]))
 
     result = await onboarding.onboard_single_user(db, ctx, payload)
 
@@ -87,17 +59,8 @@ async def test_onboard_single_user_existing_in_org(monkeypatch):
     user_id = uuid.uuid4()
     membership_id = uuid.uuid4()
 
-    user = User(
-        id=user_id,
-        org_id="org-1",
-        email="existing.user@example.com",
-        hashed_password="hash",
-        is_active=True,
-        is_superuser=False,
-        token_version=0,
-        mfa_enabled=False,
-        must_change_password=False,
-    )
+    identity = make_identity(email="existing.user@example.com")
+    user = make_user(identity=identity, org_id="org-1", id=user_id)
     membership = OrgMembership(
         id=membership_id,
         org_id="org-1",
@@ -115,7 +78,12 @@ async def test_onboard_single_user_existing_in_org(monkeypatch):
         full_name="Existing User",
     )
 
-    db = FakeSession([user, membership, profile])
+    db = FakeAsyncSession()
+    db.on_execute(sequence_handler([
+        FakeResult(scalar=user),
+        FakeResult(scalar=membership),
+        FakeResult(scalar=profile),
+    ]))
 
     payload = OnboardingUserCreate(
         email="existing.user@example.com",
@@ -132,4 +100,3 @@ async def test_onboard_single_user_existing_in_org(monkeypatch):
     assert result.temporary_password is None
     assert result.user.id == user_id
     assert result.membership.id == membership_id
-

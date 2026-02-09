@@ -1,16 +1,10 @@
-import os
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 
-os.environ.setdefault("SECRET_KEY", "test-secret-key-boot")
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:5432/test")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("DEFAULT_ORG_ID", "default")
-os.environ.setdefault("SEED_ADMIN_EMAIL", "admin@example.com")
-os.environ.setdefault("SEED_ADMIN_PASSWORD", "Password123!")
+from conftest import FakeAsyncSession, FakeResult
 
 from app.api import deps
 from app.models.audit_log import AuditLog
@@ -19,32 +13,6 @@ from app.models.org_membership import OrgMembership
 from app.models.vesting_event import VestingEvent
 from app.schemas.stock import EmployeeStockGrantCreate, EmployeeStockGrantUpdate, VestingEventCreate
 from app.services import stock_grants
-
-
-class FakeResult:
-    def __init__(self, value):
-        self._value = value
-
-    def scalar_one_or_none(self):
-        return self._value
-
-
-class FakeSession:
-    def __init__(self, membership: OrgMembership):
-        self.membership = membership
-        self.added: list = []
-
-    async def execute(self, stmt):
-        return FakeResult(self.membership)
-
-    def add(self, obj) -> None:
-        self.added.append(obj)
-
-    async def commit(self) -> None:
-        return None
-
-    async def refresh(self, obj, attribute_names=None) -> None:
-        return None
 
 
 @pytest.mark.asyncio
@@ -57,7 +25,8 @@ async def test_audit_logged_on_grant_create():
         employment_status="ACTIVE",
         platform_status="ACTIVE",
     )
-    db = FakeSession(membership)
+    db = FakeAsyncSession()
+    db.on_execute_return(FakeResult(scalar=membership))
     ctx = deps.TenantContext(org_id="default")
     payload = EmployeeStockGrantCreate(
         grant_date=date(2025, 1, 1),
@@ -101,7 +70,8 @@ async def test_audit_logged_on_grant_update():
         )
     ]
 
-    db = FakeSession(membership)
+    db = FakeAsyncSession()
+    db.on_execute_return(FakeResult(scalar=membership))
     ctx = deps.TenantContext(org_id="default")
     payload = EmployeeStockGrantUpdate(
         notes="Updated by admin",

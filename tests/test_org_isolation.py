@@ -1,26 +1,12 @@
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
+from conftest import FakeAsyncSession, FakeResult
+
 from app.api import deps
 from app.core.errors import register_exception_handlers
 from app.core.response_envelope import register_response_envelope
 from app.core.settings import settings
-
-
-class FakeResult:
-    def __init__(self, value):
-        self._value = value
-
-    def scalar_one_or_none(self):
-        return self._value
-
-
-class FakeSession:
-    def __init__(self, org_exists: bool = True):
-        self.org_exists = org_exists
-
-    async def execute(self, _stmt):
-        return FakeResult("ok" if self.org_exists else None)
 
 
 def _build_app() -> FastAPI:
@@ -35,7 +21,10 @@ def _build_app() -> FastAPI:
     return app
 
 
-def _override_db(app: FastAPI, db: FakeSession):
+def _override_db(app: FastAPI, org_exists: bool = True):
+    db = FakeAsyncSession()
+    db.on_execute_return(FakeResult(scalar="ok" if org_exists else None))
+
     async def _fake_db():
         return db
 
@@ -51,7 +40,7 @@ def test_multi_tenant_rejects_header_token_mismatch(monkeypatch):
     )
 
     app = _build_app()
-    _override_db(app, FakeSession(org_exists=True))
+    _override_db(app, org_exists=True)
     client = TestClient(app)
 
     resp = client.get(
@@ -76,7 +65,7 @@ def test_multi_tenant_requires_membership(monkeypatch):
     monkeypatch.setattr(deps, "get_membership", _no_membership)
 
     app = _build_app()
-    _override_db(app, FakeSession(org_exists=True))
+    _override_db(app, org_exists=True)
     client = TestClient(app)
 
     resp = client.get(
@@ -96,7 +85,7 @@ def test_superuser_can_override_header_org(monkeypatch):
     )
 
     app = _build_app()
-    _override_db(app, FakeSession(org_exists=True))
+    _override_db(app, org_exists=True)
     client = TestClient(app)
 
     resp = client.get(

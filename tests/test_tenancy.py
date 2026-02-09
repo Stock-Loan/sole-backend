@@ -2,6 +2,8 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from conftest import FakeAsyncSession, FakeResult
+
 from app.api import deps
 from app.core.settings import settings
 from app.core.errors import register_exception_handlers
@@ -23,6 +25,15 @@ def _build_app() -> FastAPI:
     app = FastAPI()
     register_exception_handlers(app)
     register_response_envelope(app)
+
+    # Provide fake DB so org-existence checks succeed
+    db = FakeAsyncSession()
+    db.on_execute_return(FakeResult(scalar="ok"))
+
+    async def _fake_db():
+        return db
+
+    app.dependency_overrides[deps.get_db_session] = _fake_db
 
     @app.get("/ctx")
     async def ctx_route(ctx: deps.TenantContext = Depends(deps.get_tenant_context)):

@@ -1,10 +1,3 @@
-import os
-
-os.environ.setdefault("SECRET_KEY", "test-secret-key-boot")
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:5432/test")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("DEFAULT_ORG_ID", "default")
-
 from app.core.security import create_access_token, decode_token
 from sqlalchemy import ForeignKeyConstraint
 from app.models.audit_log import AuditLog

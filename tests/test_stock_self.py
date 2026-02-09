@@ -1,108 +1,36 @@
-import os
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
 
-os.environ.setdefault("SECRET_KEY", "test-secret-key-boot")
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:5432/test")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("DEFAULT_ORG_ID", "default")
-os.environ.setdefault("SEED_ADMIN_EMAIL", "admin@example.com")
-os.environ.setdefault("SEED_ADMIN_PASSWORD", "Password123!")
+from conftest import FakeAsyncSession, FakeResult, make_user
 
-from app.api import deps
-from app.db.session import get_db
-from app.main import app
 from app.models.org_membership import OrgMembership
-from app.models.user import User
 from app.schemas.stock import EligibilityResult, StockSummaryResponse
-from app.services import stock_summary, authz
-
-
-class FakeResult:
-    def __init__(self, value):
-        self._value = value
-
-    def scalar_one_or_none(self):
-        return self._value
-
-
-class FakeSession:
-    def __init__(self, membership: OrgMembership | None):
-        self.membership = membership
-
-    async def execute(self, stmt):
-        return FakeResult(self.membership)
-
-
-class DummyUser(User):
-    def __init__(self) -> None:
-        super().__init__(
-            org_id="default",
-            email="user@example.com",
-            full_name="Test User",
-            hashed_password="hash",
-            is_active=True,
-        )
-        self.id = uuid4()
-
-
-def override_dependencies(session: FakeSession, user: DummyUser) -> None:
-    async def _get_db():
-        yield session
-
-    async def _get_ctx():
-        return deps.TenantContext(org_id="default")
-
-    async def _require_user():
-        return user
-
-    app.dependency_overrides[get_db] = _get_db
-    app.dependency_overrides[deps.get_tenant_context] = _get_ctx
-    app.dependency_overrides[deps.require_authenticated_user] = _require_user
-    app.dependency_overrides[deps.get_current_user] = _require_user
-
-
-def clear_overrides():
-    app.dependency_overrides.pop(get_db, None)
-    app.dependency_overrides.pop(deps.get_tenant_context, None)
-    app.dependency_overrides.pop(deps.require_authenticated_user, None)
-    app.dependency_overrides.pop(deps.get_current_user, None)
+from app.services import stock_summary
 
 
 @pytest.fixture(autouse=True)
-def _cleanup(monkeypatch):
-    async def _allow(*args, **kwargs):
-        return True
-
-    monkeypatch.setattr(authz, "check_permission", _allow)
-    yield
-    clear_overrides()
+def _allow_all(allow_all_permissions):
+    pass
 
 
-def test_me_stock_summary_404_when_no_membership(monkeypatch):
-    session = FakeSession(None)
-    user = DummyUser()
-    override_dependencies(session, user)
+def test_me_stock_summary_404_when_no_membership(fake_db, client):
+    fake_db.on_execute_return(FakeResult(scalar=None))
 
-    client = TestClient(app)
     resp = client.get("/api/v1/me/stock/summary")
     assert resp.status_code == 404
 
 
-def test_me_stock_summary_returns_summary(monkeypatch):
-    user = DummyUser()
+def test_me_stock_summary_returns_summary(fake_db, test_user, client, monkeypatch):
     membership = OrgMembership(
         id=uuid4(),
         org_id="default",
-        user_id=user.id,
+        user_id=test_user.id,
         employee_id="E-1",
         employment_status="ACTIVE",
         platform_status="ACTIVE",
     )
-    session = FakeSession(membership)
-    override_dependencies(session, user)
+    fake_db.on_execute_return(FakeResult(scalar=membership))
 
     summary = StockSummaryResponse(
         org_membership_id=membership.id,
@@ -125,7 +53,16 @@ def test_me_stock_summary_returns_summary(monkeypatch):
 
     monkeypatch.setattr(stock_summary, "build_stock_summary", _stub_build)
 
-    client = TestClient(app)
     resp = client.get("/api/v1/me/stock/summary")
     assert resp.status_code == 200
     assert resp.json()["data"]["org_membership_id"] == str(membership.id)
+
+
+def test_me_stock_summary_forbidden(deny_all_permissions, fake_db, test_user, override_deps):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    fake_db.on_execute_return(FakeResult(scalar=None))
+    client = TestClient(app)
+    resp = client.get("/api/v1/me/stock/summary")
+    assert resp.status_code == 403
