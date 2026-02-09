@@ -219,7 +219,7 @@ async def get_org_settings(
         down_payment_percent=DEFAULT_SETTINGS.down_payment_percent,
     )
     db.add(settings)
-    await db.commit()
+    await db.flush()
     await db.refresh(settings)
     return settings
 

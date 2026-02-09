@@ -404,7 +404,7 @@ async def onboard_single_user(
         )
         db.add(profile)
 
-    await db.commit()
+    await db.flush()
     await db.refresh(user)
     await db.refresh(membership)
     await db.refresh(profile)

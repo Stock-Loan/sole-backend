@@ -337,7 +337,7 @@ async def seed_system_roles(db: AsyncSession, org_id: str) -> dict[str, Role]:
             )
             db.add(role)
         created[role_key] = role
-    await db.commit()
+    await db.flush()
     for role in created.values():
         await db.refresh(role)
     return created
@@ -351,7 +351,7 @@ async def ensure_user_in_role(db: AsyncSession, org_id: str, user_id, role: Role
     if result.scalar_one_or_none():
         return
     db.add(UserRole(org_id=org_id, user_id=user_id, role_id=role.id))
-    await db.commit()
+    await db.flush()
     await invalidate_permission_cache(str(user_id), org_id)
 
 

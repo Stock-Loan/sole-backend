@@ -824,7 +824,7 @@ async def update_admin_application_fields(
         old_value=old_snapshot,
         new_value=new_snapshot,
     )
-    await db.commit()
+    await db.flush()
     await db.refresh(application)
     return application
 
@@ -929,7 +929,7 @@ async def update_admin_application(
         application=application,
         old_value=old_snapshot,
     )
-    await db.commit()
+    await db.flush()
     await db.refresh(application)
     if next_value == LoanApplicationStatus.REJECTED.value:
         from app.services import stock_dashboard, stock_summary
@@ -1004,7 +1004,7 @@ async def create_draft_application(
         old_value=None,
     )
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError:
         await db.rollback()
         if idempotency_key:
@@ -1109,7 +1109,7 @@ async def update_draft_application(
         application=application,
         old_value=old_snapshot,
     )
-    await db.commit()
+    await db.flush()
     await db.refresh(application)
     return application
 
@@ -1132,7 +1132,7 @@ async def submit_application(
             and application.submit_idempotency_key == idempotency_key
         ):
             await _ensure_core_workflow_stages(db, ctx, application)
-            await db.commit()
+            await db.flush()
             await db.refresh(application)
             return application
         raise loan_quotes.LoanQuoteError(
@@ -1234,7 +1234,7 @@ async def submit_application(
         application=application,
         old_value=old_snapshot,
     )
-    await db.commit()
+    await db.flush()
     from app.services import stock_dashboard, stock_summary
 
     await stock_summary.invalidate_stock_summary_cache(ctx.org_id, membership.id)
@@ -1267,6 +1267,6 @@ async def cancel_draft_application(
         application=application,
         old_value=old_snapshot,
     )
-    await db.commit()
+    await db.flush()
     await db.refresh(application)
     return application

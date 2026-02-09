@@ -153,7 +153,7 @@ async def activate_backlog(
             post_issuance_completed_ids.append(str(application.id))
 
     if activated_ids or post_issuance_completed_ids:
-        await db.commit()
+        await db.flush()
     return len(applications), len(activated_ids), activated_ids, post_issuance_completed_ids
 
 

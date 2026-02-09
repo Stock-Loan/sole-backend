@@ -42,7 +42,7 @@ async def ensure_audit_partitions(db: AsyncSession, org_id: str) -> None:
             f"PARTITION OF journal_entries FOR VALUES IN ('{org_literal}')"
         )
     )
-    await db.commit()
+    await db.flush()
 
 
 async def ensure_audit_partitions_for_orgs(db: AsyncSession) -> None:
@@ -73,7 +73,7 @@ async def create_org(
         status="ACTIVE",
     )
     db.add(org)
-    await db.commit()
+    await db.flush()
     await db.refresh(org)
 
     await ensure_audit_partitions(db, org.id)
@@ -120,4 +120,4 @@ async def _bootstrap_creator(
             accepted_at=now,
         )
         db.add(membership)
-        await db.commit()
+        await db.flush()

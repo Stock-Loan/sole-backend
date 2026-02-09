@@ -231,7 +231,6 @@ async def _record_audit_log(
         old_value=old_value,
         new_value=_grant_snapshot(grant),
     )
-    await db.commit()
 
 
 async def get_membership(
@@ -332,7 +331,7 @@ async def create_grant(
     ]
 
     db.add(grant)
-    await db.commit()
+    await db.flush()
     await db.refresh(grant, attribute_names=["vesting_events"])
     _apply_vesting_summary(grant)
     await _record_audit_log(
@@ -402,7 +401,7 @@ async def update_grant(
             setattr(grant, field, value)
 
     db.add(grant)
-    await db.commit()
+    await db.flush()
     await db.refresh(grant, attribute_names=["vesting_events"])
     _apply_vesting_summary(grant)
     await _record_audit_log(

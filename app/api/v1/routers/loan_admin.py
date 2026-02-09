@@ -562,6 +562,7 @@ async def activate_loan_backlog(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Loan application not found"
         )
+    await db.commit()
     return LoanActivationMaintenanceResponse(
         checked=checked,
         activated=activated,
