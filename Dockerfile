@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+    && apt-get install -y --no-install-recommends build-essential libpq-dev python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency definition files
@@ -30,7 +30,7 @@ ARG APP_GID=1000
 # Create user and install runtime dependencies
 RUN addgroup --system --gid ${APP_GID} appuser && adduser --system --uid ${APP_UID} --gid ${APP_GID} appuser \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /data/uploads && chmod 0777 /data/uploads

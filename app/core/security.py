@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from passlib.context import CryptContext
+from pwdlib import PasswordHash
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
@@ -16,18 +16,18 @@ from app.core.settings import settings
 logger = logging.getLogger(__name__)
 
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_password_hash = PasswordHash.recommended()
 
 
 def get_password_hash(password: str) -> str:
     min_len = settings.default_password_min_length
     if len(password) < min_len:
         raise ValueError(f"Password too short; minimum {min_len} characters")
-    return pwd_context.hash(password)
+    return _password_hash.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return _password_hash.verify(plain_password, hashed_password)
 
 
 class JWTKeyError(RuntimeError):

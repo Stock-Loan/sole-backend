@@ -10,7 +10,7 @@ SERVICE_NAME ?= sole-api
 MIGRATE_JOB ?= sole-db-migrate
 SEED_JOB ?= sole-db-seed
 
-.PHONY: help up down logs logs-api logs-db restart ps build clean migrate migrate-host revision downgrade seed shell db-shell redis-shell fmt lint type test test-cov test-unit test-integration install setup-env health deploy prod-update-jobs prod-migrate prod-seed prod-logs prod-release
+.PHONY: help up down logs logs-api logs-db restart ps build clean migrate migrate-host revision downgrade seed shell db-shell redis-shell fmt lint type test test-cov test-unit test-integration install setup-env health deploy prod-update-jobs prod-migrate prod-seed prod-logs prod-release audit check
 
 .DEFAULT_GOAL := help
 
@@ -122,3 +122,9 @@ lint-commits: ## Check that services use flush(), not commit()
 
 test: ## Run all tests
 	$(DC) run --rm $(APP) pytest tests/ -v
+
+audit: ## Run pip-audit for known vulnerabilities
+	$(DC) run --rm $(APP) pip-audit
+
+check: lint lint-commits audit test ## Run all quality checks
+	@echo "All checks passed."

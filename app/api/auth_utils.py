@@ -2,13 +2,13 @@ from typing import Optional
 
 from fastapi import Request
 
-from app.core.security import verify_password, create_step_up_challenge_token, decode_step_up_token
+from app.core.security import verify_password, get_password_hash, create_step_up_challenge_token, decode_step_up_token
 from app.core.settings import settings
 from app.utils.login_security import check_lockout, rate_limit, register_login_attempt
 from app.models import User
 from app.api.deps import StepUpMfaRequired, extract_step_up_token
 
-_FAKE_HASH = "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWrn3ILAWO.P3K.fc8G2.0G7u6g.2"
+_FAKE_HASH = get_password_hash("timing-equalization-dummy-value-not-a-real-password")
 
 
 async def require_step_up_mfa(

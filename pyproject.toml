@@ -17,22 +17,21 @@ dependencies = [
   "sqlalchemy>=2.0,<3.0",
   "alembic>=1.13,<2.0",
   "asyncpg>=0.29,<1.0",
-  "psycopg[binary,pool]>=3.1,<4.0",
+  "psycopg[pool]>=3.1,<4.0",
   "python-dotenv>=1.0,<2.0",
   "redis>=5.0,<6.0",
-  "passlib[bcrypt]>=1.7,<2.0",
+  "pwdlib[argon2]",
   "PyJWT[crypto]>=2.8,<3.0",
   "python-multipart>=0.0.6,<0.1",
   "rapidfuzz>=3.8,<4.0",
   "slowapi>=0.1.9,<0.2.0",
-  "cryptography>=41,<43",
+  "cryptography>=43,<48",
   "email-validator>=2.0,<3.0",
-  "bcrypt>=3.2,<4.0",
   "apscheduler>=3.10,<4.0",
   "beautifulsoup4>=4.12,<5.0",
   "httpx>=0.25,<0.28",
   "pyotp>=2.9,<3.0",
-  "google-cloud-storage>=2.16,<3.0"
+  "google-cloud-storage>=3.0,<4.0"
 ]
 
 [project.optional-dependencies]
@@ -43,12 +42,13 @@ dev = [
   "pytest>=7.4,<8.0",
   "pytest-asyncio>=0.23,<0.25",
   "pip-audit>=2.7,<3.0",
-  "httpx>=0.25,<0.28"
+  "psycopg[binary]>=3.1,<4.0"
 ]
 
 prod = [
   "gunicorn>=21.2,<22.0",
-  "uvicorn[standard]>=0.23,<0.30"
+  "uvicorn[standard]>=0.23,<0.30",
+  "psycopg[c]>=3.1,<4.0"
 ]
 
 [tool.ruff]
