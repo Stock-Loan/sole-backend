@@ -61,13 +61,22 @@ def test_multi_mode_requires_header_or_subdomain(monkeypatch):
     assert "Tenant resolution failed" in resp.json()["message"]
 
 
-def test_multi_mode_accepts_header(monkeypatch):
+def test_multi_mode_accepts_org_header(monkeypatch):
+    monkeypatch.setattr(settings, "tenancy_mode", "multi")
+    app = _build_app()
+    client = TestClient(app)
+    resp = client.get("/ctx", headers={"X-Org-Id": "org-123"})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["org_id"] == "org-123"
+
+
+def test_multi_mode_rejects_legacy_tenant_header(monkeypatch):
     monkeypatch.setattr(settings, "tenancy_mode", "multi")
     app = _build_app()
     client = TestClient(app)
     resp = client.get("/ctx", headers={"X-Tenant-ID": "org-123"})
-    assert resp.status_code == 200
-    assert resp.json()["data"]["org_id"] == "org-123"
+    assert resp.status_code == 400
+    assert "Tenant resolution failed" in resp.json()["message"]
 
 
 def test_multi_mode_accepts_subdomain(monkeypatch):

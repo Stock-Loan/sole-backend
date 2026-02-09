@@ -143,7 +143,6 @@ async def get_current_identity(
 async def get_tenant_context(
     request: Request,
     org_id_header: str | None = Header(default=None, alias="X-Org-Id"),
-    legacy_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
     db: AsyncSession = Depends(get_db_session),
 ) -> TenantContext:
     mode = settings.tenancy_mode
@@ -172,7 +171,7 @@ async def get_tenant_context(
             # If the caller specifically provided an org header, honour it;
             # otherwise raise so that the endpoint can use get_current_identity
             # instead.
-            header_org = org_id_header or legacy_tenant_id
+            header_org = org_id_header
             if not header_org:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -181,7 +180,7 @@ async def get_tenant_context(
             # Fall through — validate the provided header_org normally.
             candidate = header_org
         else:
-            header_org = org_id_header or legacy_tenant_id
+            header_org = org_id_header
             if token_org:
                 if header_org and header_org != token_org:
                     if not token_is_superuser:
@@ -231,7 +230,7 @@ async def get_tenant_context(
         return TenantContext(org_id=candidate)
 
     default_org = settings.default_org_id
-    header_org = org_id_header or legacy_tenant_id
+    header_org = org_id_header
     if header_org and header_org != default_org:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

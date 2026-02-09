@@ -51,7 +51,7 @@ def test_health_ready_degraded(monkeypatch) -> None:
     monkeypatch.setattr(health_module, "_check_db", bad_db)
     monkeypatch.setattr(health_module, "_check_redis", ok_redis)
 
-    response = client.get("/api/v1/health")
+    response = client.get("/api/v1/health/ready")
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload.get("status") == "degraded"

@@ -22,7 +22,6 @@ class RequestContextMiddleware:
         )
         tenant_id = (
             headers.get(b"x-org-id", b"").decode()
-            or headers.get(b"x-tenant-id", b"").decode()
             or context.get_tenant_id()
         )
 

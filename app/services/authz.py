@@ -320,9 +320,6 @@ async def seed_system_roles(db: AsyncSession, org_id: str) -> dict[str, Role]:
     for role_key, definition in SYSTEM_ROLE_DEFINITIONS.items():
         role_name = str(definition.get("name") or role_key)
         role = existing.get(role_name)
-        if role is None and role_key != role_name:
-            # Backward-compatibility for legacy seed name.
-            role = existing.get(role_key)
         if role:
             role.name = role_name
             role.permissions = definition["permissions"]

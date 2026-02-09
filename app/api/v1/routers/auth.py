@@ -60,31 +60,9 @@ def _issue_csrf_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def _clear_legacy_auth_cookies(response: Response) -> None:
-    """Clear legacy auth cookie paths to prevent duplicate-cookie CSRF mismatches."""
-    if not settings.auth_refresh_cookie_enabled:
-        return
-    legacy_paths = {
-        "/",
-        "/api/v1/auth",
-        "/api/v1/auth/refresh",
-        settings.auth_cookie_path,
-    }
-    common_kwargs = {
-        "secure": settings.auth_cookie_secure,
-        "samesite": settings.auth_cookie_samesite,
-    }
-    if settings.auth_cookie_domain:
-        common_kwargs["domain"] = settings.auth_cookie_domain
-    for path in legacy_paths:
-        response.delete_cookie(settings.auth_refresh_cookie_name, path=path, **common_kwargs)
-        response.delete_cookie(settings.auth_csrf_cookie_name, path=path, **common_kwargs)
-
-
 def _set_refresh_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
     if not settings.auth_refresh_cookie_enabled:
         return
-    _clear_legacy_auth_cookies(response)
     common_kwargs = {
         "secure": settings.auth_cookie_secure,
         "samesite": settings.auth_cookie_samesite,
