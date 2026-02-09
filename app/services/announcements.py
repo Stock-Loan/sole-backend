@@ -152,5 +152,12 @@ async def get_read_counts(
 
 
 async def get_recipient_count(db: AsyncSession, ctx: deps.TenantContext) -> int:
-    stmt = select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == ctx.org_id)
+    stmt = (
+        select(func.count())
+        .select_from(OrgMembership)
+        .where(
+            OrgMembership.org_id == ctx.org_id,
+            func.upper(OrgMembership.platform_status) == "ACTIVE",
+        )
+    )
     return int((await db.execute(stmt)).scalar_one())

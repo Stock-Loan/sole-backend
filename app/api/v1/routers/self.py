@@ -18,6 +18,7 @@ from app.schemas.settings import MfaEnforcementAction
 from app.schemas.settings import OrgPolicyResponse
 from app.schemas.users import UserDetailResponse, UserSummary
 from app.services.audit import model_snapshot, record_audit_log
+from app.services.authz import _load_permissions_from_db
 from app.services import pbgc_rates, settings as settings_service
 
 router = APIRouter(prefix="/self", tags=["self"])
@@ -126,14 +127,8 @@ async def get_self_context(
 
     roles = await _load_roles_for_user_in_org(db, current_user.id, ctx.org_id)
 
-    # Effective permissions from roles (ACLs not included here)
-    perm_set: set[str] = set()
-    for role in roles:
-        for code in role.permissions or []:
-            try:
-                perm_set.add(PermissionCode(code).value)
-            except ValueError:
-                continue
+    # Effective permissions: roles + ACL/UserPermission overrides (allow/deny)
+    perm_set = await _load_permissions_from_db(db, current_user.id, ctx.org_id)
 
     # Get org settings for session timeout
     org_settings = await settings_service.get_org_settings(db, ctx)

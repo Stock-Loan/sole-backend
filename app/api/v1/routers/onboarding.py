@@ -167,7 +167,10 @@ async def onboard_user(
     response_class=StreamingResponse,
     summary="Download CSV template for bulk onboarding",
 )
-async def download_template() -> StreamingResponse:
+async def download_template(
+    ctx: deps.TenantContext = Depends(deps.get_tenant_context),
+    current_user: User = Depends(deps.require_permission(PermissionCode.USER_ONBOARD)),
+) -> StreamingResponse:
     content = onboarding.generate_csv_template()
     return StreamingResponse(
         iter([content]),
