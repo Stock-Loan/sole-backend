@@ -39,7 +39,7 @@ class SecurityHeadersMiddleware:
                     )
                     defaults.append((header_name, settings.content_security_policy.encode()))
 
-                existing_keys = {k for k, _ in headers}
+                existing_keys = {k for k, _ in headers.items()}
                 new_headers = list(message.get("headers", []))
                 for key, value in defaults:
                     if key not in existing_keys:
