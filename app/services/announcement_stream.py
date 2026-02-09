@@ -32,6 +32,8 @@ async def unsubscribe(pubsub: PubSub, channel: str) -> None:
     try:
         # Redis/network blips should not block app shutdown/reload.
         await asyncio.wait_for(pubsub.unsubscribe(channel), timeout=2.0)
+    except Exception:
+        pass
     finally:
         try:
             await asyncio.wait_for(pubsub.close(), timeout=2.0)

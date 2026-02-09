@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from redis.exceptions import RedisError
 from sqlalchemy import func, select, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -127,6 +128,12 @@ async def stream_announcements(
         except asyncio.CancelledError:
             logger.info("Announcement stream cancelled", extra={"org_id": ctx.org_id})
             raise
+        except (ConnectionError, RedisError):
+            logger.warning(
+                "Announcement stream lost Redis connection",
+                extra={"org_id": ctx.org_id},
+            )
+            # Stream ends gracefully; client will reconnect via EventSource
         finally:
             await announcement_stream.unsubscribe(pubsub, channel)
 
