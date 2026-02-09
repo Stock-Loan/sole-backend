@@ -161,6 +161,7 @@ We do **not** use `.env` files in production. Non-secret configuration lives in
 `config.prod.yaml` and is passed to Cloud Run via `--env-vars-file`. Secrets are injected via Google Secret Manager.
 
 Ensure these secrets exist in your Google Cloud Project:
+
 - `DATABASE_URL` (POOLED connection string for runtime, e.g. Neon pooler host)
 - `DATABASE_URL_DIRECT` (DIRECT connection string for migrations/admin tasks only)
 - `JWT_PRIVATE_KEY`
@@ -228,3 +229,21 @@ gcloud run jobs update sole-db-migrate --set-secrets DATABASE_URL_DIRECT=DATABAS
 
 **Cause:** Using a custom Service Account without a configured logs bucket.
 **Fix:** Ensure `cloudbuild.yaml` has `options: { logging: CLOUD_LOGGING_ONLY }` at the end.
+
+---
+
+## Database Transaction Conventions
+
+The session is configured with `expire_on_commit=False` and `autoflush=False`. All endpoints use a single `AsyncSession` from `get_db()` which rolls back on teardown if no commit was issued.
+
+### Rules
+
+- **Services** (`app/services/`): Use `db.flush()` only — never `db.commit()`. Services prepare data within the transaction but do not finalize it.
+- **Route handlers** (`app/api/`): Own the single `db.commit()` at the end of each endpoint. This ensures the entire operation (data + audit log) is atomic.
+- **Audit logs**: Call `record_audit_log()` before the commit so the audit entry is part of the same transaction.
+- **Cache/session invalidation**: Perform after the commit. If the commit fails, caches should not be prematurely invalidated.
+- **`db.refresh()`**: Use after `db.flush()` only when the caller needs server-generated fields (`created_at`, `updated_at`, auto-generated UUIDs). Avoid after `db.commit()` — with `expire_on_commit=False`, objects retain their attributes.
+
+### Exceptions
+
+If a service function must commit directly (e.g., per-row isolation in bulk operations, lazy-init in a GET endpoint, IntegrityError-based upsert), annotate the line with `# commit-ok: <reason>`. Run `make lint-commits` to verify no unauthorized commits exist in services.

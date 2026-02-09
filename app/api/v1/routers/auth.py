@@ -281,7 +281,6 @@ async def select_org(
     identity.last_active_at = now
     db.add(identity)
     await db.commit()
-    await db.refresh(identity)
 
     if mfa_required:
         if require_login_mfa:
@@ -403,7 +402,6 @@ async def mfa_verify(
     identity.last_active_at = now
     db.add(identity)
     await db.commit()
-    await db.refresh(identity)
 
     remember_device_token = None
     if payload.remember_device:
@@ -476,7 +474,6 @@ async def mfa_enroll_start(
     identity.mfa_enabled = False
     db.add(identity)
     await db.commit()
-    await db.refresh(identity)
 
     org = (await db.execute(select(Org).where(Org.id == setup_org_id))).scalar_one_or_none()
     issuer = org.name if org else setup_org_id
@@ -536,7 +533,6 @@ async def mfa_enroll_verify(
     identity.mfa_confirmed_at = datetime.now(timezone.utc)
     db.add(identity)
     await db.commit()
-    await db.refresh(identity)
 
     user = await _load_user_for_org(
         db, identity_id=identity.id, org_id=setup_org_id, allow_pending=True
@@ -599,7 +595,6 @@ async def mfa_setup_start(
     identity.mfa_enabled = False
     db.add(identity)
     await db.commit()
-    await db.refresh(identity)
 
     org = (await db.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
     issuer = org.name if org else ctx.org_id
@@ -634,7 +629,6 @@ async def mfa_setup_verify(
     identity.mfa_confirmed_at = datetime.now(timezone.utc)
     db.add(identity)
     await db.commit()
-    await db.refresh(identity)
 
     # Generate recovery codes
     recovery_codes = await mfa_service.generate_recovery_codes(db, identity_id=identity.id)
@@ -880,7 +874,6 @@ async def refresh_tokens(
     identity.last_active_at = now
     db.add(identity)
     await db.commit()
-    await db.refresh(identity)
 
     # Refresh token rotation: reject reused tokens
     if await is_refresh_used(jti):
@@ -989,8 +982,6 @@ async def change_password(
     db.add(identity)
 
     await db.commit()
-    await db.refresh(identity)
-    await db.refresh(current_user)
 
     access, refresh = _issue_tokens(
         user=current_user,

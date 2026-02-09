@@ -82,7 +82,7 @@ class AssetService:
             object_key=object_key,
         )
         self.db.add(asset)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(asset)
 
         # 4. Generate URL
@@ -111,7 +111,7 @@ class AssetService:
         asset.status = "uploaded"
         asset.updated_at = datetime.now(timezone.utc)
         self.db.add(asset)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(asset)
         return asset
 

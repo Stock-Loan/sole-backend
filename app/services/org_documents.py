@@ -52,7 +52,7 @@ async def ensure_default_folders(db: AsyncSession, org_id: str) -> list[OrgDocum
         db.add(folder)
         created.append(folder)
     if created:
-        await db.commit()
+        await db.commit()  # commit-ok: lazy-init in GET endpoint with no router commit
     return created
 
 

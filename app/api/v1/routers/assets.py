@@ -46,7 +46,9 @@ async def create_upload_session(
     payload = payload.model_copy(update={"org_id": ctx.org_id})
     service = AssetService(db)
     try:
-        return await service.create_upload_session(payload)
+        result = await service.create_upload_session(payload)
+        await db.commit()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -61,6 +63,7 @@ async def finalize_asset(
     service = AssetService(db)
     try:
         asset = await service.finalize_upload(asset_id, org_id=ctx.org_id)
+        await db.commit()
         return asset
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

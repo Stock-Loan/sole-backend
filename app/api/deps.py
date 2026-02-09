@@ -350,8 +350,6 @@ async def _get_current_user(
         identity.last_active_at = now
         db.add(identity)
         await db.commit()
-    await db.refresh(user)
-    await db.refresh(identity)
     if identity.must_change_password and not allow_password_change:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

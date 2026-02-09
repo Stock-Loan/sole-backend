@@ -110,5 +110,15 @@ fmt: ## Format code (black, ruff)
 lint: ## Lint code (ruff)
 	$(DC) run --rm $(APP) ruff check app tests
 
+lint-commits: ## Check that services use flush(), not commit()
+	@violations=$$(grep -rn --include="*.py" "\.commit()" app/services/ | grep -v "# commit-ok"); \
+	if [ -n "$$violations" ]; then \
+		echo "ERROR: Unauthorized db.commit() in services:"; \
+		echo "$$violations"; \
+		echo "Services should use db.flush(). Add '# commit-ok: <reason>' if intentional."; \
+		exit 1; \
+	fi
+	@echo "No unauthorized db.commit() in services"
+
 test: ## Run all tests
 	$(DC) run --rm $(APP) pytest tests/ -v

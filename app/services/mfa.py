@@ -76,7 +76,6 @@ async def create_remember_device(
     )
     db.add(device)
     await db.flush()
-    await db.refresh(device)
     return raw_token
 
 

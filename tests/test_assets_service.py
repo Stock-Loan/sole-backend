@@ -99,7 +99,7 @@ async def test_asset_service_create_session(mock_db, monkeypatch):
     
     # Verify DB interaction
     assert mock_db.add.called
-    assert mock_db.commit.called
+    assert mock_db.flush.called
 
 @pytest.mark.asyncio
 async def test_asset_service_finalize(mock_db, monkeypatch):
@@ -124,7 +124,7 @@ async def test_asset_service_finalize(mock_db, monkeypatch):
     asset = await service.finalize_upload(asset_id, org_id="org-1")
     
     assert asset.status == "uploaded"
-    assert mock_db.commit.called
+    assert mock_db.flush.called
 
 @pytest.mark.asyncio
 async def test_asset_service_download(mock_db, monkeypatch):

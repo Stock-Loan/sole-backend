@@ -113,7 +113,7 @@ async def record_read(
     )
     db.add(read)
     try:
-        await db.commit()
+        await db.commit()  # commit-ok: IntegrityError upsert with own rollback
     except IntegrityError:
         await db.rollback()
         # Another request likely created it; return existing row

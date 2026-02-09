@@ -590,7 +590,7 @@ async def bulk_onboard_users(
                 membership_status=result.membership_status,
                 temporary_password=result.temporary_password,
             )
-            await db.commit()
+            await db.commit()  # commit-ok: per-row isolation in bulk operation
             successes.append(success)
         except IntegrityError as exc:
             await db.rollback()
