@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,6 +12,8 @@ from app.utils.redis_client import get_redis_client
 
 APP_VERSION = "0.1.0"
 
+logger = logging.getLogger(__name__)
+
 
 async def _check_db() -> dict[str, str]:
     try:
@@ -18,7 +21,8 @@ async def _check_db() -> dict[str, str]:
             await conn.execute(text("SELECT 1"))
         return {"status": "ok"}
     except Exception as exc:  # pragma: no cover - exercised in runtime
-        return {"status": "error", "error": str(exc)}
+        logger.error("Health check: database error: %s", exc)
+        return {"status": "error"}
 
 
 async def _check_redis() -> dict[str, str]:
@@ -27,7 +31,8 @@ async def _check_redis() -> dict[str, str]:
         await redis.ping()
         return {"status": "ok"}
     except Exception as exc:
-        return {"status": "error", "error": str(exc)}
+        logger.error("Health check: redis error: %s", exc)
+        return {"status": "error"}
 
 
 async def _check_api() -> dict[str, str]:

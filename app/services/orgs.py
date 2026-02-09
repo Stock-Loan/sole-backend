@@ -93,7 +93,21 @@ async def _bootstrap_creator(
     creator: User,
     roles,
 ) -> None:
-    user = creator
+    # Create a new User scoped to the new org (login requires per-org User rows).
+    existing_stmt = select(User).where(
+        User.org_id == org_id, User.identity_id == creator.identity_id
+    )
+    user = (await db.execute(existing_stmt)).scalar_one_or_none()
+    if not user:
+        user = User(
+            org_id=org_id,
+            identity_id=creator.identity_id,
+            email=creator.email,
+            is_active=True,
+            is_superuser=False,
+        )
+        db.add(user)
+        await db.flush()
 
     admin_role = roles.get("ORG_ADMIN")
     if admin_role:

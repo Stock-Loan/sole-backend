@@ -195,6 +195,19 @@ async def get_tenant_context(
             else:
                 candidate = header_org
 
+            # Subdomain-based tenant resolution (e.g. acme.example.com → acme)
+            if not candidate:
+                host = request.headers.get("host", "")
+                hostname = host.split(":")[0]  # strip port
+                parts = hostname.split(".")
+                if len(parts) >= 3:
+                    subdomain = parts[0]
+                    if (
+                        not settings.allowed_tenant_hosts
+                        or hostname in settings.allowed_tenant_hosts
+                    ):
+                        candidate = subdomain
+
             if not candidate and _refresh_paths_match(request.url.path):
                 candidate = _org_from_refresh_cookie(request)
 

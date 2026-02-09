@@ -105,7 +105,19 @@ async def upload_local_content(
             detail="Invalid or expired URL signature",
         )
     await _require_asset_for_org(db, object_key=key, org_id=ctx.org_id)
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Upload exceeds maximum size of {settings.max_upload_size_mb} MB",
+        )
     body = await request.body()
+    if len(body) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Upload exceeds maximum size of {settings.max_upload_size_mb} MB",
+        )
 
     adapter = LocalFileSystemAdapter(base_path=settings.local_upload_dir, base_url="")
     try:

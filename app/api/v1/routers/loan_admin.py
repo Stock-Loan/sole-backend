@@ -541,7 +541,7 @@ async def activate_loan_backlog(
     loan_id: UUID | None = Query(default=None),
     limit: int | None = Query(default=None, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_VIEW_ALL)),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanActivationMaintenanceResponse:
@@ -2473,7 +2473,7 @@ async def upload_legal_issuance_document_file(
     request: Request,
     document_type: LoanDocumentType = Form(...),
     file: UploadFile = File(...),
-    current_user=Depends(deps.require_permission(PermissionCode.LOAN_DOCUMENT_MANAGE_LEGAL)),
+    current_user=Depends(deps.require_permission(PermissionCode.LOAN_WORKFLOW_POST_ISSUANCE_MANAGE)),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> LoanDocumentDTO:

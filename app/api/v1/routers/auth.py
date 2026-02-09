@@ -50,7 +50,7 @@ from app.schemas.auth import (
 )
 from app.api.auth_utils import constant_time_verify, enforce_login_limits, record_login_attempt
 from app.services import authz as authz_service, mfa as mfa_service, settings as settings_service
-from app.utils.login_security import enforce_mfa_rate_limit, is_refresh_used, mark_refresh_used
+from app.utils.login_security import enforce_mfa_rate_limit, mark_refresh_used_atomic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -875,15 +875,17 @@ async def refresh_tokens(
     db.add(identity)
     await db.commit()
 
-    # Refresh token rotation: reject reused tokens
-    if await is_refresh_used(jti):
+    # Refresh token rotation: reject reused tokens (atomic check-and-mark)
+    was_first_use = await mark_refresh_used_atomic(
+        jti, datetime.fromtimestamp(exp_ts, tz=timezone.utc)
+    )
+    if not was_first_use:
         identity.token_version += 1
         db.add(identity)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token reuse detected"
         )
-    await mark_refresh_used(jti, datetime.fromtimestamp(exp_ts, tz=timezone.utc))
 
     access, refresh = _issue_tokens(
         user=user,

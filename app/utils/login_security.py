@@ -79,29 +79,21 @@ async def register_login_attempt(identifier: str, success: bool) -> None:
         )
 
 
-async def is_refresh_used(jti: str) -> bool:
-    redis = get_redis_client()
-    try:
-        return bool(await redis.get(f"refresh_used:{jti}"))
-    except RedisError as e:
-        logger.error(f"Redis error in is_refresh_used: {e}")
-        # Fail closed: assume token might be used if we can't check
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Service temporarily unavailable",
-        )
+async def mark_refresh_used_atomic(jti: str, expires_at: datetime) -> bool:
+    """Atomically mark a refresh token JTI as used.
 
-
-async def mark_refresh_used(jti: str, expires_at: datetime) -> None:
+    Returns True if this is the first use (SET NX succeeded).
+    Returns False if the token was already marked (replay detected).
+    """
     redis = get_redis_client()
     ttl = int((expires_at - datetime.now(timezone.utc)).total_seconds())
     if ttl <= 0:
-        return
+        return False  # already expired, treat as replay
     try:
-        await redis.setex(f"refresh_used:{jti}", ttl, 1)
+        result = await redis.set(f"refresh_used:{jti}", 1, ex=ttl, nx=True)
+        return bool(result)
     except RedisError as e:
-        logger.error(f"Redis error in mark_refresh_used: {e}")
-        # If we can't mark it as used, we risk replay attacks.
+        logger.error(f"Redis error in mark_refresh_used_atomic: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service temporarily unavailable",

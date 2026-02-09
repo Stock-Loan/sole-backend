@@ -401,8 +401,10 @@ def _apply_quote(
 async def get_membership_for_user(
     db: AsyncSession, ctx: deps.TenantContext, user_id
 ) -> OrgMembership | None:
-    stmt = select(OrgMembership).where(
-        OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == user_id
+    stmt = (
+        select(OrgMembership)
+        .options(selectinload(OrgMembership.profile))
+        .where(OrgMembership.org_id == ctx.org_id, OrgMembership.user_id == user_id)
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
@@ -1154,7 +1156,9 @@ async def submit_application(
 
     old_snapshot = _application_snapshot(application)
 
-    current_status = normalize_marital_status(current_user.marital_status)
+    profile = membership.profile
+    profile_marital = profile.marital_status if profile else None
+    current_status = normalize_marital_status(profile_marital)
     submitted_status = normalize_marital_status(application.marital_status_snapshot)
     if current_status and submitted_status and current_status != submitted_status:
         raise loan_quotes.LoanQuoteError(
@@ -1164,12 +1168,12 @@ async def submit_application(
                 "Please contact HR to update your marital status before submitting."
             ),
             details={
-                "current_status": current_user.marital_status,
+                "current_status": profile_marital,
                 "submitted_status": application.marital_status_snapshot,
             },
         )
     if current_status and not submitted_status:
-        application.marital_status_snapshot = current_user.marital_status
+        application.marital_status_snapshot = profile_marital
         submitted_status = current_status
 
     if _requires_spouse_info(application.marital_status_snapshot):
