@@ -27,6 +27,7 @@ from app.core.settings import settings
 from app.db.session import get_db
 from app.models import Identity, OrgMembership, User
 from app.models.org import Org
+from app.models.org_user_profile import OrgUserProfile
 from app.schemas.auth import (
     AuthOrgsResponse,
     ChangePasswordRequest,
@@ -58,6 +59,60 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 def _issue_csrf_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def _sanitize_display_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    # Keep impersonation labels name-only; never surface emails in name slots.
+    if "@" in normalized:
+        return None
+    return normalized
+
+
+def _derive_profile_display_name(profile: OrgUserProfile | None) -> str | None:
+    if profile is None:
+        return None
+    candidates = [
+        profile.preferred_name,
+        profile.full_name,
+        " ".join(
+            [part for part in [profile.first_name, profile.last_name] if part and part.strip()]
+        ),
+        profile.first_name,
+        profile.last_name,
+    ]
+    for candidate in candidates:
+        clean = _sanitize_display_name(candidate)
+        if clean:
+            return clean
+    return None
+
+
+async def _load_user_display_name(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id,
+    membership_id=None,
+) -> str | None:
+    stmt = (
+        select(OrgUserProfile)
+        .join(
+            OrgMembership,
+            (OrgMembership.id == OrgUserProfile.membership_id)
+            & (OrgMembership.org_id == OrgUserProfile.org_id),
+        )
+        .where(OrgMembership.org_id == org_id, OrgMembership.user_id == user_id)
+        .limit(1)
+    )
+    if membership_id is not None:
+        stmt = stmt.where(OrgUserProfile.membership_id == membership_id)
+    profile = (await db.execute(stmt)).scalar_one_or_none()
+    return _derive_profile_display_name(profile)
 
 
 def _set_refresh_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
@@ -1163,6 +1218,7 @@ class ImpersonateStartResponse(BaseModel):
     csrf_token: str | None = None
     target_user: UserOut
     impersonator_user_id: str
+    impersonator_name: str
 
 
 @router.post("/impersonate/start", response_model=ImpersonateStartResponse)
@@ -1255,6 +1311,17 @@ async def impersonate_start(
         )
 
     impersonator_identity = current_user.identity
+    target_display_name = await _load_user_display_name(
+        db,
+        org_id=ctx.org_id,
+        user_id=target_user.id,
+        membership_id=target_membership.id,
+    )
+    impersonator_display_name = await _load_user_display_name(
+        db,
+        org_id=ctx.org_id,
+        user_id=current_user.id,
+    )
 
     # Issue tokens scoped to the *target* user, with impersonation claims
     # pointing back to the *admin*. Token version is pinned to the admin's
@@ -1298,7 +1365,7 @@ async def impersonate_start(
         is_active=target_user.is_active,
         is_superuser=target_user.is_superuser,
         mfa_enabled=target_identity.mfa_enabled if target_identity else False,
-        full_name=target_user.full_name,
+        full_name=target_display_name or "Impersonated User",
     )
 
     result = ImpersonateStartResponse(
@@ -1306,6 +1373,7 @@ async def impersonate_start(
         refresh_token=refresh,
         target_user=target_user_out,
         impersonator_user_id=str(current_user.id),
+        impersonator_name=impersonator_display_name or "Administrator",
     )
     csrf_token = _maybe_attach_cookies(response, result.refresh_token)
     if csrf_token:
