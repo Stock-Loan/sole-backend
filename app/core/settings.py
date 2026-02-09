@@ -1,9 +1,37 @@
 from functools import lru_cache
 import json
-from typing import Literal
+import os
+from typing import Any, Literal
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+
+class YamlConfigSettingsSource(PydanticBaseSettingsSource):
+    """A settings source that reads from a YAML file."""
+
+    def __call__(self) -> dict[str, Any]:
+        config_file = os.getenv("CONFIG_FILE", "config.prod.yaml")
+        if not os.path.exists(config_file):
+            return {}
+        try:
+            import yaml
+            with open(config_file, encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except ImportError:
+            return {}
+        except Exception:
+            return {}
+
+    def get_field_value(self, field, field_name):
+        # This method is required by the abstract base class, 
+        # but since we return the full dict in __call__, 
+        # Pydantic's default processing will handle it.
+        return None, field_name, False
 
 
 class Settings(BaseSettings):
@@ -91,6 +119,23 @@ class Settings(BaseSettings):
     content_security_policy_report_only: bool = Field(
         default=False, alias="CONTENT_SECURITY_POLICY_REPORT_ONLY"
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            env_settings,
+            YamlConfigSettingsSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     def allowed_origins_list(self) -> list[str]:
         raw = (self.allowed_origins or "").strip()
