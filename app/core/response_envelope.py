@@ -50,6 +50,17 @@ def _normalize_envelope(payload: dict[str, Any], status_code: int) -> dict[str, 
     return normalized
 
 
+def _copy_headers(source: Response, target: Response) -> None:
+    """Copy headers from source to target, preserving multi-value headers like Set-Cookie."""
+    for key, value in source.headers.items():
+        if key.lower() in {"content-length", "content-type"}:
+            continue
+        if key.lower() == "set-cookie":
+            target.headers.append(key, value)
+        else:
+            target.headers[key] = value
+
+
 class ResponseEnvelopeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next) -> Response:
         response = await call_next(request)
@@ -60,10 +71,7 @@ class ResponseEnvelopeMiddleware(BaseHTTPMiddleware):
         # Convert 204 to a 200 success envelope for frontend consistency
         if response.status_code == 204:
             new_response = JSONResponse(status_code=200, content=_build_success_envelope(None, 200))
-            for key, value in response.headers.items():
-                if key.lower() in {"content-length", "content-type"}:
-                    continue
-                new_response.headers[key] = value
+            _copy_headers(response, new_response)
             return new_response
 
         if not isinstance(response, JSONResponse):
@@ -83,18 +91,12 @@ class ResponseEnvelopeMiddleware(BaseHTTPMiddleware):
             if normalized == payload:
                 return response
             new_response = JSONResponse(status_code=response.status_code, content=normalized)
-            for key, value in response.headers.items():
-                if key.lower() in {"content-length", "content-type"}:
-                    continue
-                new_response.headers[key] = value
+            _copy_headers(response, new_response)
             return new_response
 
         wrapped = _build_success_envelope(payload, response.status_code)
         new_response = JSONResponse(status_code=response.status_code, content=wrapped)
-        for key, value in response.headers.items():
-            if key.lower() in {"content-length", "content-type"}:
-                continue
-            new_response.headers[key] = value
+        _copy_headers(response, new_response)
         return new_response
 
 
