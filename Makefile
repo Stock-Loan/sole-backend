@@ -24,8 +24,11 @@ help: ## Show this help message
 # LOCAL DEVELOPMENT (Docker Compose)
 # ==============================================================================
 
-up: ## Start local dev server (Hot Reload)
-	$(DC) up -d --build
+build: ## Build local Docker images
+	$(DC) build
+
+up: ## Start local dev server (Hot Reload) without rebuilding
+	$(DC) up -d
 	@echo "Local API started: http://localhost:8000"
 	@echo "Docs: http://localhost:8000/docs"
 
