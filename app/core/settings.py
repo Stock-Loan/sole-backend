@@ -1,9 +1,11 @@
 from functools import lru_cache
 import json
 import os
+import re
 from typing import Any, Literal
+from urllib.parse import urlparse
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -20,11 +22,13 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
             return {}
         try:
             import yaml
-            with open(config_file, encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
         except ImportError:
             return {}
-        except Exception:
+
+        try:
+            with open(config_file, encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError):
             return {}
 
     def get_field_value(self, field, field_name):
@@ -52,6 +56,7 @@ class Settings(BaseSettings):
     db_statement_timeout_ms: int = Field(default=10000, alias="DB_STATEMENT_TIMEOUT_MS")
     db_slow_query_ms: int = Field(default=2000, alias="DB_SLOW_QUERY_MS")
     db_log_query_timings: bool = Field(default=False, alias="DB_LOG_QUERY_TIMINGS")
+    redis_key_prefix: str = Field(default="sole", alias="REDIS_KEY_PREFIX")
     request_concurrency_limit: int = Field(default=0, alias="REQUEST_CONCURRENCY_LIMIT")
     request_concurrency_timeout_seconds: int = Field(
         default=0, alias="REQUEST_CONCURRENCY_TIMEOUT_SECONDS"
@@ -70,10 +75,13 @@ class Settings(BaseSettings):
     default_org_name: str = Field(default="Default Organization", alias="DEFAULT_ORG_NAME")
     default_org_slug: str = Field(default="default", alias="DEFAULT_ORG_SLUG")
     secret_key: str = Field(alias="SECRET_KEY", min_length=16)
+    fernet_kdf_salt: str | None = Field(default=None, alias="FERNET_KDF_SALT")
+    fernet_kdf_iterations: int = Field(default=210000, alias="FERNET_KDF_ITERATIONS")
     jwt_private_key: str | None = Field(default=None, alias="JWT_PRIVATE_KEY")
     jwt_public_key: str | None = Field(default=None, alias="JWT_PUBLIC_KEY")
     jwt_private_key_path: str | None = Field(default=None, alias="JWT_PRIVATE_KEY_PATH")
     jwt_public_key_path: str | None = Field(default=None, alias="JWT_PUBLIC_KEY_PATH")
+    jwt_key_cache_ttl_seconds: int = Field(default=60, alias="JWT_KEY_CACHE_TTL_SECONDS")
     jwt_algorithm: Literal["RS256"] = Field(default="RS256", alias="JWT_ALGORITHM")
     allowed_tenant_hosts: list[str] = Field(default_factory=list, alias="ALLOWED_TENANT_HOSTS")
     rate_limit_per_minute: int = Field(default=60, alias="RATE_LIMIT_PER_MINUTE")
@@ -120,6 +128,7 @@ class Settings(BaseSettings):
     content_security_policy_report_only: bool = Field(
         default=False, alias="CONTENT_SECURITY_POLICY_REPORT_ONLY"
     )
+    health_include_details: bool = Field(default=False, alias="HEALTH_INCLUDE_DETAILS")
 
     @classmethod
     def settings_customise_sources(
@@ -142,14 +151,83 @@ class Settings(BaseSettings):
         raw = (self.allowed_origins or "").strip()
         if not raw:
             return []
+        parsed_values: list[str]
         if raw.startswith("["):
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list):
-                    return [str(item).strip() for item in parsed if str(item).strip()]
+                    parsed_values = [str(item).strip() for item in parsed if str(item).strip()]
+                else:
+                    parsed_values = []
             except json.JSONDecodeError:
-                pass
-        return [item.strip() for item in raw.split(",") if item.strip()]
+                parsed_values = []
+        else:
+            parsed_values = [item.strip() for item in raw.split(",") if item.strip()]
+
+        validated: list[str] = []
+        for item in parsed_values:
+            if item == "*":
+                raise ValueError("Wildcard ALLOWED_ORIGINS ('*') is not allowed")
+            parsed_origin = urlparse(item)
+            if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.netloc:
+                raise ValueError(f"Invalid CORS origin: {item}")
+            if any(
+                [
+                    parsed_origin.path not in {"", "/"},
+                    parsed_origin.params,
+                    parsed_origin.query,
+                    parsed_origin.fragment,
+                ]
+            ):
+                raise ValueError(f"CORS origin must not include path/query/fragment: {item}")
+            normalized = f"{parsed_origin.scheme}://{parsed_origin.netloc}".rstrip("/")
+            validated.append(normalized)
+        return list(dict.fromkeys(validated))
+
+    @model_validator(mode="after")
+    def validate_security_defaults(self) -> "Settings":
+        normalized_env = (self.environment or "").strip().lower()
+        is_production = normalized_env in {"production", "prod"}
+
+        insecure_secret_values = {
+            "replace-with-secure-random-64-char-secret",
+            "dev-only-change-before-deploy",
+            "changeme",
+        }
+        if is_production and (
+            self.secret_key.strip().lower() in insecure_secret_values or len(self.secret_key) < 32
+        ):
+            raise ValueError(
+                "SECRET_KEY is insecure for production; use a high-entropy secret at least 32 characters long"
+            )
+
+        insecure_seed_passwords = {
+            "changeme123!",
+            "admin123",
+            "password",
+            "password123",
+            "changeme",
+            "replace-with-strong-seed-admin-password1!",
+            "devonlychangebeforedeploy123!",
+        }
+        if is_production and self.seed_admin_password.strip().lower() in insecure_seed_passwords:
+            raise ValueError(
+                "SEED_ADMIN_PASSWORD is insecure for production; configure a strong, unique password"
+            )
+
+        salt = (self.fernet_kdf_salt or "").strip()
+        if is_production and len(salt) < 16:
+            raise ValueError(
+                "FERNET_KDF_SALT is required in production and must be at least 16 characters"
+            )
+
+        if not re.fullmatch(r"[a-zA-Z0-9:_-]+", self.redis_key_prefix or ""):
+            raise ValueError("REDIS_KEY_PREFIX may only contain letters, numbers, ':', '_' and '-'")
+
+        if self.fernet_kdf_iterations < 100_000:
+            raise ValueError("FERNET_KDF_ITERATIONS must be at least 100000")
+
+        return self
 
 
 @lru_cache(maxsize=1)

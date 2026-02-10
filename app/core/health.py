@@ -4,6 +4,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 
 from app.core.settings import settings
@@ -20,7 +22,7 @@ async def _check_db() -> dict[str, str]:
         async with engine.begin() as conn:  # type: AsyncConnection
             await conn.execute(text("SELECT 1"))
         return {"status": "ok"}
-    except Exception as exc:  # pragma: no cover - exercised in runtime
+    except SQLAlchemyError as exc:  # pragma: no cover - exercised in runtime
         logger.error("Health check: database error: %s", exc)
         return {"status": "error"}
 
@@ -30,7 +32,7 @@ async def _check_redis() -> dict[str, str]:
         redis = get_redis_client()
         await redis.ping()
         return {"status": "ok"}
-    except Exception as exc:
+    except RedisError as exc:
         logger.error("Health check: redis error: %s", exc)
         return {"status": "error"}
 
@@ -58,13 +60,15 @@ async def ready_payload() -> dict[str, Any]:
         "redis": await _check_redis(),
     }
     overall, ready = _overall_status(checks)
-    return {
+    payload = {
         "status": overall,
         "ready": ready,
-        "environment": settings.environment,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "checks": checks,
     }
+    if settings.health_include_details:
+        payload["environment"] = settings.environment
+        payload["checks"] = checks
+    return payload
 
 
 async def status_summary_payload() -> dict[str, Any]:
@@ -74,14 +78,16 @@ async def status_summary_payload() -> dict[str, Any]:
         "redis": await _check_redis(),
     }
     overall, ready = _overall_status(checks)
-    return {
+    payload = {
         "status": overall,
         "ready": ready,
-        "environment": settings.environment,
         "version": APP_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "checks": checks,
     }
+    if settings.health_include_details:
+        payload["environment"] = settings.environment
+        payload["checks"] = checks
+    return payload
 
 
 async def health_payload() -> dict[str, Any]:

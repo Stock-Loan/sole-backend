@@ -42,6 +42,22 @@ class User(Base):
     memberships = relationship("OrgMembership", back_populates="user", cascade="all, delete-orphan")
     roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan")
 
+    _PROFILE_PROXY_FIELDS = {
+        "full_name",
+        "first_name",
+        "middle_name",
+        "last_name",
+        "preferred_name",
+        "timezone",
+        "phone_number",
+        "marital_status",
+        "country",
+        "state",
+        "address_line1",
+        "address_line2",
+        "postal_code",
+    }
+
     @property
     def profile(self):
         memberships = self.__dict__.get("memberships") or []
@@ -50,67 +66,10 @@ class User(Base):
             return first_membership.__dict__.get("profile")
         return None
 
-    @property
-    def full_name(self) -> str | None:
-        profile = self.profile
-        return profile.full_name if profile else None
-
-    @property
-    def first_name(self) -> str | None:
-        profile = self.profile
-        return profile.first_name if profile else None
-
-    @property
-    def middle_name(self) -> str | None:
-        profile = self.profile
-        return profile.middle_name if profile else None
-
-    @property
-    def last_name(self) -> str | None:
-        profile = self.profile
-        return profile.last_name if profile else None
-
-    @property
-    def preferred_name(self) -> str | None:
-        profile = self.profile
-        return profile.preferred_name if profile else None
-
-    @property
-    def timezone(self) -> str | None:
-        profile = self.profile
-        return profile.timezone if profile else None
-
-    @property
-    def phone_number(self) -> str | None:
-        profile = self.profile
-        return profile.phone_number if profile else None
-
-    @property
-    def marital_status(self) -> str | None:
-        profile = self.profile
-        return profile.marital_status if profile else None
-
-    @property
-    def country(self) -> str | None:
-        profile = self.profile
-        return profile.country if profile else None
-
-    @property
-    def state(self) -> str | None:
-        profile = self.profile
-        return profile.state if profile else None
-
-    @property
-    def address_line1(self) -> str | None:
-        profile = self.profile
-        return profile.address_line1 if profile else None
-
-    @property
-    def address_line2(self) -> str | None:
-        profile = self.profile
-        return profile.address_line2 if profile else None
-
-    @property
-    def postal_code(self) -> str | None:
-        profile = self.profile
-        return profile.postal_code if profile else None
+    def __getattr__(self, item: str):
+        if item in self._PROFILE_PROXY_FIELDS:
+            profile = self.profile
+            if profile is None:
+                return None
+            return getattr(profile, item, None)
+        raise AttributeError(f"{type(self).__name__!s} object has no attribute {item!r}")

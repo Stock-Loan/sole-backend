@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from redis.exceptions import RedisError
 
 from app.core.settings import settings
-from app.utils.redis_client import get_redis_client
+from app.utils.redis_client import get_redis_client, redis_key
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +16,11 @@ def _ttl(seconds: int) -> int:
 
 async def rate_limit(key: str, limit: int, window_seconds: int) -> None:
     redis = get_redis_client()
+    namespaced_key = redis_key("rate_limit", key)
     try:
         pipe = redis.pipeline()
-        pipe.incr(key)
-        pipe.expire(key, window_seconds)
+        pipe.incr(namespaced_key)
+        pipe.expire(namespaced_key, window_seconds)
         count, _ = await pipe.execute()
         if count > limit:
             raise HTTPException(
@@ -38,7 +39,7 @@ async def rate_limit(key: str, limit: int, window_seconds: int) -> None:
 async def check_lockout(identifier: str) -> None:
     redis = get_redis_client()
     try:
-        locked_until = await redis.get(f"lock:{identifier}")
+        locked_until = await redis.get(redis_key("lock", identifier))
         if locked_until:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -54,8 +55,8 @@ async def check_lockout(identifier: str) -> None:
 
 async def register_login_attempt(identifier: str, success: bool) -> None:
     redis = get_redis_client()
-    fail_key = f"fail:{identifier}"
-    lock_key = f"lock:{identifier}"
+    fail_key = redis_key("fail", identifier)
+    lock_key = redis_key("lock", identifier)
     try:
         if success:
             await redis.delete(fail_key)
@@ -90,7 +91,7 @@ async def mark_refresh_used_atomic(jti: str, expires_at: datetime) -> bool:
     if ttl <= 0:
         return False  # already expired, treat as replay
     try:
-        result = await redis.set(f"refresh_used:{jti}", 1, ex=ttl, nx=True)
+        result = await redis.set(redis_key("refresh_used", jti), 1, ex=ttl, nx=True)
         return bool(result)
     except RedisError as e:
         logger.error(f"Redis error in mark_refresh_used_atomic: {e}")
@@ -107,7 +108,7 @@ async def enforce_mfa_rate_limit(mfa_token: str) -> None:
     within the 5-minute token validity window.
     """
     redis = get_redis_client()
-    key = f"mfa_attempt:{mfa_token}"
+    key = redis_key("mfa_attempt", mfa_token)
     limit = 5  # Max attempts per MFA token
     window_seconds = 300  # 5 minutes (matches token validity)
     try:
@@ -135,7 +136,7 @@ async def check_pbgc_refresh_cooldown(org_id: str) -> None:
     Raises HTTP 429 if a refresh was already performed within the last 24 hours.
     """
     redis = get_redis_client()
-    key = f"pbgc_refresh:{org_id}"
+    key = redis_key("pbgc_refresh", org_id)
     try:
         if await redis.exists(key):
             ttl = await redis.ttl(key)
@@ -155,7 +156,7 @@ async def check_pbgc_refresh_cooldown(org_id: str) -> None:
 async def record_pbgc_refresh(org_id: str) -> None:
     """Record a PBGC refresh to enforce the 24-hour cooldown."""
     redis = get_redis_client()
-    key = f"pbgc_refresh:{org_id}"
+    key = redis_key("pbgc_refresh", org_id)
     cooldown_seconds = 24 * 60 * 60  # 24 hours
     try:
         await redis.setex(key, cooldown_seconds, 1)

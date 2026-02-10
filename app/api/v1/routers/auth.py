@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
 import secrets
+from typing import TypeVar
+from collections.abc import Callable
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
@@ -9,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import deps
+from app.core.tenant import normalize_org_id
 from app.core.permissions import PermissionCode
 from app.core.security import (
     create_access_token,
@@ -55,6 +58,39 @@ from app.services import authz as authz_service, mfa as mfa_service, settings as
 from app.utils.login_security import enforce_mfa_rate_limit, mark_refresh_used_atomic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+_AUTH_NO_STORE_VALUE = "no-store, no-cache, must-revalidate, max-age=0"
+_AuthResponseModel = TypeVar("_AuthResponseModel", bound=BaseModel)
+
+
+def _impersonation_start_from_payload(payload: dict) -> datetime | None:
+    started_at = payload.get("imp_started")
+    if started_at is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(started_at), tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _remaining_impersonation_delta(started_at: datetime) -> timedelta:
+    max_window = timedelta(minutes=settings.impersonation_max_minutes)
+    now = datetime.now(timezone.utc)
+    expires_at = started_at + max_window
+    remaining = expires_at - now
+    if remaining <= timedelta(0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Impersonation session expired",
+        )
+    return remaining
+
+
+def _set_sensitive_auth_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = _AUTH_NO_STORE_VALUE
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
 
 
 def _issue_csrf_token() -> str:
@@ -160,6 +196,7 @@ def _maybe_attach_cookies(
     response: Response,
     refresh_token: str | None,
 ) -> str | None:
+    _set_sensitive_auth_headers(response)
     if not refresh_token or not settings.auth_refresh_cookie_enabled:
         return None
     csrf_token = _issue_csrf_token()
@@ -168,6 +205,49 @@ def _maybe_attach_cookies(
     # their in-memory/session token after cookie rotation events.
     response.headers[settings.auth_csrf_header_name] = csrf_token
     return csrf_token
+
+
+def _finalize_auth_response(
+    response: Response,
+    payload: _AuthResponseModel,
+) -> _AuthResponseModel:
+    refresh_token = getattr(payload, "refresh_token", None)
+    csrf_token = _maybe_attach_cookies(response, refresh_token)
+    if csrf_token:
+        return payload.model_copy(update={"csrf_token": csrf_token})
+    return payload
+
+
+def _issue_tokenized_response(
+    response: Response,
+    *,
+    build_payload: Callable[[str, str], _AuthResponseModel],
+    user: User,
+    identity: Identity,
+    org_id: str,
+    mfa_authenticated: bool = False,
+    mfa_method: str | None = None,
+    impersonator_user_id: str | None = None,
+    impersonator_identity_id: str | None = None,
+    impersonation_started_at: datetime | None = None,
+    access_expires_delta: timedelta | None = None,
+    refresh_expires_delta: timedelta | None = None,
+) -> _AuthResponseModel:
+    if (impersonator_user_id or impersonator_identity_id) and impersonation_started_at is None:
+        impersonation_started_at = datetime.now(timezone.utc)
+    access, refresh = _issue_tokens(
+        user=user,
+        identity=identity,
+        org_id=org_id,
+        mfa_authenticated=mfa_authenticated,
+        mfa_method=mfa_method,
+        impersonator_user_id=impersonator_user_id,
+        impersonator_identity_id=impersonator_identity_id,
+        impersonation_started_at=impersonation_started_at,
+        access_expires_delta=access_expires_delta,
+        refresh_expires_delta=refresh_expires_delta,
+    )
+    return _finalize_auth_response(response, build_payload(access, refresh))
 
 
 def _issue_tokens(
@@ -179,6 +259,7 @@ def _issue_tokens(
     mfa_method: str | None = None,
     impersonator_user_id: str | None = None,
     impersonator_identity_id: str | None = None,
+    impersonation_started_at: datetime | None = None,
     access_expires_delta: timedelta | None = None,
     refresh_expires_delta: timedelta | None = None,
 ) -> tuple[str, str]:
@@ -193,6 +274,7 @@ def _issue_tokens(
         mfa_method=mfa_method,
         impersonator_user_id=impersonator_user_id,
         impersonator_identity_id=impersonator_identity_id,
+        impersonation_started_at=impersonation_started_at,
         expires_delta=access_expires_delta,
     )
     refresh = create_refresh_token(
@@ -205,6 +287,7 @@ def _issue_tokens(
         mfa_method=mfa_method,
         impersonator_user_id=impersonator_user_id,
         impersonator_identity_id=impersonator_identity_id,
+        impersonation_started_at=impersonation_started_at,
         expires_delta=refresh_expires_delta,
     )
     return access, refresh
@@ -246,6 +329,7 @@ async def _load_user_for_org(
 async def login(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> LoginResponse:
     """
@@ -255,16 +339,15 @@ async def login(
     used to list orgs and select one.
     """
     client_ip = request.client.host if request.client else "unknown"
+    _set_sensitive_auth_headers(response)
     await enforce_login_limits(client_ip, payload.email)
 
     stmt = select(Identity).where(Identity.email == payload.email)
     identity = (await db.execute(stmt)).scalar_one_or_none()
 
-    if (
-        not identity
-        or not identity.is_active
-        or not constant_time_verify(identity.hashed_password if identity else None, payload.password)
-    ):
+    password_ok = constant_time_verify(identity.hashed_password if identity else None, payload.password)
+
+    if not identity or not identity.is_active or not password_ok:
         await record_login_attempt(payload.email, success=False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
@@ -281,6 +364,7 @@ async def login(
 
 @router.get("/orgs", response_model=AuthOrgsResponse, summary="List orgs for authenticated identity")
 async def list_orgs(
+    response: Response,
     identity: Identity = Depends(deps.get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> AuthOrgsResponse:
@@ -289,6 +373,7 @@ async def list_orgs(
 
     Returns the list of orgs the identity has active memberships in.
     """
+    _set_sensitive_auth_headers(response)
     stmt = (
         select(Org)
         .join(User, User.org_id == Org.id)
@@ -325,13 +410,20 @@ async def select_org(
     - Returns mfa_required=True with a challenge_token
     - Returns mfa_setup_required=True with a setup_token
     """
+    _set_sensitive_auth_headers(response)
+
+    try:
+        org_id = normalize_org_id(payload.org_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     user = await _load_user_for_org(
-        db, identity_id=identity.id, org_id=payload.org_id, allow_pending=True
+        db, identity_id=identity.id, org_id=org_id, allow_pending=True
     )
 
-    ctx = deps.TenantContext(org_id=payload.org_id)
+    ctx = deps.TenantContext(org_id=org_id)
     org_settings = await settings_service.get_org_settings(db, ctx)
-    has_sensitive = await authz_service.has_sensitive_permissions(db, user, payload.org_id)
+    has_sensitive = await authz_service.has_sensitive_permissions(db, user, org_id)
 
     mfa_required = bool(org_settings.require_two_factor or identity.mfa_enabled or has_sensitive)
     remember_days = org_settings.remember_device_days
@@ -339,7 +431,7 @@ async def select_org(
 
     # If org requires MFA (or user has sensitive perms) but identity hasn't set it up yet
     if (org_settings.require_two_factor or has_sensitive) and not identity.mfa_enabled:
-        setup_token = create_mfa_setup_token(str(identity.id), payload.org_id)
+        setup_token = create_mfa_setup_token(str(identity.id), org_id)
         return SelectOrgResponse(
             mfa_setup_required=True,
             setup_token=setup_token,
@@ -361,7 +453,7 @@ async def select_org(
         if remember_device_token and org_settings.remember_device_days > 0:
             device = await mfa_service.find_valid_device(
                 db,
-                org_id=payload.org_id,
+                org_id=org_id,
                 user_id=user.id,
                 remember_token=remember_device_token,
             )
@@ -370,7 +462,7 @@ async def select_org(
                 access, refresh = _issue_tokens(
                     user=user,
                     identity=identity,
-                    org_id=payload.org_id,
+                    org_id=org_id,
                     mfa_authenticated=True,
                     mfa_method="remember_device",
                 )
@@ -379,12 +471,9 @@ async def select_org(
                     refresh_token=refresh,
                     remember_device_days=remember_days,
                 )
-                csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-                if csrf_token:
-                    result = result.model_copy(update={"csrf_token": csrf_token})
-                return result
+                return _finalize_auth_response(response, result)
 
-        challenge_token = create_mfa_challenge_token(str(identity.id), payload.org_id)
+        challenge_token = create_mfa_challenge_token(str(identity.id), org_id)
         return SelectOrgResponse(
             mfa_required=True,
             challenge_token=challenge_token,
@@ -395,7 +484,7 @@ async def select_org(
     access, refresh = _issue_tokens(
         user=user,
         identity=identity,
-        org_id=payload.org_id,
+        org_id=org_id,
         mfa_authenticated=False,
     )
     result = SelectOrgResponse(
@@ -403,10 +492,7 @@ async def select_org(
         refresh_token=refresh,
         remember_device_days=remember_days,
     )
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
+    return _finalize_auth_response(response, result)
 
 
 @router.post(
@@ -425,6 +511,8 @@ async def mfa_verify(
     Step 4a of the login flow. Verify TOTP or recovery code during login.
     Requires pre_org_token.
     """
+    _set_sensitive_auth_headers(response)
+
     await enforce_mfa_rate_limit(payload.challenge_token)
 
     try:
@@ -488,22 +576,19 @@ async def mfa_verify(
             )
 
     await db.commit()
-    access, refresh = _issue_tokens(
+    return _issue_tokenized_response(
+        response,
+        build_payload=lambda access, refresh: MfaVerifyResponse(
+            access_token=access,
+            refresh_token=refresh,
+            remember_device_token=remember_device_token,
+        ),
         user=user,
         identity=identity,
         org_id=challenge_org_id,
         mfa_authenticated=True,
         mfa_method=payload.code_type,
     )
-    result = MfaVerifyResponse(
-        access_token=access,
-        refresh_token=refresh,
-        remember_device_token=remember_device_token,
-    )
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
 
 
 @router.post(
@@ -513,6 +598,7 @@ async def mfa_verify(
 )
 async def mfa_enroll_start(
     payload: MfaEnrollStartRequest,
+    response: Response,
     identity: Identity = Depends(deps.get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupStartResponse:
@@ -520,6 +606,8 @@ async def mfa_enroll_start(
     Step 4b of the login flow. Generate TOTP secret for first-time MFA setup.
     Requires pre_org_token.
     """
+    _set_sensitive_auth_headers(response)
+
     try:
         setup = decode_mfa_setup_token(payload.setup_token)
     except ValueError as exc:
@@ -550,7 +638,6 @@ async def mfa_enroll_start(
     ctx = deps.TenantContext(org_id=setup_org_id)
     org_settings = await settings_service.get_org_settings(db, ctx)
     return MfaSetupStartResponse(
-        secret=secret,
         otpauth_url=otpauth_url,
         issuer=issuer,
         account=identity.email,
@@ -574,6 +661,8 @@ async def mfa_enroll_verify(
     Step 4c of the login flow. Verify TOTP code, enable MFA, issue tokens.
     Requires pre_org_token.
     """
+    _set_sensitive_auth_headers(response)
+
     await enforce_mfa_rate_limit(payload.setup_token)
 
     try:
@@ -626,23 +715,20 @@ async def mfa_enroll_verify(
             )
 
     await db.commit()
-    access, refresh = _issue_tokens(
+    return _issue_tokenized_response(
+        response,
+        build_payload=lambda access, refresh: MfaSetupCompleteResponse(
+            access_token=access,
+            refresh_token=refresh,
+            remember_device_token=remember_device_token,
+            recovery_codes=recovery_codes,
+        ),
         user=user,
         identity=identity,
         org_id=setup_org_id,
         mfa_authenticated=True,
         mfa_method="totp",
     )
-    result = MfaSetupCompleteResponse(
-        access_token=access,
-        refresh_token=refresh,
-        remember_device_token=remember_device_token,
-        recovery_codes=recovery_codes,
-    )
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
 
 
 # ─── Post-login MFA management ──────────────────────────────────────────────
@@ -650,6 +736,7 @@ async def mfa_enroll_verify(
 
 @router.post("/mfa/setup/start", response_model=MfaSetupStartResponse)
 async def mfa_setup_start(
+    response: Response,
     current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
@@ -671,8 +758,8 @@ async def mfa_setup_start(
     org = (await db.execute(select(Org).where(Org.id == ctx.org_id))).scalar_one_or_none()
     issuer = org.name if org else ctx.org_id
     otpauth_url = mfa_service.build_totp_uri(secret, identity.email, issuer)
+    _set_sensitive_auth_headers(response)
     return MfaSetupStartResponse(
-        secret=secret,
         otpauth_url=otpauth_url,
         issuer=issuer,
         account=identity.email,
@@ -688,6 +775,8 @@ async def mfa_setup_verify(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> MfaSetupCompleteResponse:
+    _set_sensitive_auth_headers(response)
+
     deps.reject_during_impersonation(
         current_user, detail="Cannot modify MFA settings during impersonation"
     )
@@ -726,23 +815,20 @@ async def mfa_setup_verify(
         )
 
     await db.commit()
-    access, refresh = _issue_tokens(
+    return _issue_tokenized_response(
+        response,
+        build_payload=lambda access, refresh: MfaSetupCompleteResponse(
+            access_token=access,
+            refresh_token=refresh,
+            remember_device_token=remember_device_token,
+            recovery_codes=recovery_codes,
+        ),
         user=current_user,
         identity=identity,
         org_id=ctx.org_id,
         mfa_authenticated=True,
         mfa_method="totp",
     )
-    result = MfaSetupCompleteResponse(
-        access_token=access,
-        refresh_token=refresh,
-        remember_device_token=remember_device_token,
-        recovery_codes=recovery_codes,
-    )
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
 
 
 class RecoveryCodesCountResponse(BaseModel):
@@ -751,11 +837,13 @@ class RecoveryCodesCountResponse(BaseModel):
 
 @router.get("/mfa/recovery-codes/count", response_model=RecoveryCodesCountResponse)
 async def get_recovery_codes_count(
+    response: Response,
     current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> RecoveryCodesCountResponse:
     """Get the number of remaining (unused) recovery codes."""
+    _set_sensitive_auth_headers(response)
     identity = current_user.identity
     if not identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
@@ -771,6 +859,7 @@ class RegenerateRecoveryCodesResponse(BaseModel):
 @router.post("/mfa/recovery-codes/regenerate", response_model=RegenerateRecoveryCodesResponse)
 async def regenerate_recovery_codes(
     request: Request,
+    response: Response,
     current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
@@ -793,12 +882,14 @@ async def regenerate_recovery_codes(
 
     recovery_codes = await mfa_service.generate_recovery_codes(db, identity_id=identity.id)
     await db.commit()
+    _set_sensitive_auth_headers(response)
     return RegenerateRecoveryCodesResponse(recovery_codes=recovery_codes)
 
 
 @router.post("/mfa/reset")
 async def self_mfa_reset(
     request: Request,
+    response: Response,
     current_user: User = Depends(deps.get_current_user),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
@@ -810,6 +901,7 @@ async def self_mfa_reset(
     deps.reject_during_impersonation(
         current_user, detail="Cannot reset MFA during impersonation"
     )
+    _set_sensitive_auth_headers(response)
     identity = current_user.identity
     if not identity.mfa_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MFA not enabled")
@@ -837,6 +929,7 @@ async def refresh_csrf(
     response: Response,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> CsrfTokenResponse:
+    _set_sensitive_auth_headers(response)
     refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
     if not refresh_token:
         raise HTTPException(
@@ -864,6 +957,8 @@ async def refresh_tokens(
     db: AsyncSession = Depends(get_db),
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
 ) -> TokenPair:
+    _set_sensitive_auth_headers(response)
+
     refresh_token = payload.refresh_token if payload else None
     used_cookie = False
     if not refresh_token:
@@ -970,21 +1065,28 @@ async def refresh_tokens(
 
     imp_user = token_data.get("imp")
     imp_iid = token_data.get("imp_iid")
+    imp_started_at = _impersonation_start_from_payload(token_data)
 
-    # When refreshing an impersonation session, cap token TTL to the
-    # configured impersonation max so the session cannot be extended
-    # indefinitely through repeated refreshes.
+    # Keep impersonation sessions capped to an absolute window from the
+    # original impersonation start time.
     imp_access_delta = None
     imp_refresh_delta = None
     if imp_user:
-        imp_max = timedelta(minutes=settings.impersonation_max_minutes)
+        if imp_started_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Impersonation token missing start time",
+            )
+        remaining = _remaining_impersonation_delta(imp_started_at)
         imp_access_delta = min(
-            imp_max,
+            remaining,
             timedelta(minutes=settings.access_token_expire_minutes),
         )
-        imp_refresh_delta = imp_max
+        imp_refresh_delta = remaining
 
-    access, refresh = _issue_tokens(
+    return _issue_tokenized_response(
+        response,
+        build_payload=lambda access, refresh: TokenPair(access_token=access, refresh_token=refresh),
         user=user,
         identity=identity,
         org_id=ctx.org_id,
@@ -992,14 +1094,10 @@ async def refresh_tokens(
         mfa_method=token_mfa_method,
         impersonator_user_id=imp_user,
         impersonator_identity_id=imp_iid,
+        impersonation_started_at=imp_started_at,
         access_expires_delta=imp_access_delta,
         refresh_expires_delta=imp_refresh_delta,
     )
-    result = TokenPair(access_token=access, refresh_token=refresh)
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
 
 
 @router.post("/logout", status_code=204)
@@ -1008,6 +1106,8 @@ async def logout(
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    _set_sensitive_auth_headers(response)
+
     # During impersonation, the impersonator should use /impersonate/stop
     # instead of logout. Logging out would bump the admin's token_version,
     # revoking all admin sessions.
@@ -1047,6 +1147,8 @@ async def change_password(
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     db: AsyncSession = Depends(get_db),
 ) -> TokenPair:
+    _set_sensitive_auth_headers(response)
+
     deps.reject_during_impersonation(
         current_user, detail="Cannot change password during impersonation"
     )
@@ -1096,17 +1198,14 @@ async def change_password(
 
     await db.commit()
 
-    access, refresh = _issue_tokens(
+    return _issue_tokenized_response(
+        response,
+        build_payload=lambda access, refresh: TokenPair(access_token=access, refresh_token=refresh),
         user=current_user,
         identity=identity,
         org_id=ctx.org_id,
         mfa_authenticated=identity.mfa_enabled,
     )
-    result = TokenPair(access_token=access, refresh_token=refresh)
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
 
 
 # ─── Step-up MFA ─────────────────────────────────────────────────────────────
@@ -1119,6 +1218,7 @@ async def change_password(
 )
 async def verify_step_up_mfa(
     payload: StepUpVerifyRequest,
+    response: Response,
     ctx: deps.TenantContext = Depends(deps.get_tenant_context),
     current_user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -1131,6 +1231,8 @@ async def verify_step_up_mfa(
     to this endpoint to receive a short-lived step-up token that authorizes
     the specific action.
     """
+    _set_sensitive_auth_headers(response)
+
     # Rate limit step-up verification attempts
     await enforce_mfa_rate_limit(payload.challenge_token)
 
@@ -1323,6 +1425,8 @@ async def impersonate_start(
         user_id=current_user.id,
     )
 
+    impersonation_started_at = datetime.now(timezone.utc)
+
     # Issue tokens scoped to the *target* user, with impersonation claims
     # pointing back to the *admin*. Token version is pinned to the admin's
     # identity so revoking the admin's session kills impersonation too.
@@ -1332,18 +1436,34 @@ async def impersonate_start(
         imp_max,
         timedelta(minutes=settings.access_token_expire_minutes),
     )
-    access, refresh = _issue_tokens(
+    token_response = _issue_tokenized_response(
+        response,
+        build_payload=lambda access, refresh: ImpersonateStartResponse(
+            access_token=access,
+            refresh_token=refresh,
+            target_user=UserOut(
+                id=str(target_user.id),
+                org_id=target_user.org_id,
+                email=target_user.email,
+                is_active=target_user.is_active,
+                is_superuser=target_user.is_superuser,
+                mfa_enabled=target_identity.mfa_enabled if target_identity else False,
+                full_name=target_display_name or "Impersonated User",
+            ),
+            impersonator_user_id=str(current_user.id),
+            impersonator_name=impersonator_display_name or "Administrator",
+        ),
         user=target_user,
-        identity=impersonator_identity,  # use admin's identity for tv
+        identity=impersonator_identity,
         org_id=ctx.org_id,
-        mfa_authenticated=True,  # already passed step-up MFA
+        mfa_authenticated=True,
         impersonator_user_id=str(current_user.id),
         impersonator_identity_id=str(impersonator_identity.id),
+        impersonation_started_at=impersonation_started_at,
         access_expires_delta=imp_access_delta,
         refresh_expires_delta=imp_max,
     )
 
-    # Audit
     record_audit_log(
         db,
         ctx,
@@ -1358,27 +1478,7 @@ async def impersonate_start(
     )
     await db.commit()
 
-    target_user_out = UserOut(
-        id=str(target_user.id),
-        org_id=target_user.org_id,
-        email=target_user.email,
-        is_active=target_user.is_active,
-        is_superuser=target_user.is_superuser,
-        mfa_enabled=target_identity.mfa_enabled if target_identity else False,
-        full_name=target_display_name or "Impersonated User",
-    )
-
-    result = ImpersonateStartResponse(
-        access_token=access,
-        refresh_token=refresh,
-        target_user=target_user_out,
-        impersonator_user_id=str(current_user.id),
-        impersonator_name=impersonator_display_name or "Administrator",
-    )
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result
+    return token_response
 
 
 @router.post("/impersonate/stop", response_model=TokenPair)
@@ -1396,6 +1496,8 @@ async def impersonate_stop(
     in token). Returns fresh tokens scoped to the impersonator's own user.
     """
     from app.services.audit import record_audit_log
+
+    _set_sensitive_auth_headers(response)
 
     impersonator_user_id = getattr(current_user, "_impersonator_user_id", None)
     if not impersonator_user_id:
@@ -1438,15 +1540,11 @@ async def impersonate_stop(
     await db.commit()
 
     # Issue fresh tokens for the impersonator's own session (no imp claims)
-    access, refresh = _issue_tokens(
+    return _issue_tokenized_response(
+        response,
+        build_payload=lambda access, refresh: TokenPair(access_token=access, refresh_token=refresh),
         user=impersonator,
         identity=imp_identity,
         org_id=ctx.org_id,
         mfa_authenticated=True,
     )
-
-    result = TokenPair(access_token=access, refresh_token=refresh)
-    csrf_token = _maybe_attach_cookies(response, result.refresh_token)
-    if csrf_token:
-        result = result.model_copy(update={"csrf_token": csrf_token})
-    return result

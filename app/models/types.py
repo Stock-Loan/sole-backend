@@ -1,22 +1,16 @@
-import base64
-import hashlib
+from functools import lru_cache
 from typing import Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import LargeBinary
 from sqlalchemy.types import TypeDecorator
 
-from app.core.settings import settings
+from app.core.fernet_crypto import decrypt_fernet_token, get_primary_fernet
 
 
-def _derive_key(secret: str) -> bytes:
-    digest = hashlib.sha256(secret.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest)
-
-
+@lru_cache(maxsize=16)
 def _get_fernet(secret: Optional[str] = None) -> Fernet:
-    key_material = secret or settings.secret_key
-    return Fernet(_derive_key(key_material))
+    return get_primary_fernet(secret=secret)
 
 
 class EncryptedString(TypeDecorator):
@@ -43,7 +37,7 @@ class EncryptedString(TypeDecorator):
         if value is None:
             return None
         try:
-            decrypted = self._fernet.decrypt(value)
+            decrypted = decrypt_fernet_token(value, secret=self._secret)
             return decrypted.decode("utf-8")
         except InvalidToken as exc:  # pragma: no cover - indicates corrupted data
             raise ValueError("Unable to decrypt value") from exc

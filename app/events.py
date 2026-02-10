@@ -1,11 +1,14 @@
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.settings import settings
+from app.db.session import engine
 from app.db.session import AsyncSessionLocal
 from app.services import pbgc_rates
 
@@ -38,35 +41,41 @@ async def _run_pbgc_scrape() -> None:
             except asyncio.CancelledError:
                 logger.info("PBGC rate refresh cancelled")
                 raise
-            except Exception:
+            except SQLAlchemyError:
                 logger.exception("Failed to refresh PBGC mid-term rates")
     finally:
         if task:
             _running_tasks.discard(task)
 
 
-def register_event_handlers(app: FastAPI) -> None:
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        logger.info("Application startup")
-        if settings.pbgc_rate_scrape_enabled:
-            global _scheduler
-            _scheduler = AsyncIOScheduler(timezone="UTC")
-            trigger = CronTrigger(
-                hour=settings.pbgc_rate_scrape_hour,
-                minute=settings.pbgc_rate_scrape_minute,
-            )
-            _scheduler.add_job(_run_pbgc_scrape, trigger=trigger, id="pbgc_rate_scrape")
-            _scheduler.start()
-            await _run_pbgc_scrape()
-
-    @app.on_event("shutdown")
-    async def on_shutdown() -> None:
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    logger.info("Application startup")
+    _shutdown_event.clear()
+    global _scheduler
+    if settings.pbgc_rate_scrape_enabled:
+        _scheduler = AsyncIOScheduler(timezone="UTC")
+        trigger = CronTrigger(
+            hour=settings.pbgc_rate_scrape_hour,
+            minute=settings.pbgc_rate_scrape_minute,
+        )
+        _scheduler.add_job(_run_pbgc_scrape, trigger=trigger, id="pbgc_rate_scrape")
+        _scheduler.start()
+        await _run_pbgc_scrape()
+    try:
+        yield
+    finally:
         logger.info("Application shutdown")
         _shutdown_event.set()
         if _scheduler:
             _scheduler.shutdown(wait=False)
+            _scheduler = None
         if _running_tasks:
             for task in list(_running_tasks):
                 task.cancel()
             await asyncio.gather(*_running_tasks, return_exceptions=True)
+        await engine.dispose()
+
+
+def register_event_handlers(app: FastAPI) -> None:
+    app.router.lifespan_context = lifespan

@@ -38,6 +38,10 @@ from app.resources.countries import COUNTRIES, SUBDIVISIONS
 logger = logging.getLogger(__name__)
 
 
+class OnboardingRoleAssignmentError(RuntimeError):
+    """Raised when default role assignment fails during onboarding."""
+
+
 UserStatus = Literal["new", "existing"]
 MembershipStatus = Literal["created", "already_exists"]
 
@@ -69,8 +73,24 @@ class OnboardingResult:
 
 
 def _generate_temp_password(length: int = 16) -> str:
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+    if length < 12:
+        length = 12
+    lowercase = string.ascii_lowercase
+    uppercase = string.ascii_uppercase
+    digits = string.digits
+    specials = "!@#$%^&*()-_=+"
+    all_chars = lowercase + uppercase + digits + specials
+
+    required_chars = [
+        secrets.choice(lowercase),
+        secrets.choice(uppercase),
+        secrets.choice(digits),
+        secrets.choice(specials),
+    ]
+    remaining = [secrets.choice(all_chars) for _ in range(length - len(required_chars))]
+    password_chars = required_chars + remaining
+    secrets.SystemRandom().shuffle(password_chars)
+    return "".join(password_chars)
 
 
 def _parse_date(value: str | None):
@@ -80,7 +100,7 @@ def _parse_date(value: str | None):
     # Accept ISO date
     try:
         return datetime.fromisoformat(value).date()
-    except Exception:
+    except ValueError:
         pass
     # Accept Excel serial numbers (assuming 1899-12-30 epoch)
     if value.isdigit():
@@ -88,7 +108,7 @@ def _parse_date(value: str | None):
             base = datetime(1899, 12, 30, tzinfo=timezone.utc)
             days = int(value)
             return (base + timedelta(days=days)).date()
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return None
     return None
 
@@ -411,12 +431,13 @@ async def onboard_single_user(
     # Ensure a minimal EMPLOYEE role so first login is possible even while invited
     try:
         await assign_default_employee_role(db, ctx.org_id, user.id)
-    except Exception:
+    except IntegrityError as exc:
         logger.error(
             "Failed to assign default EMPLOYEE role during onboarding",
             exc_info=True,
             extra={"org_id": ctx.org_id, "user_id": str(user.id)},
         )
+        raise OnboardingRoleAssignmentError("Failed to assign default employee role") from exc
     user_status: UserStatus = "new" if created_user else "existing"
     membership_status: MembershipStatus = "created" if created_membership else "already_exists"
     return OnboardingResult(
@@ -588,7 +609,7 @@ async def bulk_onboard_users(
                 membership=result.membership,
                 user_status=result.user_status,
                 membership_status=result.membership_status,
-                temporary_password=result.temporary_password,
+                credentials_issued=bool(result.temporary_password),
             )
             await db.commit()  # commit-ok: per-row isolation in bulk operation
             successes.append(success)
@@ -604,7 +625,7 @@ async def bulk_onboard_users(
                     error=describe_integrity_error(exc),
                 )
             )
-        except Exception as exc:  # pragma: no cover - capture validation/runtime errors
+        except (ValueError, TypeError, IntegrityError, OnboardingRoleAssignmentError) as exc:
             await db.rollback()
             errors.append(
                 BulkOnboardingRowError(

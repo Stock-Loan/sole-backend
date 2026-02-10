@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 import uuid
-from functools import lru_cache
 from pathlib import Path
+import re
+import time
 from typing import Any
 
 from pwdlib import PasswordHash
@@ -18,11 +20,46 @@ logger = logging.getLogger(__name__)
 
 _password_hash = PasswordHash.recommended()
 
+_COMMON_WEAK_PASSWORDS = {
+    "password",
+    "password123",
+    "admin123",
+    "qwerty123",
+    "changeme",
+    "changeme123",
+    "welcome123",
+    "letmein",
+}
+_SPECIAL_CHAR_RE = re.compile(r"[^A-Za-z0-9]")
 
-def get_password_hash(password: str) -> str:
+
+def _validate_password_complexity(password: str) -> None:
     min_len = settings.default_password_min_length
     if len(password) < min_len:
         raise ValueError(f"Password too short; minimum {min_len} characters")
+    if not any(char.islower() for char in password):
+        raise ValueError("Password must include at least one lowercase letter")
+    if not any(char.isupper() for char in password):
+        raise ValueError("Password must include at least one uppercase letter")
+    if not any(char.isdigit() for char in password):
+        raise ValueError("Password must include at least one numeric character")
+    if _SPECIAL_CHAR_RE.search(password) is None:
+        raise ValueError("Password must include at least one special character")
+    if password.strip().lower() in _COMMON_WEAK_PASSWORDS:
+        raise ValueError("Password is too common; choose a stronger password")
+
+
+def get_password_hash(password: str) -> str:
+    _validate_password_complexity(password)
+    return _password_hash.hash(password)
+
+
+def hash_password_for_internal_use(password: str) -> str:
+    """Hash a password value without complexity policy checks.
+
+    Intended for internal non-user credentials such as timing-equalization
+    dummy hashes and migration helpers.
+    """
     return _password_hash.hash(password)
 
 
@@ -34,22 +71,65 @@ class JWTKeyError(RuntimeError):
     pass
 
 
-@lru_cache(maxsize=1)
+@dataclass(slots=True)
+class _CachedJWTKey:
+    value: str
+    loaded_at: float
+
+
+_private_key_cache: _CachedJWTKey | None = None
+_public_key_cache: _CachedJWTKey | None = None
+
+
+def _key_cache_ttl_seconds() -> int:
+    return max(0, settings.jwt_key_cache_ttl_seconds)
+
+
+def clear_jwt_key_cache() -> None:
+    global _private_key_cache, _public_key_cache
+    _private_key_cache = None
+    _public_key_cache = None
+
+
+def _is_key_cache_valid(cache: _CachedJWTKey | None) -> bool:
+    if cache is None:
+        return False
+    ttl_seconds = _key_cache_ttl_seconds()
+    if ttl_seconds <= 0:
+        return False
+    return (time.monotonic() - cache.loaded_at) < ttl_seconds
+
+
 def _load_private_key() -> str:
+    global _private_key_cache
+    if _is_key_cache_valid(_private_key_cache):
+        return _private_key_cache.value
+
     if settings.jwt_private_key:
-        return settings.jwt_private_key
-    if settings.jwt_private_key_path:
-        return _read_key(settings.jwt_private_key_path)
-    raise JWTKeyError("JWT private key not configured")
+        key = settings.jwt_private_key
+    elif settings.jwt_private_key_path:
+        key = _read_key(settings.jwt_private_key_path)
+    else:
+        raise JWTKeyError("JWT private key not configured")
+
+    _private_key_cache = _CachedJWTKey(value=key, loaded_at=time.monotonic())
+    return key
 
 
-@lru_cache(maxsize=1)
 def _load_public_key() -> str:
+    global _public_key_cache
+    if _is_key_cache_valid(_public_key_cache):
+        return _public_key_cache.value
+
     if settings.jwt_public_key:
-        return settings.jwt_public_key
-    if settings.jwt_public_key_path:
-        return _read_key(settings.jwt_public_key_path)
-    raise JWTKeyError("JWT public key not configured")
+        key = settings.jwt_public_key
+    elif settings.jwt_public_key_path:
+        key = _read_key(settings.jwt_public_key_path)
+    else:
+        raise JWTKeyError("JWT public key not configured")
+
+    _public_key_cache = _CachedJWTKey(value=key, loaded_at=time.monotonic())
+    return key
 
 
 def _resolve_key_path(path: str) -> Path:
@@ -112,6 +192,7 @@ def create_access_token(
     mfa_method: str | None = None,
     impersonator_user_id: str | None = None,
     impersonator_identity_id: str | None = None,
+    impersonation_started_at: datetime | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
@@ -134,6 +215,8 @@ def create_access_token(
         to_encode["imp"] = impersonator_user_id
     if impersonator_identity_id:
         to_encode["imp_iid"] = impersonator_identity_id
+    if impersonation_started_at is not None:
+        to_encode["imp_started"] = int(impersonation_started_at.timestamp())
     private_key = _load_private_key()
     return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
 
@@ -150,6 +233,7 @@ def create_refresh_token(
     mfa_method: str | None = None,
     impersonator_user_id: str | None = None,
     impersonator_identity_id: str | None = None,
+    impersonation_started_at: datetime | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     expire = now + (expires_delta or timedelta(minutes=settings.refresh_token_expire_minutes))
@@ -174,6 +258,8 @@ def create_refresh_token(
         to_encode["imp"] = impersonator_user_id
     if impersonator_identity_id:
         to_encode["imp_iid"] = impersonator_identity_id
+    if impersonation_started_at is not None:
+        to_encode["imp_started"] = int(impersonation_started_at.timestamp())
     private_key = _load_private_key()
     return jwt.encode(to_encode, private_key, algorithm=settings.jwt_algorithm)
 

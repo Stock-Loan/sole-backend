@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.tenant import normalize_org_id
+
 
 class OrgCreateRequest(BaseModel):
     org_id: str = Field(min_length=2, max_length=64)
@@ -15,6 +17,11 @@ class OrgCreateRequest(BaseModel):
             return value
         cleaned = value.strip()
         return cleaned.lower()
+
+    @field_validator("org_id")
+    @classmethod
+    def _validate_org_id(cls, value: str) -> str:
+        return normalize_org_id(value)
 
     @field_validator("name", mode="before")
     @classmethod

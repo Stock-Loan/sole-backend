@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -20,6 +21,9 @@ from app.models.user import User
 from app.models.vesting_event import VestingEvent
 from app.services.authz import ensure_user_in_role, seed_system_roles
 from app.services.orgs import ensure_audit_partitions_for_orgs
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -177,16 +181,21 @@ async def _ensure_identity(
     *,
     email: str,
     password: str,
+    must_change_password: bool,
 ) -> Identity:
     """Find or create a global Identity for the given email."""
     stmt = select(Identity).where(Identity.email == email)
     identity = (await session.execute(stmt)).scalar_one_or_none()
     if identity:
+        if must_change_password and not identity.must_change_password:
+            identity.must_change_password = True
+            session.add(identity)
+            await session.flush()
         return identity
     identity = Identity(
         email=email,
         hashed_password=get_password_hash(password),
-        must_change_password=False,
+        must_change_password=must_change_password,
     )
     session.add(identity)
     await session.commit()
@@ -217,8 +226,14 @@ async def _seed_user(
     address_line1: str | None = None,
     address_line2: str | None = None,
     postal_code: str | None = None,
+    must_change_password: bool = False,
 ) -> OrgMembership:
-    identity = await _ensure_identity(session, email=email, password=password)
+    identity = await _ensure_identity(
+        session,
+        email=email,
+        password=password,
+        must_change_password=must_change_password,
+    )
 
     stmt = select(User).where(User.org_id == org_id, User.email == email)
     result = await session.execute(stmt)
@@ -754,11 +769,11 @@ async def init_db() -> None:
     and stock grants (including scheduled and immediate vesting) are created.
     """
     async with AsyncSessionLocal() as session:
-        print("Seeding database...")
+        logger.info("Seeding database...")
         try:
             await session.execute(select(Org).limit(1))
         except ProgrammingError as exc:
-            print(f"Skipping seed: database not migrated ({exc})")
+            logger.warning("Skipping seed: database not migrated (%s)", exc)
             return
 
         org_ids = _parse_seed_org_ids()
@@ -781,14 +796,15 @@ async def init_db() -> None:
                 employee_id=f"{org_id}-admin",
                 is_superuser=admin_is_superuser,
                 role_names=["ORG_ADMIN", "EMPLOYEE"],
+                must_change_password=True,
             )
 
             if _is_production():
-                print(f"  [{org_id}] Production mode — skipping demo data.")
+                logger.info("[%s] Production mode — skipping demo data.", org_id)
                 continue
 
             # ------ Demo data (dev/staging only) ------
-            print(f"  [{org_id}] Seeding departments...")
+            logger.info("[%s] Seeding departments...", org_id)
             dept_map: dict[str, Department] = {}
             for dept_def in _DEMO_DEPARTMENTS:
                 dept = await _ensure_department(
@@ -796,7 +812,7 @@ async def init_db() -> None:
                 )
                 dept_map[dept_def["code"]] = dept
 
-            print(f"  [{org_id}] Seeding 10 demo users with stock grants...")
+            logger.info("[%s] Seeding 10 demo users with stock grants...", org_id)
             for demo in _demo_users(org_id):
                 dept = dept_map.get(demo["department_code"])
                 membership = await _seed_user(
@@ -822,6 +838,7 @@ async def init_db() -> None:
                     address_line1=demo.get("address_line1"),
                     address_line2=demo.get("address_line2"),
                     postal_code=demo.get("postal_code"),
+                    must_change_password=True,
                 )
 
                 for grant_def in demo.get("grants", []):
@@ -837,9 +854,9 @@ async def init_db() -> None:
                         notes=grant_def.get("notes"),
                     )
 
-            print(f"  [{org_id}] Demo data seeded successfully.")
+            logger.info("[%s] Demo data seeded successfully.", org_id)
 
-    print("Database seeding complete.")
+    logger.info("Database seeding complete.")
 
 
 if __name__ == "__main__":

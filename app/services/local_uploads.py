@@ -6,6 +6,8 @@ from uuid import UUID
 
 from fastapi import UploadFile
 
+from app.core.tenant import normalize_org_id
+
 
 # Magic byte signatures for known binary file types.
 # Used to cross-check that uploaded file content matches the claimed extension.
@@ -124,20 +126,24 @@ def resolve_local_path(base_dir: Path, relative_path: str) -> Path:
 
 
 def org_templates_subdir(org_id: str, folder_id: UUID | None) -> Path:
+    normalized_org_id = normalize_org_id(org_id)
     folder_segment = str(folder_id) if folder_id else "unassigned"
-    return Path("orgs") / org_id / "templates" / folder_segment
+    return Path("orgs") / normalized_org_id / "templates" / folder_segment
 
 
 def loan_documents_subdir(org_id: str, loan_id: UUID) -> Path:
-    return Path("orgs") / org_id / "loans" / str(loan_id) / "documents"
+    normalized_org_id = normalize_org_id(org_id)
+    return Path("orgs") / normalized_org_id / "loans" / str(loan_id) / "documents"
 
 
 def loan_repayments_subdir(org_id: str, loan_id: UUID) -> Path:
-    return Path("orgs") / org_id / "loans" / str(loan_id) / "repayments"
+    normalized_org_id = normalize_org_id(org_id)
+    return Path("orgs") / normalized_org_id / "loans" / str(loan_id) / "repayments"
 
 
 def profile_pictures_subdir(org_id: str, user_id: UUID) -> Path:
-    return Path("orgs") / org_id / "display-pictures" / str(user_id)
+    normalized_org_id = normalize_org_id(org_id)
+    return Path("orgs") / normalized_org_id / "display-pictures" / str(user_id)
 
 
 def generate_storage_key(subdir: Path, filename: str | None) -> tuple[str, str]:
@@ -148,6 +154,7 @@ def generate_storage_key(subdir: Path, filename: str | None) -> tuple[str, str]:
 
 
 def ensure_org_scoped_key(org_id: str, object_key: str) -> None:
-    expected_prefix = f"orgs/{org_id}/"
+    normalized_org_id = normalize_org_id(org_id)
+    expected_prefix = f"orgs/{normalized_org_id}/"
     if not object_key.startswith(expected_prefix):
         raise ValueError("Storage key is not scoped to org")

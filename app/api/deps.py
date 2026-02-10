@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.context import set_tenant_id
+from app.core.tenant import normalize_org_id
 from app.core.security import (
     decode_token,
     decode_pre_org_token,
@@ -63,6 +64,21 @@ def _extract_bearer_token(request: Request) -> str | None:
 
 def _refresh_paths_match(path: str) -> bool:
     return path.endswith("/auth/refresh") or path.endswith("/auth/refresh/csrf")
+
+
+def _decode_bearer_payload_cached(request: Request) -> dict | None:
+    cached = getattr(request.state, "_decoded_access_payload", None)
+    if cached is not None:
+        return cached
+    token = _extract_bearer_token(request)
+    if not token:
+        return None
+    try:
+        payload = decode_token(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    request.state._decoded_access_payload = payload
+    return payload
 
 
 def _org_from_refresh_cookie(request: Request) -> str | None:
@@ -151,14 +167,8 @@ async def get_tenant_context(
         token_is_superuser = False
         token_user_id = None
         token_type = None
-        token = _extract_bearer_token(request)
-        if token:
-            try:
-                payload = decode_token(token)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
-                ) from exc
+        payload = _decode_bearer_payload_cached(request)
+        if payload:
             token_org = payload.get("org")
             token_is_superuser = bool(payload.get("su"))
             token_user_id = payload.get("sub")
@@ -215,6 +225,13 @@ async def get_tenant_context(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Tenant resolution failed: provide X-Org-Id header",
             )
+        try:
+            candidate = normalize_org_id(candidate)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid tenant id format: {exc}",
+            ) from exc
         org_stmt = select(Org.id).where(Org.id == candidate)
         if (await db.execute(org_stmt)).scalar_one_or_none() is None:
             logger.warning("Tenant resolution failed: org %r not found in database", candidate)
@@ -230,6 +247,13 @@ async def get_tenant_context(
         return TenantContext(org_id=candidate)
 
     default_org = settings.default_org_id
+    try:
+        default_org = normalize_org_id(default_org)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Default tenant configuration is invalid: {exc}",
+        ) from exc
     header_org = org_id_header
     if header_org and header_org != default_org:
         raise HTTPException(
@@ -315,13 +339,17 @@ async def _get_current_user(
     ctx: TenantContext,
     allow_password_change: bool,
 ) -> User:
-    try:
-        payload = decode_token(token, expected_type="access")
-    except ValueError as exc:
+    payload = _decode_bearer_payload_cached(request)
+    if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from exc
+            detail="Missing authentication token",
+        )
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unexpected token type",
+        )
     user_sub = payload.get("sub")
     token_version = payload.get("tv")
     token_org = payload.get("org")

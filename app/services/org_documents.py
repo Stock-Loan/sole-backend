@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Iterable
 from uuid import UUID
@@ -15,6 +16,9 @@ from app.models.org_document_template import OrgDocumentTemplate
 from app.services.local_uploads import org_templates_subdir, save_upload
 from app.services.storage.adapter import GCSStorageAdapter, LocalFileSystemAdapter
 from app.core.settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_FOLDERS = [
@@ -264,9 +268,9 @@ async def delete_template(
             adapter = _adapter_for_template(template.storage_provider, template.storage_bucket)
             if adapter:
                 adapter.delete_object(template.storage_object_key)
-        except Exception:
+        except (OSError, RuntimeError) as exc:
             # Best effort cleanup; keep going so deletes are not blocked.
-            pass
+            logger.warning("Failed to delete template object '%s': %s", template.storage_object_key, exc)
     await db.delete(template)
     await db.flush()
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from uuid import UUID
 
@@ -23,14 +24,16 @@ from app.services import (
     stock_reservations,
     vesting_engine,
 )
-from app.utils.redis_client import get_redis_client
+from app.utils.redis_client import get_redis_client, redis_key, redis_pattern
+from redis.exceptions import RedisError
 
 
 CACHE_TTL_SECONDS = 300
+logger = logging.getLogger(__name__)
 
 
 def _cache_key(org_id: str, membership_id: UUID, as_of_date: date) -> str:
-    return f"stock_summary:{org_id}:{membership_id}:{as_of_date.isoformat()}"
+    return redis_key("stock_summary", org_id, membership_id, as_of_date.isoformat())
 
 
 async def _get_cached_summary(
@@ -41,7 +44,8 @@ async def _get_cached_summary(
         cached = await redis.get(_cache_key(org_id, membership_id, as_of_date))
         if cached:
             return StockSummaryResponse.model_validate_json(cached)
-    except Exception:
+    except (RedisError, ValueError) as exc:
+        logger.warning("Stock summary cache read failed: %s", exc)
         return None
     return None
 
@@ -56,27 +60,30 @@ async def _set_cached_summary(
             CACHE_TTL_SECONDS,
             summary.model_dump_json(),
         )
-    except Exception:
+    except RedisError as exc:
+        logger.warning("Stock summary cache write failed: %s", exc)
         return None
 
 
 async def invalidate_stock_summary_cache(org_id: str, membership_id: UUID) -> None:
-    pattern = f"stock_summary:{org_id}:{membership_id}:*"
+    pattern = redis_pattern("stock_summary", org_id, membership_id, "*")
     try:
         redis = get_redis_client()
         async for key in redis.scan_iter(match=pattern, count=500):
             await redis.delete(key)
-    except Exception:
+    except RedisError as exc:
+        logger.warning("Stock summary cache invalidation failed: %s", exc)
         return None
 
 
 async def invalidate_org_stock_summary_cache(org_id: str) -> None:
-    pattern = f"stock_summary:{org_id}:*"
+    pattern = redis_pattern("stock_summary", org_id, "*")
     try:
         redis = get_redis_client()
         async for key in redis.scan_iter(match=pattern, count=500):
             await redis.delete(key)
-    except Exception:
+    except RedisError as exc:
+        logger.warning("Org stock summary cache invalidation failed: %s", exc)
         return None
 
 

@@ -207,7 +207,7 @@ async def onboard_user(
         membership=result.membership,
         user_status=result.user_status,
         membership_status=result.membership_status,
-        temporary_password=result.temporary_password,
+        credentials_issued=bool(result.temporary_password),
     )
 
 

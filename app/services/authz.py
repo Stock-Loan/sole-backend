@@ -2,6 +2,7 @@ from typing import Iterable, Set, TYPE_CHECKING
 from datetime import datetime, timezone
 import json
 import logging
+from redis.exceptions import RedisError
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from app.models.role import Role
 from app.models.user_role import UserRole
 from app.models.user import User
 from app.models.user_permission import UserPermission
-from app.utils.redis_client import get_redis_client
+from app.utils.redis_client import get_redis_client, redis_key, redis_pattern
 
 if TYPE_CHECKING:
     from app.api.deps import TenantContext
@@ -65,12 +66,12 @@ async def _load_permissions_from_db(db: AsyncSession, user_id, org_id: str) -> S
 
 
 async def _get_cached_permissions(redis: Redis, user_id: str, org_id: str) -> Set[str] | None:
-    key = f"permissions:{org_id}:{user_id}"
+    key = redis_key("permissions", org_id, user_id)
     try:
         data = await redis.get(key)
         if data:
             return set(json.loads(data))
-    except Exception as e:
+    except (RedisError, json.JSONDecodeError) as e:
         logger.error(f"Redis error reading permissions: {e}")
     return None
 
@@ -78,32 +79,41 @@ async def _get_cached_permissions(redis: Redis, user_id: str, org_id: str) -> Se
 async def _cache_permissions(
     redis: Redis, user_id: str, org_id: str, permissions: Set[str]
 ) -> None:
-    key = f"permissions:{org_id}:{user_id}"
+    key = redis_key("permissions", org_id, user_id)
     try:
         await redis.setex(key, 300, json.dumps(list(permissions)))  # 5 minute TTL
-    except Exception as e:
+    except RedisError as e:
         logger.error(f"Redis error caching permissions: {e}")
 
 
 async def invalidate_permission_cache(user_id: str, org_id: str) -> None:
     redis = get_redis_client()
-    key = f"permissions:{org_id}:{user_id}"
+    key = redis_key("permissions", org_id, user_id)
     try:
         await redis.delete(key)
-    except Exception as e:
+    except RedisError as e:
         logger.error(f"Redis error invalidating permissions: {e}")
 
 
 async def invalidate_permission_cache_for_org(org_id: str) -> int:
     redis = get_redis_client()
-    pattern = f"permissions:{org_id}:*"
+    pattern = redis_pattern("permissions", org_id, "*")
     deleted = 0
     try:
         async for key in redis.scan_iter(match=pattern, count=500):
             deleted += await redis.delete(key)
-    except Exception as e:
+    except RedisError as e:
         logger.error(f"Redis error invalidating org permissions: {e}")
     return deleted
+
+
+async def invalidate_permission_cache_for_role(db: AsyncSession, org_id: str, role_id) -> int:
+    stmt = select(UserRole.user_id).where(UserRole.org_id == org_id, UserRole.role_id == role_id)
+    rows = await db.execute(stmt)
+    unique_user_ids = {str(user_id) for user_id in rows.scalars().all()}
+    for user_id in unique_user_ids:
+        await invalidate_permission_cache(user_id, org_id)
+    return len(unique_user_ids)
 
 
 async def _load_acl_permissions(

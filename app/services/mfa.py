@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 
 import pyotp
 from cryptography.fernet import Fernet
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.settings import settings
+from app.core.fernet_crypto import decrypt_fernet_token, get_primary_fernet
 from app.models.user_mfa_device import UserMfaDevice
 from app.models.user_mfa_recovery_code import UserMfaRecoveryCode
 
@@ -18,10 +18,9 @@ RECOVERY_CODE_COUNT = 10
 RECOVERY_CODE_LENGTH = 8  # 8-character codes like "A1B2-C3D4"
 
 
+@lru_cache(maxsize=1)
 def _fernet() -> Fernet:
-    digest = hashlib.sha256(settings.secret_key.encode("utf-8")).digest()
-    key = base64.urlsafe_b64encode(digest)
-    return Fernet(key)
+    return get_primary_fernet()
 
 
 def encrypt_secret(secret: str) -> str:
@@ -29,7 +28,7 @@ def encrypt_secret(secret: str) -> str:
 
 
 def decrypt_secret(token: str) -> str:
-    return _fernet().decrypt(token.encode("utf-8")).decode("utf-8")
+    return decrypt_fernet_token(token.encode("utf-8")).decode("utf-8")
 
 
 def generate_totp_secret() -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
@@ -29,15 +30,17 @@ from app.services import (
     stock_reservations,
     vesting_engine,
 )
-from app.utils.redis_client import get_redis_client
+from app.utils.redis_client import get_redis_client, redis_key, redis_pattern
+from redis.exceptions import RedisError
 
 
 CACHE_TTL_SECONDS = 300
 TWOPLACES = Decimal("0.01")
+logger = logging.getLogger(__name__)
 
 
 def _cache_key(org_id: str, as_of_date: date) -> str:
-    return f"stock_dashboard:{org_id}:{as_of_date.isoformat()}"
+    return redis_key("stock_dashboard", org_id, as_of_date.isoformat())
 
 
 async def _get_cached_summary(org_id: str, as_of_date: date) -> StockDashboardSummary | None:
@@ -46,7 +49,8 @@ async def _get_cached_summary(org_id: str, as_of_date: date) -> StockDashboardSu
         cached = await redis.get(_cache_key(org_id, as_of_date))
         if cached:
             return StockDashboardSummary.model_validate_json(cached)
-    except Exception:
+    except (RedisError, ValueError) as exc:
+        logger.warning("Stock dashboard cache read failed: %s", exc)
         return None
     return None
 
@@ -61,17 +65,19 @@ async def _set_cached_summary(
             CACHE_TTL_SECONDS,
             summary.model_dump_json(),
         )
-    except Exception:
+    except RedisError as exc:
+        logger.warning("Stock dashboard cache write failed: %s", exc)
         return None
 
 
 async def invalidate_stock_dashboard_cache(org_id: str) -> None:
-    pattern = f"stock_dashboard:{org_id}:*"
+    pattern = redis_pattern("stock_dashboard", org_id, "*")
     try:
         redis = get_redis_client()
         async for key in redis.scan_iter(match=pattern, count=500):
             await redis.delete(key)
-    except Exception:
+    except RedisError as exc:
+        logger.warning("Stock dashboard cache invalidation failed: %s", exc)
         return None
 
 

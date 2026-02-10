@@ -93,7 +93,7 @@ class OnboardingResponse(BaseModel):
     membership: OnboardingMembershipOut
     user_status: UserOnboardingStatus
     membership_status: MembershipOnboardingStatus
-    temporary_password: str | None = None
+    credentials_issued: bool = False
 
 
 class BulkOnboardingRowSuccess(BaseModel):
@@ -102,7 +102,7 @@ class BulkOnboardingRowSuccess(BaseModel):
     membership: OnboardingMembershipOut
     user_status: UserOnboardingStatus
     membership_status: MembershipOnboardingStatus
-    temporary_password: str | None = None
+    credentials_issued: bool = False
 
 
 class BulkOnboardingRowError(BaseModel):

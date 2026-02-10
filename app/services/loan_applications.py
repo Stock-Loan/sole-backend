@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from uuid import UUID
 from decimal import Decimal
@@ -39,6 +40,9 @@ from app.services.org_scoping import membership_join_condition, profile_join_con
 from app.services.audit import record_audit_log
 from app.services.storage.adapter import GCSStorageAdapter, LocalFileSystemAdapter
 from app.core.settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 def _snapshot_org_settings(
@@ -863,9 +867,9 @@ async def _delete_loan_documents(
                 adapter = _adapter_for_document(doc.storage_provider, doc.storage_bucket)
                 if adapter:
                     adapter.delete_object(object_key)
-            except Exception:
+            except (OSError, RuntimeError) as exc:
                 # Best effort cleanup; keep going so edits are not blocked.
-                pass
+                logger.warning("Failed to delete loan document object '%s': %s", object_key, exc)
         deleted += 1
 
     await db.execute(

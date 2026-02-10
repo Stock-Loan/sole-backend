@@ -6,6 +6,7 @@ from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.core.tenant import normalize_org_id
 from app.core.settings import settings
 from app.models.org_membership import OrgMembership
 from app.models.user import User
@@ -24,22 +25,31 @@ def _partition_suffix(org_id: str) -> str:
     return safe
 
 
-async def ensure_audit_partitions(db: AsyncSession, org_id: str) -> None:
-    suffix = _partition_suffix(org_id)
-    audit_table = f"audit_logs_{suffix}"
-    journal_table = f"journal_entries_{suffix}"
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
-    org_literal = org_id.replace("'", "''")
+
+def _quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+async def ensure_audit_partitions(db: AsyncSession, org_id: str) -> None:
+    normalized_org_id = normalize_org_id(org_id)
+    suffix = _partition_suffix(normalized_org_id)
+    audit_table = _quote_identifier(f"audit_logs_{suffix}")
+    journal_table = _quote_identifier(f"journal_entries_{suffix}")
+    org_literal = _quote_literal(normalized_org_id)
+
     await db.execute(
         text(
             f"CREATE TABLE IF NOT EXISTS {audit_table} "
-            f"PARTITION OF audit_logs FOR VALUES IN ('{org_literal}')"
+            f"PARTITION OF audit_logs FOR VALUES IN ({org_literal})"
         )
     )
     await db.execute(
         text(
             f"CREATE TABLE IF NOT EXISTS {journal_table} "
-            f"PARTITION OF journal_entries FOR VALUES IN ('{org_literal}')"
+            f"PARTITION OF journal_entries FOR VALUES IN ({org_literal})"
         )
     )
     await db.flush()

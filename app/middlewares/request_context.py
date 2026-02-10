@@ -20,13 +20,10 @@ class RequestContextMiddleware:
         request_id = (
             headers.get(b"x-request-id", b"").decode() or str(uuid4())
         )
-        tenant_id = (
-            headers.get(b"x-org-id", b"").decode()
-            or context.get_tenant_id()
-        )
+        tenant_id = context.get_tenant_id()
 
         context.set_request_id(request_id)
-        if tenant_id:
+        if tenant_id and tenant_id != "-":
             context.set_tenant_id(tenant_id)
 
         async def send_with_request_id(message: Message) -> None:

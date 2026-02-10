@@ -88,7 +88,7 @@ class MfaEnrollVerifyRequest(BaseModel):
 
 
 class MfaSetupStartResponse(BaseModel):
-    secret: str
+    secret: str | None = None
     otpauth_url: str
     issuer: str
     account: str

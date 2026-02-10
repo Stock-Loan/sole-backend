@@ -26,6 +26,7 @@ WORKDIR /app
 
 ARG APP_UID=1000
 ARG APP_GID=1000
+ARG GUNICORN_WORKERS=2
 
 # Create user and install runtime dependencies
 RUN addgroup --system --gid ${APP_GID} appuser && adduser --system --uid ${APP_UID} --gid ${APP_GID} appuser \
@@ -33,19 +34,17 @@ RUN addgroup --system --gid ${APP_GID} appuser && adduser --system --uid ${APP_U
     && apt-get install -y --no-install-recommends ca-certificates curl libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /data/uploads && chmod 0777 /data/uploads
+RUN mkdir -p /data/uploads \
+    && chown appuser:appuser /data/uploads \
+    && chmod 0770 /data/uploads
 
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy the rest of the application
-COPY . .
-
-# --- CRITICAL FIX ---
-# Explicitly copy the migrations folder.
-# If env.py is missing from the context, the build might fail here or later,
-# but this ensures it is placed correctly if it exists.
+# Copy only required runtime artifacts
+COPY app /app/app
 COPY migrations /app/migrations
+COPY alembic.ini /app/alembic.ini
 
 USER appuser
 
@@ -55,4 +54,4 @@ ENV FORWARDED_ALLOW_IPS=127.0.0.1
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import os, http.client, sys; port=int(os.getenv('PORT','8080')); conn=http.client.HTTPConnection('localhost', port, timeout=3); conn.request('GET','/api/v1/health/live'); res=conn.getresponse(); sys.exit(0 if res.status==200 else 1)"
 
 # Production start command
-CMD ["sh", "-c", "gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers 1 --timeout 300 --graceful-timeout 30 --keep-alive 5 --log-level info --access-logfile - --error-logfile -"]
+CMD ["sh", "-c", "gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --workers ${GUNICORN_WORKERS} --timeout 300 --graceful-timeout 30 --keep-alive 5 --log-level info --access-logfile - --error-logfile -"]

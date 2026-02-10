@@ -23,7 +23,7 @@ class MaritalStatus(str, Enum):
     def _missing_(cls, value):  # type: ignore[override]
         try:
             normalized = normalize_marital_status(value)
-        except Exception:
+        except (TypeError, ValueError):
             return cls.UNKNOWN
         return normalized or cls.UNKNOWN
 
@@ -68,7 +68,7 @@ class EmploymentStatus(str, Enum):
     def _missing_(cls, value):  # type: ignore[override]
         try:
             normalized = normalize_employment_status(value)
-        except Exception:
+        except (TypeError, ValueError):
             return None
         return normalized
 

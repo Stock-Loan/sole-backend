@@ -23,7 +23,11 @@ from app.schemas.roles import (
 from app.schemas.settings import MfaEnforcementAction
 from app.schemas.users import UserListResponse
 from app.models.department import Department
-from app.services.authz import invalidate_permission_cache, invalidate_permission_cache_for_org
+from app.services.authz import (
+    invalidate_permission_cache,
+    invalidate_permission_cache_for_org,
+    invalidate_permission_cache_for_role,
+)
 from app.services.audit import model_snapshot, record_audit_log
 
 router = APIRouter(prefix="/roles", tags=["roles"])
@@ -155,6 +159,7 @@ async def create_role(
         old_value=None,
         new_value=model_snapshot(role),
     )
+    await invalidate_permission_cache_for_org(ctx.org_id)
     await db.commit()
     return role
 
@@ -208,14 +213,6 @@ async def update_role(
         ) from exc
     await db.refresh(role)
 
-    # Collect users to invalidate cache for after commit
-    user_role_stmt = select(UserRole.user_id).where(
-        UserRole.org_id == ctx.org_id,
-        UserRole.role_id == role.id,
-    )
-    user_role_result = await db.execute(user_role_stmt)
-    users_to_invalidate = user_role_result.scalars().all()
-
     logger.info(
         "Role updated",
         extra={
@@ -235,10 +232,8 @@ async def update_role(
         old_value=old_snapshot,
         new_value=model_snapshot(role),
     )
+    await invalidate_permission_cache_for_role(db, ctx.org_id, role.id)
     await db.commit()
-
-    for user_id in users_to_invalidate:
-        await invalidate_permission_cache(str(user_id), ctx.org_id)
 
     return role
 
@@ -260,13 +255,7 @@ async def delete_role(
             status_code=status.HTTP_400_BAD_REQUEST, detail="System roles cannot be deleted"
         )
 
-    # Invalidate cache for users who had this role
-    user_role_stmt = select(UserRole.user_id).where(
-        UserRole.org_id == ctx.org_id,
-        UserRole.role_id == role.id,
-    )
-    user_role_result = await db.execute(user_role_stmt)
-    users_to_invalidate = user_role_result.scalars().all()
+    await invalidate_permission_cache_for_role(db, ctx.org_id, role.id)
 
     old_snapshot = model_snapshot(role)
 
@@ -289,9 +278,6 @@ async def delete_role(
         new_value=None,
     )
     await db.commit()
-
-    for user_id in users_to_invalidate:
-        await invalidate_permission_cache(str(user_id), ctx.org_id)
 
     logger.info(
         "Role deleted",
