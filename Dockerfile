@@ -26,7 +26,7 @@ WORKDIR /app
 
 ARG APP_UID=1000
 ARG APP_GID=1000
-ARG GUNICORN_WORKERS=2
+ENV GUNICORN_WORKERS=2
 
 # Create user and install runtime dependencies
 RUN addgroup --system --gid ${APP_GID} appuser && adduser --system --uid ${APP_UID} --gid ${APP_GID} appuser \
