@@ -63,6 +63,7 @@ AUTH_COOKIE_PATH: ""
 # ==========================================
 # Scheduled Jobs Configuration
 # ==========================================
+PBGC_MID_TERM_RATES_URL: "https://www.pbgc.gov/employers-practitioners/interest-rates/historical-applicable-mid-term"
 PBGC_RATE_SCRAPE_ENABLED: "true"
 PBGC_RATE_SCRAPE_DAY: "28"
 PBGC_RATE_SCRAPE_HOUR: "1"

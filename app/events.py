@@ -2,6 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
@@ -43,6 +44,9 @@ async def _run_pbgc_scrape() -> None:
                 raise
             except SQLAlchemyError:
                 logger.exception("Failed to refresh PBGC mid-term rates")
+            except (httpx.HTTPError, ValueError):
+                # External fetch/parsing failures should not take down the app.
+                logger.exception("Failed to fetch or parse PBGC mid-term rates")
     finally:
         if task:
             _running_tasks.discard(task)
