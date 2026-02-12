@@ -217,6 +217,16 @@ If you are using pooled runtime connections, also set the **direct** URL for job
 gcloud run jobs update sole-db-migrate --set-secrets DATABASE_URL_DIRECT=DATABASE_URL_DIRECT:latest
 ```
 
+### "FERNET_KDF_SALT is required in production" (Cloud Run Jobs)
+
+**Cause:** The migration/seed job revision is missing secret refs even if the API Service has them.
+**Fix:** Re-sync jobs with runtime env + secrets, then rerun migrations.
+
+```bash
+make prod-update-jobs
+make prod-migrate
+```
+
 ### "Code changes aren't showing up locally"
 
 **Cause:** You might be running the production image instead of the dev volume mount.

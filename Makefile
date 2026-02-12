@@ -9,6 +9,8 @@ REGION ?= us-central1
 SERVICE_NAME ?= sole-api
 MIGRATE_JOB ?= sole-db-migrate
 SEED_JOB ?= sole-db-seed
+JOB_ENV_FILE ?= config.prod.yaml
+JOB_SECRETS ?= DATABASE_URL=DATABASE_URL:latest,DATABASE_URL_DIRECT=DATABASE_URL_DIRECT:latest,REDIS_URL=REDIS_URL:latest,SECRET_KEY=SECRET_KEY:latest,JWT_PRIVATE_KEY=JWT_PRIVATE_KEY:latest,JWT_PUBLIC_KEY=JWT_PUBLIC_KEY:latest,SEED_ADMIN_PASSWORD=SEED_ADMIN_PASSWORD:latest,SEED_ADMIN_EMAIL=SEED_ADMIN_EMAIL:latest,FERNET_KDF_SALT=FERNET_KDF_SALT:latest
 
 .PHONY: help up down logs logs-api logs-db restart ps build clean migrate migrate-host revision downgrade seed shell db-shell redis-shell fmt lint type test test-cov test-unit test-integration install setup-env health deploy prod-update-jobs prod-migrate prod-seed prod-logs prod-release audit check
 
@@ -81,12 +83,12 @@ deploy: ## Build and Deploy API to Cloud Run
 	@echo "🚀 Deploying to Google Cloud..."
 	gcloud builds submit --config cloudbuild.yaml .
 
-prod-update-jobs: ## Update Cloud Run Jobs with the latest API image
-	@echo "🔄 Updating migration and seed jobs with latest image..."
+prod-update-jobs: ## Update Cloud Run Jobs with latest image + env/secrets
+	@echo "🔄 Updating migration and seed jobs with latest image and runtime config..."
 	@IMG=$$(gcloud run services describe $(SERVICE_NAME) --region $(REGION) --format='value(spec.template.spec.containers[0].image)'); \
 	echo "Using image: $$IMG"; \
-	gcloud run jobs update $(MIGRATE_JOB) --image $$IMG --region $(REGION) --quiet; \
-	gcloud run jobs update $(SEED_JOB) --image $$IMG --region $(REGION) --quiet
+	gcloud run jobs update $(MIGRATE_JOB) --image $$IMG --region $(REGION) --env-vars-file $(JOB_ENV_FILE) --set-secrets $(JOB_SECRETS) --quiet; \
+	gcloud run jobs update $(SEED_JOB) --image $$IMG --region $(REGION) --env-vars-file $(JOB_ENV_FILE) --set-secrets $(JOB_SECRETS) --quiet
 
 prod-migrate: ## Execute Migration Job on Cloud
 	@echo "🐘 Running migrations on Cloud SQL..."
