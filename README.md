@@ -37,12 +37,10 @@ The seed script (`make seed`) creates org-scoped admin accounts and demo users.
 
 - `SEED_ADMIN_EMAIL` + `SEED_ADMIN_PASSWORD` create **one admin user per org** (org-scoped identity).
 - `EXTRA_SEED_ORG_IDS` (comma-separated) creates additional orgs and **dedicated** admin users in each org.
-- In non-production environments, demo users are created per org:
-  - `hr-<org_id>@example.com` (HR + EMPLOYEE roles)
-  - `employee-<org_id>@example.com` (EMPLOYEE role)
-  - Password = `SEED_ADMIN_PASSWORD`
-
-To disable demo users in production, set `ENVIRONMENT=production`.
+- Demo users are created in non-production by default, and can be enabled in production with `SEED_DEMO_USERS_IN_PRODUCTION=true`.
+- To skip admin user creation (for existing production admins), set `SEED_SKIP_ADMIN_USER=true`.
+- Demo users seeded per org: 10 fully populated users with departments, org profiles, and stock grants.
+- Demo user passwords: `SEED_ADMIN_PASSWORD`.
 
 ### 2. Start the App
 

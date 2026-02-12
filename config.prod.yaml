@@ -1,7 +1,7 @@
 # ==========================================
 # Core Configuration
 # ==========================================
-CONFIG_REV: "1770005497"
+CONFIG_REV: "1770005498"
 ENVIRONMENT: "production"
 ENABLE_HSTS: "true"
 LOG_LEVEL: "INFO"
@@ -44,6 +44,8 @@ LOGIN_LOCKOUT_MINUTES: "5"
 # Seed Data
 # ==========================================
 SEED_ADMIN_FULL_NAME: "Sole Admin"
+SEED_SKIP_ADMIN_USER: "true"
+SEED_DEMO_USERS_IN_PRODUCTION: "true"
 
 # ==========================================
 # CORS and Cookie Configuration
@@ -75,3 +77,8 @@ PBGC_RATE_SCRAPE_MINUTE: "59"
 STORAGE_PROVIDER: "gcs"
 GCS_BUCKET: "sole-486122-prod-storage"
 GCS_LOCATION: "us-central1"
+
+# =========================================
+# Health Check Configuration
+# ==========================================
+HEALTH_INCLUDE_DETAILS: "true"

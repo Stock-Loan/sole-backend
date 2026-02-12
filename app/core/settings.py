@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     seed_admin_email: str = Field(alias="SEED_ADMIN_EMAIL")
     seed_admin_password: str = Field(alias="SEED_ADMIN_PASSWORD")
     seed_admin_full_name: str = Field(default="Admin User", alias="SEED_ADMIN_FULL_NAME")
+    seed_skip_admin_user: bool = Field(default=False, alias="SEED_SKIP_ADMIN_USER")
+    seed_demo_users_in_production: bool = Field(
+        default=False,
+        alias="SEED_DEMO_USERS_IN_PRODUCTION",
+    )
     max_upload_size_mb: int = Field(default=50, alias="MAX_UPLOAD_SIZE_MB")
     local_upload_dir: str = Field(default="local_uploads", alias="LOCAL_UPLOAD_DIR")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")

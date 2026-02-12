@@ -762,11 +762,15 @@ def _demo_users(org_id: str) -> list[dict[str, Any]]:
 
 async def init_db() -> None:
     """
-    Seed the database with initial orgs (and demo data in non-production).
+    Seed the database with initial orgs and optional demo data.
 
-    Production: only the super-admin user is seeded.
-    Dev / staging: 10 fully-populated demo users with departments, profiles,
-    and stock grants (including scheduled and immediate vesting) are created.
+    Defaults:
+    - Production: seed admin user only.
+    - Dev / staging: seed admin plus 10 demo users with stock grants.
+
+    Optional overrides:
+    - SEED_SKIP_ADMIN_USER=true: skip admin user seeding.
+    - SEED_DEMO_USERS_IN_PRODUCTION=true: allow demo user + grant seeding in production.
     """
     async with AsyncSessionLocal() as session:
         logger.info("Seeding database...")
@@ -782,28 +786,36 @@ async def init_db() -> None:
 
         await ensure_audit_partitions_for_orgs(session)
 
+        is_production = _is_production()
         for org_id in org_ids:
             roles = await seed_system_roles(session, org_id)
-            admin_is_superuser = org_id == settings.default_org_id
-            await _seed_user(
-                session,
-                org_id=org_id,
-                roles=roles,
-                email=settings.seed_admin_email,
-                password=settings.seed_admin_password,
-                first_name=settings.seed_admin_full_name,
-                last_name="",
-                employee_id=f"{org_id}-admin",
-                is_superuser=admin_is_superuser,
-                role_names=["ORG_ADMIN", "EMPLOYEE"],
-                must_change_password=True,
-            )
+            if settings.seed_skip_admin_user:
+                logger.info("[%s] Skipping admin seed (SEED_SKIP_ADMIN_USER=true).", org_id)
+            else:
+                admin_is_superuser = org_id == settings.default_org_id
+                await _seed_user(
+                    session,
+                    org_id=org_id,
+                    roles=roles,
+                    email=settings.seed_admin_email,
+                    password=settings.seed_admin_password,
+                    first_name=settings.seed_admin_full_name,
+                    last_name="",
+                    employee_id=f"{org_id}-admin",
+                    is_superuser=admin_is_superuser,
+                    role_names=["ORG_ADMIN", "EMPLOYEE"],
+                    must_change_password=True,
+                )
 
-            if _is_production():
-                logger.info("[%s] Production mode — skipping demo data.", org_id)
+            if is_production and not settings.seed_demo_users_in_production:
+                logger.info(
+                    "[%s] Production mode — skipping demo data "
+                    "(set SEED_DEMO_USERS_IN_PRODUCTION=true to enable).",
+                    org_id,
+                )
                 continue
 
-            # ------ Demo data (dev/staging only) ------
+            # Demo users + stock grants (always in non-prod, opt-in for prod).
             logger.info("[%s] Seeding departments...", org_id)
             dept_map: dict[str, Department] = {}
             for dept_def in _DEMO_DEPARTMENTS:
