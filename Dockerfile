@@ -26,7 +26,8 @@ WORKDIR /app
 
 ARG APP_UID=1000
 ARG APP_GID=1000
-ENV GUNICORN_WORKERS=2
+ENV GUNICORN_WORKERS=2 \
+    CONFIG_FILE=/app/config.prod.yaml
 
 # Create user and install runtime dependencies
 RUN addgroup --system --gid ${APP_GID} appuser && adduser --system --uid ${APP_UID} --gid ${APP_GID} appuser \
@@ -45,6 +46,7 @@ COPY --from=builder /install /usr/local
 COPY app /app/app
 COPY migrations /app/migrations
 COPY alembic.ini /app/alembic.ini
+COPY config*.yaml /app/
 
 USER appuser
 

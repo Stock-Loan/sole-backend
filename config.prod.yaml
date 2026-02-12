@@ -1,7 +1,7 @@
 # ==========================================
 # Core Configuration
 # ==========================================
-CONFIG_REV: "1770005496"
+CONFIG_REV: "1770005497"
 ENVIRONMENT: "production"
 ENABLE_HSTS: "true"
 LOG_LEVEL: "INFO"

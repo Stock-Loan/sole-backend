@@ -5,6 +5,7 @@ substitutions:
   _AR_HOST: us-central1-docker.pkg.dev
   _IMAGE_NAME: sole-api
   _RUNTIME_SA: sole-runner@${PROJECT_ID}.iam.gserviceaccount.com
+  _ENV_VARS_FILE: config.prod.yaml
 
 steps:
   - id: Build
@@ -40,7 +41,7 @@ steps:
       - --allow-unauthenticated
       # optional: non-secret config file committed to repo (recommended)
       - --env-vars-file
-      - config.prod.yaml
+      - ${_ENV_VARS_FILE}
       # optional: secret references only (no values)
       - --set-secrets
       - DATABASE_URL=DATABASE_URL:latest,DATABASE_URL_DIRECT=DATABASE_URL_DIRECT:latest,REDIS_URL=REDIS_URL:latest,SECRET_KEY=SECRET_KEY:latest,JWT_PRIVATE_KEY=JWT_PRIVATE_KEY:latest,JWT_PUBLIC_KEY=JWT_PUBLIC_KEY:latest,SEED_ADMIN_PASSWORD=SEED_ADMIN_PASSWORD:latest,SEED_ADMIN_EMAIL=SEED_ADMIN_EMAIL:latest,FERNET_KDF_SALT=FERNET_KDF_SALT:latest

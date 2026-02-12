@@ -17,8 +17,15 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
     """A settings source that reads from a YAML file."""
 
     def __call__(self) -> dict[str, Any]:
-        config_file = os.getenv("CONFIG_FILE", "config.prod.yaml")
-        if not os.path.exists(config_file):
+        configured_file = (os.getenv("CONFIG_FILE") or "").strip()
+        if configured_file:
+            candidate_files = [configured_file]
+        else:
+            # Default to production config naming, with fallback for local variants.
+            candidate_files = ["config.prod.yaml", "config.yaml"]
+
+        config_file = next((path for path in candidate_files if os.path.exists(path)), None)
+        if not config_file:
             return {}
         try:
             import yaml
@@ -27,7 +34,8 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
 
         try:
             with open(config_file, encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
+                payload = yaml.safe_load(f) or {}
+                return payload if isinstance(payload, dict) else {}
         except (OSError, yaml.YAMLError):
             return {}
 
