@@ -299,6 +299,7 @@ async def create_loan_application(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": exc.code, "message": exc.message, "details": exc.details},
         ) from exc
+    await db.commit()
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, application.id, membership_id=membership.id
     )
@@ -356,6 +357,7 @@ async def update_loan_application(
                 "details": {},
             },
         ) from exc
+    await db.commit()
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, updated.id, membership_id=membership.id
     )
@@ -419,6 +421,7 @@ async def submit_loan_application(
                 "details": {},
             },
         ) from exc
+    await db.commit()
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, submitted.id, membership_id=membership.id
     )
@@ -470,6 +473,7 @@ async def cancel_loan_application(
                 "details": {},
             },
         ) from exc
+    await db.commit()
     hydrated = await loan_applications.get_application_with_related(
         db, ctx, cancelled.id, membership_id=membership.id
     )

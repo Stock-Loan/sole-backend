@@ -166,6 +166,35 @@ def test_create_loan_application_draft(fake_db, test_user, client, monkeypatch):
     )
     assert resp.status_code == 201
     assert resp.json()["data"]["shares_to_exercise"] == 10
+    assert fake_db.committed is True
+
+
+def test_update_loan_application_draft_commits(fake_db, test_user, client, monkeypatch):
+    membership = OrgMembership(
+        id=uuid4(),
+        org_id="default",
+        user_id=test_user.id,
+        employee_id="E-1",
+        employment_status="ACTIVE",
+        platform_status="ACTIVE",
+    )
+    application = _application(membership.id)
+
+    fake_db.on_execute(entity_handler(OrgMembership, FakeResult(scalar=membership)))
+    fake_db.on_execute(entity_handler(LoanApplication, FakeResult(scalar=application)))
+
+    async def _update_draft(*args, **kwargs):
+        return application
+
+    monkeypatch.setattr(loan_applications, "update_draft_application", _update_draft)
+
+    resp = client.patch(
+        f"/api/v1/me/loan-applications/{application.id}",
+        json={"marital_status_snapshot": "SINGLE"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["id"] == str(application.id)
+    assert fake_db.committed is True
 
 
 def test_list_loan_applications(fake_db, test_user, client):
