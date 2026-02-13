@@ -60,7 +60,7 @@ AUTH_COOKIE_SAMESITE: "none"
 # Set to your root domain (e.g., ".example.com") to share cookies across subdomains.
 AUTH_COOKIE_DOMAIN: ""
 # Keep default refresh path unless you changed API prefix.
-AUTH_COOKIE_PATH: ""
+AUTH_COOKIE_PATH: "/api/v1/auth/refresh"
 
 # ==========================================
 # Scheduled Jobs Configuration

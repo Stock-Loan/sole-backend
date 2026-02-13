@@ -33,3 +33,4 @@ local_uploads/
 !config.prod.yaml
 
 scripts*
+reports/
