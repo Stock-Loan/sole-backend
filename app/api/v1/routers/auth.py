@@ -154,6 +154,18 @@ async def _load_user_display_name(
 def _set_refresh_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
     if not settings.auth_refresh_cookie_enabled:
         return
+    # Remove legacy root-path cookies to avoid duplicate-name collisions where
+    # the browser sends multiple values and CSRF validation reads a stale one.
+    legacy_cookie_kwargs = {
+        "path": "/",
+        "samesite": settings.auth_cookie_samesite,
+        "secure": settings.auth_cookie_secure,
+    }
+    if settings.auth_cookie_domain:
+        legacy_cookie_kwargs["domain"] = settings.auth_cookie_domain
+    response.delete_cookie(settings.auth_refresh_cookie_name, **legacy_cookie_kwargs)
+    response.delete_cookie(settings.auth_csrf_cookie_name, **legacy_cookie_kwargs)
+
     common_kwargs = {
         "secure": settings.auth_cookie_secure,
         "samesite": settings.auth_cookie_samesite,
@@ -190,6 +202,17 @@ def _clear_refresh_cookies(response: Response) -> None:
         cookie_kwargs["domain"] = settings.auth_cookie_domain
     response.delete_cookie(settings.auth_refresh_cookie_name, **cookie_kwargs)
     response.delete_cookie(settings.auth_csrf_cookie_name, **cookie_kwargs)
+
+    # Backward compatibility cleanup for legacy root-path cookies.
+    legacy_cookie_kwargs = {
+        "path": "/",
+        "samesite": settings.auth_cookie_samesite,
+        "secure": settings.auth_cookie_secure,
+    }
+    if settings.auth_cookie_domain:
+        legacy_cookie_kwargs["domain"] = settings.auth_cookie_domain
+    response.delete_cookie(settings.auth_refresh_cookie_name, **legacy_cookie_kwargs)
+    response.delete_cookie(settings.auth_csrf_cookie_name, **legacy_cookie_kwargs)
 
 
 def _maybe_attach_cookies(
